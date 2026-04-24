@@ -36,6 +36,8 @@ Noto is in early development. This README describes the intended direction and p
 
 Noto is source-available, not open source, under the PolyForm Noncommercial License 1.0.0.
 
+Copyright 2026 Lukas Strickler.
+
 It is free for personal, hobby, educational, and non-commercial research use.
 
 Commercial use requires a paid license. Commercial use includes use by companies, employees, contractors, freelancers using Noto for client work, or teams using it for internal business meetings, operations, documentation, or agent workflows.
