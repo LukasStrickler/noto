@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/spf13/pflag v1.0.6
 	github.com/spf13/viper v1.19.0
+	modernc.org/sqlite v1.35.1
 )
 
 require (
