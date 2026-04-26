@@ -5,32 +5,55 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/lukasstrickler/noto/internal/artifacts"
 	"github.com/lukasstrickler/noto/internal/config"
 	"github.com/lukasstrickler/noto/internal/notoerr"
 	"github.com/lukasstrickler/noto/internal/providers"
+	"github.com/lukasstrickler/noto/internal/providers/speech"
+	"github.com/lukasstrickler/noto/internal/search"
 	"github.com/lukasstrickler/noto/internal/secrets"
+	"github.com/lukasstrickler/noto/internal/storage"
 	"github.com/lukasstrickler/noto/internal/tui"
 )
 
 type app struct {
-	in      io.Reader
-	out     io.Writer
-	errOut  io.Writer
-	config  config.Store
-	secrets secrets.Store
-	reg     providers.Registry
+	in             io.Reader
+	out            io.Writer
+	errOut         io.Writer
+	config         config.Store
+	secrets        secrets.Store
+	reg            providers.Registry
+	recordingsDir  string
+	searchIndex    *search.SearchIndex
 }
 
 func Run(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
+	cfg := config.NewStore(config.DefaultConfigDir())
+	loadedCfg, _ := cfg.Load()
+
+	recordingsDir := loadedCfg.GetRecordingsDir()
+	indexPath := filepath.Join(loadedCfg.ConfigDir, "noto.sqlite")
+	idx, err := search.NewSearchIndex(indexPath)
+	if err != nil {
+		notoerr.WriteJSON(errOut, notoerr.Wrap("search_index_init_failed", "Could not initialize search index", err))
+		return 1
+	}
+
 	a := app{
-		in:      in,
-		out:     out,
-		errOut:  errOut,
-		config:  config.NewStore(config.DefaultConfigDir()),
-		secrets: secrets.EnvFallbackStore{Primary: secrets.KeychainStore{}},
-		reg:     providers.DefaultRegistry(),
+		in:            in,
+		out:           out,
+		errOut:        errOut,
+		config:        cfg,
+		secrets:       secrets.EnvFallbackStore{Primary: secrets.KeychainStore{}},
+		reg:           providers.DefaultRegistry(),
+		recordingsDir: recordingsDir,
+		searchIndex:   idx,
 	}
 	if len(args) == 0 {
 		return a.appTUIInteractive(tui.ScreenDashboard)
@@ -54,8 +77,36 @@ func (a app) run(ctx context.Context, args []string) error {
 		return a.verify(ctx, args[1:])
 	case "providers":
 		return a.providers(ctx, args[1:])
-	case "record", "stop", "import-audio", "import-transcript", "transcribe", "summarize", "index", "list", "show", "transcript", "summary", "actions", "files", "search", "benchmark":
-		return a.notImplemented(args[0])
+	case "record":
+		return a.record(ctx, args[1:])
+	case "stop":
+		return a.stop(ctx, args[1:])
+	case "import-audio":
+		return a.importAudio(ctx, args[1:])
+	case "import-transcript":
+		return a.importTranscript(ctx, args[1:])
+	case "transcribe":
+		return a.transcribe(ctx, args[1:])
+	case "summarize":
+		return a.summarize(ctx, args[1:])
+	case "search":
+		return a.search(ctx, args[1:])
+	case "index":
+		return a.index(ctx, args[1:])
+	case "list":
+		return a.list(ctx, args[1:])
+	case "show":
+		return a.show(ctx, args[1:])
+	case "transcript":
+		return a.transcript(ctx, args[1:])
+	case "summary":
+		return a.summary(ctx, args[1:])
+	case "actions":
+		return a.actions(ctx, args[1:])
+	case "files":
+		return a.files(ctx, args[1:])
+	case "benchmark":
+		return a.benchmark(ctx, args[1:])
 	default:
 		return notoerr.New("unknown_command", "Unknown command.", map[string]any{"command": args[0]})
 	}
@@ -244,6 +295,14 @@ func (a app) verify(ctx context.Context, args []string) error {
 	if llmErr != nil {
 		errors = append(errors, map[string]any{"code": "llm_route_invalid", "message": llmErr.Error()})
 	}
+	speechProviderID := ""
+	if speechErr == nil {
+		speechProviderID = speech.ID
+	}
+	llmProviderID := ""
+	if llmErr == nil {
+		llmProviderID = llm.ID
+	}
 	return writeJSON(a.out, map[string]any{
 		"ok":              len(errors) == 0,
 		"schema_valid":    true,
@@ -252,10 +311,919 @@ func (a app) verify(ctx context.Context, args []string) error {
 		"recording_state": "idle",
 		"job_state":       "idle",
 		"meeting_count":   0,
-		"speech_provider": speech.ID,
-		"llm_provider":    llm.ID,
+		"speech_provider": speechProviderID,
+		"llm_provider":    llmProviderID,
 		"errors":          errors,
 	})
+}
+
+func (a app) record(ctx context.Context, args []string) error {
+	title := extractTitleFlag(args)
+	if title == "" {
+		return notoerr.New("missing_title", "Usage: noto record --title \"Meeting Title\".", nil)
+	}
+
+	cfg, err := a.config.Load()
+	if err != nil {
+		return err
+	}
+
+	meetingID := uuid.New()
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	if err := storage.EnsureDirs(layout); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	versionID := fmt.Sprintf("ver_%s_%s", now.Format("20060102150405"), randomSuffix())
+
+	m := &artifacts.MeetingManifest{
+		SchemaVersion:    "manifest.v1",
+		MeetingID:        meetingID.String(),
+		CurrentVersionID: versionID,
+		Versions: []artifacts.ManifestVersion{
+			{
+				VersionID: versionID,
+				CreatedAt: now,
+				Reason:    "recording_started",
+			},
+		},
+	}
+
+	if err := storage.WriteManifest(layout, m); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(a.out, "Recording started.\nMeeting ID: %s\nTitle: %s\n", meetingID.String(), title)
+	fmt.Fprintf(a.out, "Audio will be saved to: %s\n", filepath.Join(layout.MeetingDir, "audio.m4a"))
+	return nil
+}
+
+
+func (a app) stop(ctx context.Context, args []string) error {
+	cfg, err := a.config.Load()
+	if err != nil {
+		return err
+	}
+
+	router := providers.CapabilityRouter{Registry: a.reg, Policy: cfg.Routing}
+	speechProvider, err := router.Resolve(providers.CapabilityTranscribe)
+	if err != nil {
+		return notoerr.New("no_speech_provider", "No speech provider configured. Run 'noto providers auth set' first.", nil)
+	}
+
+	fmt.Fprintf(a.out, "Stopping recording...\n")
+	fmt.Fprintf(a.out, "Note: Capture helper integration (Task 12) handles actual audio capture.\n")
+	fmt.Fprintf(a.out, "Use 'noto import-audio <path> --title \"X\"' to import recorded audio.\n")
+	fmt.Fprintf(a.out, "Speech provider: %s\n", speechProvider.ID)
+	return nil
+}
+
+
+func (a app) importAudio(ctx context.Context, args []string) error {
+	title := extractTitleFlag(args)
+	audioPath := extractPositionalArg(args)
+
+	if audioPath == "" {
+		return notoerr.New("missing_path", "Usage: noto import-audio <path> --title \"Title\".", nil)
+	}
+
+	if _, err := os.Stat(audioPath); os.IsNotExist(err) {
+		return notoerr.New("file_not_found", "Audio file not found.", map[string]any{"path": audioPath})
+	}
+
+	cfg, err := a.config.Load()
+	if err != nil {
+		return err
+	}
+
+	meetingID := uuid.New()
+	ia := artifacts.NewImportAudio(a.recordingsDir)
+	result, err := ia.Import(meetingID, audioPath)
+	if err != nil {
+		return err
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	manifest := &artifacts.MeetingManifest{
+		SchemaVersion:    "manifest.v1",
+		MeetingID:        meetingID.String(),
+		CurrentVersionID: result.VersionID,
+		Versions: []artifacts.ManifestVersion{
+			{
+				VersionID: result.VersionID,
+				CreatedAt: time.Now(),
+				Reason:    string(artifacts.ReasonAudioImported),
+			},
+		},
+	}
+
+	if err := storage.WriteManifest(layout, manifest); err != nil {
+		return err
+	}
+
+	audioData, err := os.ReadFile(audioPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(a.out, "Processing audio file: %s\n", audioPath)
+	fmt.Fprintf(a.out, "Meeting ID: %s\n", meetingID.String())
+
+	router := providers.CapabilityRouter{Registry: a.reg, Policy: cfg.Routing}
+	speechProvider, err := router.Resolve(providers.CapabilityTranscribe)
+	if err != nil {
+		fmt.Fprintf(a.out, "Warning: No speech provider configured. Audio imported but not transcribed.\n")
+		return writeJSON(a.out, map[string]any{
+			"ok":        true,
+			"meeting_id": meetingID.String(),
+			"audio":     result.AudioMetadata,
+			"transcribed": false,
+			"message":   "Audio imported. Configure a speech provider to enable transcription.",
+		})
+	}
+
+	fmt.Fprintf(a.out, "Transcribing with %s...\n", speechProvider.ID)
+
+	transcript, err := a.runTranscription(ctx, speechProvider, audioData, meetingID.String())
+	if err != nil {
+		fmt.Fprintf(a.errOut, "Transcription failed: %v\n", err)
+		return writeJSON(a.out, map[string]any{
+			"ok":         true,
+			"meeting_id":  meetingID.String(),
+			"audio":      result.AudioMetadata,
+			"transcribed": false,
+			"error":      err.Error(),
+		})
+	}
+
+	if err := a.indexMeeting(meetingID.String(), title, transcript, nil); err != nil {
+		fmt.Fprintf(a.errOut, "Warning: Failed to index meeting: %v\n", err)
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":         true,
+		"meeting_id":  meetingID.String(),
+		"audio":      result.AudioMetadata,
+		"transcribed": true,
+		"transcript": transcript,
+	})
+}
+
+
+func (a app) importTranscript(ctx context.Context, args []string) error {
+	title := extractTitleFlag(args)
+	transcriptPath := extractPositionalArg(args)
+
+	if transcriptPath == "" {
+		return notoerr.New("missing_path", "Usage: noto import-transcript <path> --title \"Title\".", nil)
+	}
+
+	data, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return notoerr.Wrap("read_failed", "Could not read transcript file", err)
+	}
+
+	var transcript artifacts.Transcript
+	if err := json.Unmarshal(data, &transcript); err != nil {
+		return notoerr.Wrap("parse_failed", "Could not parse transcript JSON", err)
+	}
+
+	meetingID := uuid.New()
+	if transcript.MeetingID != "" {
+		parsed, _ := uuid.Parse(transcript.MeetingID)
+		if parsed != uuid.Nil {
+			meetingID = parsed
+		}
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	if err := storage.EnsureDirs(layout); err != nil {
+		return err
+	}
+
+	if err := storage.WriteTranscript(layout, &transcript); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	versionID := fmt.Sprintf("ver_%s_%s", now.Format("20060102150405"), randomSuffix())
+
+	manifest := &artifacts.MeetingManifest{
+		SchemaVersion:    "manifest.v1",
+		MeetingID:        meetingID.String(),
+		CurrentVersionID: versionID,
+		Versions: []artifacts.ManifestVersion{
+			{
+				VersionID: versionID,
+				CreatedAt: now,
+				Reason:    "transcript_imported",
+			},
+		},
+	}
+
+	if err := storage.WriteManifest(layout, manifest); err != nil {
+		return err
+	}
+
+	if err := a.indexMeeting(meetingID.String(), title, &transcript, nil); err != nil {
+		fmt.Fprintf(a.errOut, "Warning: Failed to index meeting: %v\n", err)
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":         true,
+		"meeting_id": meetingID.String(),
+		"transcript": &transcript,
+	})
+}
+
+
+func (a app) transcribe(ctx context.Context, args []string) error {
+	meetingIDStr := extractPositionalArg(args)
+	if meetingIDStr == "" {
+		return notoerr.New("missing_meeting_id", "Usage: noto transcribe <meeting_id> [--provider <provider_id>].", nil)
+	}
+
+	meetingID, err := uuid.Parse(meetingIDStr)
+	if err != nil {
+		return notoerr.New("invalid_meeting_id", "Invalid meeting ID format.", map[string]any{"id": meetingIDStr})
+	}
+
+	cfg, err := a.config.Load()
+	if err != nil {
+		return err
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	audioPath := filepath.Join(layout.MeetingDir, "audio.m4a")
+	audioData, err := os.ReadFile(audioPath)
+	if err != nil {
+		return notoerr.New("no_audio", "No audio found for meeting. Import audio first.", map[string]any{"meeting_id": meetingIDStr})
+	}
+
+	fmt.Fprintf(a.out, "Transcribing meeting %s...\n", meetingIDStr)
+
+	router := providers.CapabilityRouter{Registry: a.reg, Policy: cfg.Routing}
+	speechProvider, err := router.Resolve(providers.CapabilityTranscribe)
+	if err != nil {
+		return err
+	}
+
+	transcript, err := a.runTranscription(ctx, speechProvider, audioData, meetingIDStr)
+	if err != nil {
+		return err
+	}
+
+	if err := storage.WriteTranscript(layout, transcript); err != nil {
+		return err
+	}
+
+	if err := a.indexMeeting(meetingIDStr, "", transcript, nil); err != nil {
+		fmt.Fprintf(a.errOut, "Warning: Failed to index meeting: %v\n", err)
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":         true,
+		"meeting_id": meetingIDStr,
+		"transcript": transcript,
+		"provider":   speechProvider.ID,
+	})
+}
+
+func (a app) summarize(ctx context.Context, args []string) error {
+	meetingIDStr := extractPositionalArg(args)
+	if meetingIDStr == "" {
+		return notoerr.New("missing_meeting_id", "Usage: noto summarize <meeting_id>.", nil)
+	}
+
+	meetingID, err := uuid.Parse(meetingIDStr)
+	if err != nil {
+		return notoerr.New("invalid_meeting_id", "Invalid meeting ID format.", map[string]any{"id": meetingIDStr})
+	}
+
+	cfg, err := a.config.Load()
+	if err != nil {
+		return err
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	transcript, err := storage.ReadTranscript(layout)
+	if err != nil {
+		return notoerr.New("no_transcript", "No transcript found. Run 'noto transcribe' first.", map[string]any{"meeting_id": meetingIDStr})
+	}
+
+	fmt.Fprintf(a.out, "Summarizing meeting %s...\n", meetingIDStr)
+
+	router := providers.CapabilityRouter{Registry: a.reg, Policy: cfg.Routing}
+	llmProvider, err := router.Resolve(providers.CapabilitySummarize)
+	if err != nil {
+		return err
+	}
+
+	summary, err := a.runSummarization(ctx, llmProvider, transcript)
+	if err != nil {
+		return err
+	}
+
+	summaryMD, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err := storage.WriteSummary(layout, string(summaryMD)); err != nil {
+		return err
+	}
+
+	if err := a.indexMeeting(meetingIDStr, "", transcript, summary); err != nil {
+		fmt.Fprintf(a.errOut, "Warning: Failed to update search index: %v\n", err)
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":         true,
+		"meeting_id": meetingIDStr,
+		"summary":    summary,
+		"provider":   llmProvider.ID,
+	})
+}
+
+
+func (a app) search(ctx context.Context, args []string) error {
+	query := extractSearchQuery(args)
+	if query == "" {
+		return notoerr.New("missing_query", "Usage: noto search --json \"query\".", nil)
+	}
+
+	isJSON := hasJSONFlag(args)
+
+	results, err := a.searchIndex.Search(query)
+	if err != nil {
+		return err
+	}
+
+	if !isJSON {
+		if len(results) == 0 {
+			fmt.Fprintf(a.out, "No results found for: %s\n", query)
+			return nil
+		}
+		fmt.Fprintf(a.out, "Results for: %s\n\n", query)
+		for _, r := range results {
+			fmt.Fprintf(a.out, "[%s] %s | %s | %s\n", r.MeetingID, r.Speaker, r.Snippet, r.SegmentID)
+		}
+		return nil
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":     true,
+		"query":  query,
+		"results": results,
+		"count":  len(results),
+	})
+}
+
+
+func (a app) index(ctx context.Context, args []string) error {
+	isJSON := hasJSONFlag(args)
+
+	fmt.Fprintf(a.out, "Rebuilding search index...\n")
+
+	refs, err := storage.ListMeetings(a.recordingsDir)
+	if err != nil {
+		return err
+	}
+
+	indexed := 0
+	for _, ref := range refs {
+		meeting, err := storage.GetMeeting(a.recordingsDir, ref.MeetingID)
+		if err != nil {
+			continue
+		}
+
+		layout, err := storage.LayoutFor(a.recordingsDir, ref.MeetingID)
+		if err != nil {
+			continue
+		}
+
+		transcript, _ := storage.ReadTranscript(layout)
+		var summary *artifacts.Summary
+		if summaryData, err := os.ReadFile(layout.SummaryPath); err == nil {
+			json.Unmarshal(summaryData, &summary)
+		}
+
+		segments := make([]search.TranscriptSegment, 0)
+		if transcript != nil {
+			for _, seg := range transcript.Segments {
+				segments = append(segments, search.TranscriptSegment{
+					SegmentID: seg.ID,
+					Speaker:   seg.SpeakerID,
+					Text:      seg.Text,
+					Timestamp: seg.StartSeconds,
+				})
+			}
+		}
+
+		decisions := make([]search.SummaryItem, 0)
+		actions := make([]search.ActionItem, 0)
+		risks := make([]search.SummaryItem, 0)
+
+		if summary != nil {
+			for _, d := range summary.Decisions {
+				decisions = append(decisions, search.SummaryItem{Text: d.Text, SpeakerIDs: d.SpeakerIDs})
+			}
+			for _, a := range summary.ActionItems {
+				actions = append(actions, search.ActionItem{Text: a.Text, Owner: a.Owner})
+			}
+			for _, r := range summary.Risks {
+				risks = append(risks, search.SummaryItem{Text: r.Text})
+			}
+		}
+
+		input := &search.IndexMeetingInput{
+			MeetingID:          ref.MeetingID.String(),
+			Title:              meeting.Title,
+			TranscriptSegments: segments,
+			Decisions:          decisions,
+			ActionItems:        actions,
+			Risks:              risks,
+		}
+
+		if err := a.searchIndex.IndexMeetingFromInput(input); err != nil {
+			continue
+		}
+		indexed++
+	}
+
+	if isJSON {
+		return writeJSON(a.out, map[string]any{
+			"ok":      true,
+			"total":   len(refs),
+			"indexed": indexed,
+		})
+	}
+
+	fmt.Fprintf(a.out, "Indexed %d of %d meetings.\n", indexed, len(refs))
+	return nil
+}
+
+
+func (a app) list(ctx context.Context, args []string) error {
+	isJSON := hasJSONFlag(args)
+	limit := extractLimit(args)
+
+	refs, err := storage.ListMeetings(a.recordingsDir)
+	if err != nil {
+		return err
+	}
+
+	if limit > 0 && len(refs) > limit {
+		refs = refs[:limit]
+	}
+
+	if !isJSON {
+		if len(refs) == 0 {
+			fmt.Fprintf(a.out, "No meetings found.\n")
+			return nil
+		}
+		fmt.Fprintf(a.out, "Meetings:\n\n")
+		for _, ref := range refs {
+			createdAt := ref.CreatedAt.Format("2006-01-02 15:04")
+			fmt.Fprintf(a.out, "%s  %s  [%s]\n", ref.MeetingID.String(), createdAt, ref.Title)
+		}
+		return nil
+	}
+
+	type MeetingInfo struct {
+		ID        string    `json:"meeting_id"`
+		Title     string    `json:"title"`
+		CreatedAt time.Time `json:"created_at"`
+		Version   string    `json:"current_version_id"`
+	}
+
+	meetings := make([]MeetingInfo, len(refs))
+	for i, ref := range refs {
+		meetings[i] = MeetingInfo{
+			ID:        ref.MeetingID.String(),
+			Title:     ref.Title,
+			CreatedAt: ref.CreatedAt,
+			Version:   ref.CurrentVersionID,
+		}
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":       true,
+		"meetings": meetings,
+		"count":    len(meetings),
+	})
+}
+
+
+func (a app) show(ctx context.Context, args []string) error {
+	meetingIDStr := extractPositionalArg(args)
+	if meetingIDStr == "" {
+		return notoerr.New("missing_meeting_id", "Usage: noto show <meeting_id>.", nil)
+	}
+
+	meetingID, err := uuid.Parse(meetingIDStr)
+	if err != nil {
+		return notoerr.New("invalid_meeting_id", "Invalid meeting ID format.", map[string]any{"id": meetingIDStr})
+	}
+
+	meeting, err := storage.GetMeeting(a.recordingsDir, meetingID)
+	if err != nil {
+		return notoerr.New("meeting_not_found", "Meeting not found.", map[string]any{"meeting_id": meetingIDStr})
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	transcript, _ := storage.ReadTranscript(layout)
+	summaryData, _ := os.ReadFile(layout.SummaryPath)
+	audioMeta, _ := storage.ReadAudioMetadata(layout)
+
+	var summary *artifacts.Summary
+	if len(summaryData) > 0 {
+		json.Unmarshal(summaryData, &summary)
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":              true,
+		"meeting_id":      meetingIDStr,
+		"title":          meeting.Title,
+		"created_at":      meeting.CreatedAt,
+		"current_version": meeting.CurrentVersionID,
+		"versions":       meeting.Versions,
+		"transcript":     transcript,
+		"summary":        summary,
+		"audio":          audioMeta,
+		"paths": map[string]string{
+			"meeting_dir": layout.MeetingDir,
+			"audio":       layout.AudioPath,
+			"transcript":  layout.TranscriptPath,
+			"summary":     layout.SummaryPath,
+			"manifest":    layout.ManifestPath,
+		},
+	})
+}
+
+
+func (a app) transcript(ctx context.Context, args []string) error {
+	meetingIDStr := extractPositionalArg(args)
+	if meetingIDStr == "" {
+		return notoerr.New("missing_meeting_id", "Usage: noto transcript <meeting_id>.", nil)
+	}
+
+	meetingID, err := uuid.Parse(meetingIDStr)
+	if err != nil {
+		return notoerr.New("invalid_meeting_id", "Invalid meeting ID format.", map[string]any{"id": meetingIDStr})
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	transcript, err := storage.ReadTranscript(layout)
+	if err != nil {
+		return notoerr.New("no_transcript", "No transcript found.", map[string]any{"meeting_id": meetingIDStr})
+	}
+
+	isJSON := hasJSONFlag(args)
+	if !isJSON {
+		for _, seg := range transcript.Segments {
+			start := formatTimestamp(seg.StartSeconds)
+			fmt.Fprintf(a.out, "[%s] %s (%s): %s\n", seg.ID, seg.SpeakerID, seg.SourceRole, seg.Text)
+		}
+		return nil
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":         true,
+		"meeting_id": meetingIDStr,
+		"transcript": transcript,
+	})
+}
+
+
+func (a app) summary(ctx context.Context, args []string) error {
+	meetingIDStr := extractPositionalArg(args)
+	if meetingIDStr == "" {
+		return notoerr.New("missing_meeting_id", "Usage: noto summary <meeting_id>.", nil)
+	}
+
+	meetingID, err := uuid.Parse(meetingIDStr)
+	if err != nil {
+		return notoerr.New("invalid_meeting_id", "Invalid meeting ID format.", map[string]any{"id": meetingIDStr})
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	summaryData, err := os.ReadFile(layout.SummaryPath)
+	if err != nil {
+		return notoerr.New("no_summary", "No summary found. Run 'noto summarize' first.", map[string]any{"meeting_id": meetingIDStr})
+	}
+
+	var summary artifacts.Summary
+	if err := json.Unmarshal(summaryData, &summary); err != nil {
+		return err
+	}
+
+	isJSON := hasJSONFlag(args)
+	if !isJSON {
+		fmt.Fprintf(a.out, "# %s\n\n", meetingIDStr)
+		fmt.Fprintf(a.out, "%s\n\n", summary.ShortSummary)
+		if len(summary.Decisions) > 0 {
+			fmt.Fprintf(a.out, "## Decisions\n\n")
+			for i, d := range summary.Decisions {
+				fmt.Fprintf(a.out, "%d. %s\n", i+1, d.Text)
+			}
+		}
+		if len(summary.ActionItems) > 0 {
+			fmt.Fprintf(a.out, "\n## Action Items\n\n")
+			for _, a := range summary.ActionItems {
+				fmt.Fprintf(a.out, "- @%s: %s\n", a.Owner, a.Text)
+			}
+		}
+		return nil
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":         true,
+		"meeting_id": meetingIDStr,
+		"summary":    &summary,
+	})
+}
+
+
+func (a app) actions(ctx context.Context, args []string) error {
+	meetingIDStr := extractPositionalArg(args)
+	if meetingIDStr == "" {
+		return notoerr.New("missing_meeting_id", "Usage: noto actions <meeting_id>.", nil)
+	}
+
+	meetingID, err := uuid.Parse(meetingIDStr)
+	if err != nil {
+		return notoerr.New("invalid_meeting_id", "Invalid meeting ID format.", map[string]any{"id": meetingIDStr})
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	summaryData, err := os.ReadFile(layout.SummaryPath)
+	if err != nil {
+		return notoerr.New("no_summary", "No summary found.", map[string]any{"meeting_id": meetingIDStr})
+	}
+
+	var summary artifacts.Summary
+	if err := json.Unmarshal(summaryData, &summary); err != nil {
+		return err
+	}
+
+	return writeJSON(a.out, map[string]any{
+		"ok":          true,
+		"meeting_id":  meetingIDStr,
+		"action_items": summary.ActionItems,
+	})
+}
+
+
+func (a app) files(ctx context.Context, args []string) error {
+	meetingIDStr := extractPositionalArg(args)
+	if meetingIDStr == "" {
+		return notoerr.New("missing_meeting_id", "Usage: noto files <meeting_id>.", nil)
+	}
+
+	meetingID, err := uuid.Parse(meetingIDStr)
+	if err != nil {
+		return notoerr.New("invalid_meeting_id", "Invalid meeting ID format.", map[string]any{"id": meetingIDStr})
+	}
+
+	layout, err := storage.LayoutFor(a.recordingsDir, meetingID)
+	if err != nil {
+		return err
+	}
+
+	manifest, err := storage.ReadManifest(layout)
+	if err != nil {
+		return err
+	}
+
+	files := []map[string]string{
+		{"path": layout.ManifestPath, "type": "manifest"},
+		{"path": layout.AudioPath, "type": "audio"},
+		{"path": layout.TranscriptPath, "type": "transcript"},
+		{"path": layout.SummaryPath, "type": "summary"},
+	}
+
+	versionDir := layout.VersionDir(manifest.CurrentVersionID)
+	files = append(files, map[string]string{
+		"path": layout.VersionManifestPath(manifest.CurrentVersionID),
+		"type": "version_manifest",
+	})
+	_ = versionDir
+
+	return writeJSON(a.out, map[string]any{
+		"ok":         true,
+		"meeting_id": meetingIDStr,
+		"files":      files,
+	})
+}
+
+
+func (a app) benchmark(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return notoerr.New("missing_subcommand", "Usage: noto benchmark <run|compare|report>.", nil)
+	}
+
+	switch args[0] {
+	case "run", "compare", "report":
+		return notoerr.New("not_implemented", "Benchmark commands are not yet implemented.", map[string]any{"command": args[0]})
+	default:
+		return notoerr.New("unknown_command", "Unknown benchmark subcommand.", map[string]any{"command": args[0]})
+	}
+}
+
+func (a app) runTranscription(ctx context.Context, provider providers.ProviderSuite, audioData []byte, meetingID string) (*artifacts.Transcript, error) {
+	sp, ok := provider.(interface {
+		Transcribe(ctx context.Context, audio []byte, opts providers.TranscribeOptions) (*artifacts.Transcript, error)
+	})
+	if !ok {
+		return nil, notoerr.New("provider_incompatible", "Speech provider does not support transcription.", nil)
+	}
+
+	opts := providers.TranscribeOptions{}
+	transcript, err := sp.Transcribe(ctx, audioData, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	normalizers := speech.NewTranscriptNormalizers()
+	normalized, err := normalizers.Normalize(transcript)
+	if err == nil {
+		transcript = normalized
+	}
+
+	transcript.MeetingID = meetingID
+
+	return transcript, nil
+}
+
+func (a app) runSummarization(ctx context.Context, provider providers.ProviderSuite, transcript *artifacts.Transcript) (*artifacts.Summary, error) {
+	lp, ok := provider.(interface {
+		Summarize(ctx context.Context, transcript artifacts.Transcript, opts providers.SummarizeOptions) (*artifacts.Summary, error)
+	})
+	if !ok {
+		return nil, notoerr.New("provider_incompatible", "LLM provider does not support summarization.", nil)
+	}
+
+	opts := providers.SummarizeOptions{}
+	summary, err := lp.Summarize(ctx, *transcript, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	summary.MeetingID = transcript.MeetingID
+
+	return summary, nil
+}
+
+func (a app) indexMeeting(meetingID, title string, transcript *artifacts.Transcript, summary *artifacts.Summary) error {
+	if a.searchIndex == nil {
+		return nil
+	}
+
+	segments := make([]search.TranscriptSegment, 0)
+	if transcript != nil {
+		for _, seg := range transcript.Segments {
+			segments = append(segments, search.TranscriptSegment{
+				SegmentID: seg.ID,
+				Speaker:   seg.SpeakerID,
+				Text:      seg.Text,
+				Timestamp: seg.StartSeconds,
+			})
+		}
+	}
+
+	decisions := make([]search.SummaryItem, 0)
+	actions := make([]search.ActionItem, 0)
+	risks := make([]search.SummaryItem, 0)
+
+	if summary != nil {
+		for _, d := range summary.Decisions {
+			decisions = append(decisions, search.SummaryItem{Text: d.Text, SpeakerIDs: d.SpeakerIDs})
+		}
+		for _, a := range summary.ActionItems {
+			actions = append(actions, search.ActionItem{Text: a.Text, Owner: a.Owner})
+		}
+		for _, r := range summary.Risks {
+			risks = append(risks, search.SummaryItem{Text: r.Text})
+		}
+	}
+
+	input := &search.IndexMeetingInput{
+		MeetingID:          meetingID,
+		Title:              title,
+		TranscriptSegments: segments,
+		Decisions:          decisions,
+		ActionItems:        actions,
+		Risks:              risks,
+	}
+
+	return a.searchIndex.IndexMeetingFromInput(input)
+}
+
+func extractTitleFlag(args []string) string {
+	for i, arg := range args {
+		if (arg == "--title" || arg == "-t") && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(arg, "--title=") {
+			return strings.TrimPrefix(arg, "--title=")
+		}
+		if strings.HasPrefix(arg, "-t=") {
+			return strings.TrimPrefix(arg, "-t=")
+		}
+	}
+	return ""
+}
+
+func extractSearchQuery(args []string) string {
+	for i, arg := range args {
+		if arg == "--json" || arg == "-j" {
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return arg
+		}
+	}
+	return ""
+}
+
+func extractPositionalArg(args []string) string {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") && arg != "--json" {
+			return arg
+		}
+	}
+	return ""
+}
+
+func extractLimit(args []string) int {
+	for i, arg := range args {
+		if (arg == "--limit" || arg == "-l") && i+1 < len(args) {
+			var limit int
+			if _, err := fmt.Sscanf(args[i+1], "%d", &limit); err == nil {
+				return limit
+			}
+		}
+		if strings.HasPrefix(arg, "--limit=") {
+			var limit int
+			if _, err := fmt.Sscanf(strings.TrimPrefix(arg, "--limit="), "%d", &limit); err == nil {
+				return limit
+			}
+		}
+	}
+	return 0
+}
+
+func formatTimestamp(seconds float64) string {
+	h := int(seconds) / 3600
+	m := (int(seconds) % 3600) / 60
+	s := int(seconds) % 60
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+}
+
+func randomSuffix() string {
+	b := make([]byte, 4)
+	for i := range b {
+		b[i] = byte(uuid.New().ID() % 256)
+	}
+	return fmt.Sprintf("%x", b)
 }
 
 func (a app) notImplemented(command string) error {

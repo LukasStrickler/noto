@@ -3,6 +3,11 @@ module github.com/lukasstrickler/noto
 go 1.24.0
 
 require (
+	github.com/aws/aws-sdk-go-v2 v1.32.0
+	github.com/aws/aws-sdk-go-v2/credentials v1.17.41
+	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.34
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.72.0
+	github.com/aws/aws-sdk-go-v2/service/sts v1.32.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/google/uuid v1.6.0
 	github.com/spf13/pflag v1.0.6
