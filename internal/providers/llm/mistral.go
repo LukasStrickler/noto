@@ -154,7 +154,7 @@ func (a *MistralAdapter) parseResponse(raw []byte, transcript artifacts.Transcri
 		return nil, notoerr.Wrap("provider_response_invalid", "Could not parse Mistral response.", err)
 	}
 
-	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+	if len(resp.Choices) == 0 || resp.Choices[0].Message == nil || resp.Choices[0].Message.Content == "" {
 		return nil, notoerr.New("provider_response_invalid", "Mistral response did not include message content.", nil)
 	}
 

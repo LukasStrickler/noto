@@ -142,7 +142,7 @@ func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetin
 		return nil, notoerr.Wrap("provider_response_invalid", "Could not parse OpenRouter response.", err)
 	}
 
-	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+	if len(resp.Choices) == 0 || resp.Choices[0].Message == nil || resp.Choices[0].Message.Content == "" {
 		return nil, notoerr.New("provider_response_invalid", "OpenRouter response did not include message content.", nil)
 	}
 
