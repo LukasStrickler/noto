@@ -29,8 +29,27 @@ func newLocalAdapter() (*localAdapter, error) {
 	return &localAdapter{basePath: basePath}, nil
 }
 
+// safeJoin ensures the resolved path stays within basePath to prevent
+// directory traversal attacks. Returns error if key attempts to escape.
+func safeJoin(basePath, key string) (string, error) {
+	// Use filepath.Join and then verify the result is still within basePath
+	fullPath := filepath.Join(basePath, key)
+	cleanPath := filepath.Clean(fullPath)
+
+	// Ensure the clean path starts with basePath (with trailing separator)
+	// This prevents attacks like "../../../etc/passwd"
+	if !strings.HasPrefix(cleanPath+string(filepath.Separator), basePath+string(filepath.Separator)) {
+		return "", errors.New("path traversal attempt detected: " + key)
+	}
+
+	return fullPath, nil
+}
+
 func (a *localAdapter) PutObject(ctx context.Context, key string, body io.Reader, opts PutOptions) error {
-	fullPath := filepath.Join(a.basePath, key)
+	fullPath, err := safeJoin(a.basePath, key)
+	if err != nil {
+		return ErrUpload(key, err)
+	}
 
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -63,7 +82,10 @@ func (a *localAdapter) PutObject(ctx context.Context, key string, body io.Reader
 }
 
 func (a *localAdapter) GetObject(ctx context.Context, key string, dest io.WriterAt) error {
-	fullPath := filepath.Join(a.basePath, key)
+	fullPath, err := safeJoin(a.basePath, key)
+	if err != nil {
+		return ErrDownload(key, err)
+	}
 
 	file, err := os.Open(fullPath)
 	if err != nil {

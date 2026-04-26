@@ -16,6 +16,7 @@ import (
 
 type AssemblyAIAdapter struct {
 	BaseURL      string
+	APIKey       string
 	HTTP         HTTPDoer
 	PollInterval time.Duration
 	MaxPolls     int
@@ -63,7 +64,7 @@ func (a *AssemblyAIAdapter) upload(ctx context.Context, client HTTPDoer, baseURL
 	if err != nil {
 		return "", notoerr.Wrap("provider_request_failed", "Could not create AssemblyAI upload request.", err)
 	}
-	req.Header.Set("authorization", "placeholder")
+	req.Header.Set("authorization", a.APIKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -107,7 +108,7 @@ func (a *AssemblyAIAdapter) submit(ctx context.Context, client HTTPDoer, baseURL
 	if err != nil {
 		return "", notoerr.Wrap("provider_request_failed", "Could not create AssemblyAI transcript request.", err)
 	}
-	req.Header.Set("authorization", "placeholder")
+	req.Header.Set("authorization", a.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
@@ -150,7 +151,7 @@ func (a *AssemblyAIAdapter) poll(ctx context.Context, client HTTPDoer, baseURL s
 		if err != nil {
 			return nil, notoerr.Wrap("provider_request_failed", "Could not create AssemblyAI polling request.", err)
 		}
-		req.Header.Set("authorization", "placeholder")
+		req.Header.Set("authorization", a.APIKey)
 
 		resp, err := client.Do(req)
 		if err != nil {
