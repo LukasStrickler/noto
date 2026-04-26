@@ -37,23 +37,40 @@ type SummaryModel struct {
 	PromptVersion string `json:"prompt_version"`
 }
 
-func ValidateSummary(summary Summary, transcript Transcript) error {
+func (s *Summary) Kind() ArtifactKind {
+	return KindSummary
+}
+
+func (s *Summary) Validate() *notoerr.Error {
+	if s.SchemaVersion != "summary.v1" {
+		return notoerr.New(ErrCodeValidationFailed, "schema_version must be summary.v1", map[string]any{"schema_version": s.SchemaVersion})
+	}
+	if s.MeetingID == "" {
+		return NewMissingFieldError("meeting_id")
+	}
+	return nil
+}
+
+func ValidateSummary(summary Summary, transcript Transcript) *notoerr.Error {
 	if summary.SchemaVersion != "summary.v1" {
-		return notoerr.New("schema_validation_failed", "Summary schema_version must be summary.v1.", map[string]any{"schema_version": summary.SchemaVersion})
+		return notoerr.New(ErrCodeValidationFailed, "schema_version must be summary.v1", map[string]any{"schema_version": summary.SchemaVersion})
 	}
-	if summary.MeetingID == "" || summary.MeetingID != transcript.MeetingID {
-		return notoerr.New("schema_validation_failed", "Summary meeting_id must match transcript meeting_id.", map[string]any{"summary_meeting_id": summary.MeetingID, "transcript_meeting_id": transcript.MeetingID})
+	if summary.MeetingID == "" {
+		return NewMissingFieldError("meeting_id")
 	}
-	if summary.Model.Provider != "openrouter" && summary.Model.Provider != "fake-llm" {
-		return notoerr.New("invalid_provider_route", "Summary provider must be OpenRouter for real LLM work.", map[string]any{"provider": summary.Model.Provider})
+	if transcript.MeetingID != "" && summary.MeetingID != transcript.MeetingID {
+		return notoerr.New(ErrCodeValidationFailed, "meeting_id must match transcript meeting_id", map[string]any{"summary_meeting_id": summary.MeetingID, "transcript_meeting_id": transcript.MeetingID})
 	}
 	segments := map[string]bool{}
 	for _, segment := range transcript.Segments {
 		segments[segment.ID] = true
 	}
 	for _, evidence := range allEvidence(summary) {
-		if evidence.SegmentID == "" || !segments[evidence.SegmentID] {
-			return notoerr.New("schema_validation_failed", "Summary evidence references an unknown transcript segment.", map[string]any{"segment_id": evidence.SegmentID})
+		if evidence.SegmentID == "" {
+			return NewMissingFieldError("evidence.segment_id")
+		}
+		if !segments[evidence.SegmentID] {
+			return notoerr.New(ErrCodeValidationFailed, "evidence references unknown transcript segment", map[string]any{"segment_id": evidence.SegmentID})
 		}
 	}
 	return nil

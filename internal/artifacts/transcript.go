@@ -64,39 +64,50 @@ type TranscriptCapabilities struct {
 	SourceRoles        bool `json:"source_roles"`
 }
 
-func ValidateTranscript(t Transcript) error {
+func (t *Transcript) Kind() ArtifactKind {
+	return KindTranscript
+}
+
+func (t *Transcript) Validate() *notoerr.Error {
 	if t.SchemaVersion != "transcript.v1" {
-		return notoerr.New("schema_validation_failed", "Transcript schema_version must be transcript.v1.", map[string]any{"schema_version": t.SchemaVersion})
+		return notoerr.New(ErrCodeValidationFailed, "schema_version must be transcript.v1", map[string]any{"schema_version": t.SchemaVersion})
 	}
 	if t.MeetingID == "" {
-		return notoerr.New("schema_validation_failed", "Transcript meeting_id is required.", map[string]any{"field": "meeting_id"})
+		return NewMissingFieldError("meeting_id")
 	}
 	if t.Provider.ID == "" {
-		return notoerr.New("schema_validation_failed", "Transcript provider.id is required.", map[string]any{"field": "provider.id"})
+		return NewMissingFieldError("provider.id")
 	}
 	if len(t.Speakers) == 0 {
-		return notoerr.New("schema_validation_failed", "Transcript must include at least one speaker.", map[string]any{"field": "speakers"})
+		return NewMissingFieldError("speakers")
 	}
 	if len(t.Segments) == 0 {
-		return notoerr.New("schema_validation_failed", "Transcript must include at least one segment.", map[string]any{"field": "segments"})
+		return NewMissingFieldError("segments")
 	}
 	speakers := map[string]bool{}
 	for _, speaker := range t.Speakers {
 		if speaker.ID == "" {
-			return notoerr.New("schema_validation_failed", "Speaker id is required.", map[string]any{"field": "speakers.id"})
+			return NewMissingFieldError("speakers.id")
 		}
 		speakers[speaker.ID] = true
 	}
 	for _, segment := range t.Segments {
-		if segment.ID == "" || segment.Text == "" {
-			return notoerr.New("schema_validation_failed", "Segment id and text are required.", map[string]any{"field": "segments"})
+		if segment.ID == "" {
+			return NewMissingFieldError("segments.id")
+		}
+		if segment.Text == "" {
+			return NewMissingFieldError("segments.text")
 		}
 		if !speakers[segment.SpeakerID] {
-			return notoerr.New("schema_validation_failed", "Segment references an unknown speaker.", map[string]any{"segment_id": segment.ID, "speaker_id": segment.SpeakerID})
+			return notoerr.New(ErrCodeValidationFailed, "segment references unknown speaker", map[string]any{"segment_id": segment.ID, "speaker_id": segment.SpeakerID})
 		}
 		if segment.EndSeconds < segment.StartSeconds {
-			return notoerr.New("schema_validation_failed", "Segment end_seconds cannot be before start_seconds.", map[string]any{"segment_id": segment.ID})
+			return notoerr.New(ErrCodeValidationFailed, "segment end_seconds before start_seconds", map[string]any{"segment_id": segment.ID})
 		}
 	}
 	return nil
+}
+
+func ValidateTranscript(t Transcript) *notoerr.Error {
+	return t.Validate()
 }

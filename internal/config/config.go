@@ -1,146 +1,312 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/lukasstrickler/noto/internal/notoerr"
 	"github.com/lukasstrickler/noto/internal/providers"
-)
-
-const (
-	EnvConfigDir    = "NOTO_CONFIG_DIR"
-	EnvArtifactRoot = "NOTO_ARTIFACT_ROOT"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 type Config struct {
-	SchemaVersion string                  `json:"schema_version"`
-	ConfigDir     string                  `json:"config_dir"`
-	ArtifactRoot  string                  `json:"artifact_root"`
-	Routing       providers.RoutingPolicy `json:"routing"`
-	Credentials   map[string]string       `json:"credentials"`
+	SchemaVersion  string                  `mapstructure:"schema_version"`
+	ConfigDir      string                  `mapstructure:"config_dir"`
+	ArtifactRoot   string                  `mapstructure:"artifact_root"`
+	RecordingsDir  string                  `mapstructure:"recordings_dir"`
+	Providers      ProviderConfig          `mapstructure:"providers"`
+	UI             UIConfig               `mapstructure:"ui"`
+	Sync           SyncConfig             `mapstructure:"sync"`
+	Storage        StorageConfig          `mapstructure:"storage"`
+	Routing        providers.RoutingPolicy `mapstructure:"routing"`
 }
 
-func Default() Config {
-	configDir := DefaultConfigDir()
-	artifactRoot := DefaultArtifactRoot()
-	return Config{
-		SchemaVersion: "config.v1",
-		ConfigDir:     configDir,
-		ArtifactRoot:  artifactRoot,
-		Routing:       providers.DefaultRoutingPolicy(),
-		Credentials: map[string]string{
-			"mistral":    "provider:mistral",
-			"assemblyai": "provider:assemblyai",
-			"elevenlabs": "provider:elevenlabs",
-			"openrouter": "provider:openrouter",
-		},
-	}
+type ProviderConfig struct {
+	STT        STTConfig `mapstructure:"stt"`
+	LLM        LLMConfig `mapstructure:"llm"`
+	Summarizer string    `mapstructure:"summarizer"`
 }
 
-func DefaultConfigDir() string {
-	if override := os.Getenv(EnvConfigDir); override != "" {
-		return override
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ".noto"
-	}
-	return filepath.Join(home, "Library", "Application Support", "Noto")
+type STTConfig struct {
+	Default string `mapstructure:"default"`
 }
 
-func DefaultArtifactRoot() string {
-	if override := os.Getenv(EnvArtifactRoot); override != "" {
-		return override
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "Noto"
-	}
-	return filepath.Join(home, "Noto")
+type LLMConfig struct {
+	Default string `mapstructure:"default"`
+}
+
+type UIConfig struct {
+	Theme string `mapstructure:"theme"`
+}
+
+type SyncConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	Endpoint string `mapstructure:"endpoint"`
+	Bucket   string `mapstructure:"bucket"`
+}
+
+type StorageConfig struct {
+	Type  string           `mapstructure:"type"`
+	Local LocalStorageConfig `mapstructure:"local"`
+	S3    S3StorageConfig  `mapstructure:"s3"`
+}
+
+type LocalStorageConfig struct {
+	Path string `mapstructure:"path"`
+}
+
+type S3StorageConfig struct {
+	Bucket   string `mapstructure:"bucket"`
+	Region   string `mapstructure:"region"`
+	Endpoint string `mapstructure:"endpoint"`
 }
 
 type Store struct {
-	Dir string
+	dir string
 }
 
 func NewStore(dir string) Store {
 	if dir == "" {
 		dir = DefaultConfigDir()
 	}
-	return Store{Dir: dir}
+	return Store{dir: dir}
+}
+
+func (s Store) Dir() string {
+	return s.dir
 }
 
 func (s Store) Path() string {
-	return filepath.Join(s.Dir, "config.json")
+	return filepath.Join(s.dir, "config.yaml")
 }
 
-func (s Store) Load() (Config, error) {
-	cfg := Default()
-	cfg.ConfigDir = s.Dir
-	b, err := os.ReadFile(s.Path())
+type dotReplacer struct{}
+
+func (r *dotReplacer) Replace(s string) string {
+	return s
+}
+
+func NewViper(cfgDir string) (*viper.Viper, error) {
+	v := viper.New()
+
+	v.SetConfigName(ConfigFileName())
+	v.SetConfigType(ConfigFileExt())
+	v.AddConfigPath(cfgDir)
+	v.AddConfigPath(".")
+
+	v.SetEnvPrefix(EnvPrefix)
+	v.SetEnvKeyReplacer(&dotReplacer{})
+
+	v.AutomaticEnv()
+
+	for key, val := range AllDefaults() {
+		v.SetDefault(key, val)
+	}
+
+	return v, nil
+}
+
+func Load(cfgDir string) (Config, error) {
+	if cfgDir == "" {
+		cfgDir = DefaultConfigDir()
+	}
+
+	v, err := NewViper(cfgDir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return cfg, nil
+		return Config{}, notoerr.Wrap("viper_init_failed", "Failed to initialize Viper", err)
+	}
+
+	cfg := Config{}
+
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if errors.As(err, &notFound) {
+			cfg = DefaultConfig()
+		} else {
+			return Config{}, notoerr.Wrap("config_read_failed", "Failed to read config file", err)
 		}
-		return Config{}, notoerr.Wrap("config_read_failed", "Could not read Noto config.", err)
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return Config{}, notoerr.Wrap("config_parse_failed", "Could not parse Noto config.", err)
+
+	if err := v.Unmarshal(&cfg); err != nil {
+		return Config{}, notoerr.Wrap("config_unmarshal_failed", "Failed to unmarshal config", err)
 	}
-	if cfg.SchemaVersion == "" {
-		cfg.SchemaVersion = "config.v1"
-	}
-	if cfg.ConfigDir == "" {
-		cfg.ConfigDir = s.Dir
-	}
-	if cfg.ArtifactRoot == "" {
-		cfg.ArtifactRoot = DefaultArtifactRoot()
-	}
-	if cfg.Credentials == nil {
-		cfg.Credentials = Default().Credentials
-	}
-	if cfg.Routing.LLMProvider == "" {
-		cfg.Routing.LLMProvider = "openrouter"
-	}
-	if cfg.Routing.LLMModel == "" {
-		cfg.Routing.LLMModel = providers.DefaultRoutingPolicy().LLMModel
-	}
-	if cfg.Routing.SpeechProvider == "" {
-		cfg.Routing.SpeechProvider = providers.DefaultRoutingPolicy().SpeechProvider
-	}
-	if cfg.Routing.Profile == "" {
-		cfg.Routing.Profile = providers.RoutingProfileManual
-	}
+
+	cfg.ConfigDir = cfgDir
+
 	return cfg, nil
 }
 
-func (s Store) Save(cfg Config) error {
-	if cfg.SchemaVersion == "" {
-		cfg.SchemaVersion = "config.v1"
+func LoadWithFlags(cfgDir string, flags *pflag.FlagSet) (Config, error) {
+	if cfgDir == "" {
+		cfgDir = DefaultConfigDir()
 	}
-	cfg.ConfigDir = s.Dir
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
-		return notoerr.Wrap("config_dir_create_failed", "Could not create Noto config directory.", err)
-	}
-	if err := os.Chmod(s.Dir, 0o700); err != nil {
-		return notoerr.Wrap("config_dir_permission_failed", "Could not secure Noto config directory.", err)
-	}
-	b, err := json.MarshalIndent(cfg, "", "  ")
+
+	v, err := NewViper(cfgDir)
 	if err != nil {
-		return notoerr.Wrap("config_encode_failed", "Could not encode Noto config.", err)
+		return Config{}, notoerr.Wrap("viper_init_failed", "Failed to initialize Viper", err)
 	}
-	tmp := s.Path() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return notoerr.Wrap("config_write_failed", "Could not write Noto config.", err)
+
+	BindFlags(flags, v)
+
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if errors.As(err, &notFound) {
+		} else {
+			return Config{}, notoerr.Wrap("config_read_failed", "Failed to read config file", err)
+		}
 	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		return notoerr.Wrap("config_permission_failed", "Could not secure Noto config.", err)
+
+	cfg := Config{}
+	if err := v.Unmarshal(&cfg); err != nil {
+		return Config{}, notoerr.Wrap("config_unmarshal_failed", "Failed to unmarshal config", err)
 	}
-	if err := os.Rename(tmp, s.Path()); err != nil {
-		return notoerr.Wrap("config_commit_failed", "Could not commit Noto config.", err)
+
+	cfg.ConfigDir = cfgDir
+
+	return cfg, nil
+}
+
+func Save(cfg Config, dir string) error {
+	if dir == "" {
+		dir = DefaultConfigDir()
 	}
+
+	if err := os.MkdirAll(dir, ConfigDirMode); err != nil {
+		return notoerr.Wrap("config_dir_create_failed", "Could not create config directory", err)
+	}
+	if err := os.Chmod(dir, ConfigDirMode); err != nil {
+		return notoerr.Wrap("config_dir_perm_failed", "Could not set config directory permissions", err)
+	}
+
+	v := viper.New()
+	v.SetConfigName(ConfigFileName())
+	v.SetConfigType(ConfigFileExt())
+	v.AddConfigPath(dir)
+	v.AddConfigPath(".")
+
+	cfg.ConfigDir = dir
+	cfg.SchemaVersion = "config.v1"
+
+	for key, val := range AllDefaults() {
+		v.SetDefault(key, val)
+	}
+
+	v.Set(KeySchemaVersion, cfg.SchemaVersion)
+	v.Set(KeyConfigDir, cfg.ConfigDir)
+	v.Set(KeyArtifactRoot, cfg.ArtifactRoot)
+	v.Set(KeyRecordingsDir, cfg.RecordingsDir)
+	v.Set(KeySTTDefault, cfg.Providers.STT.Default)
+	v.Set(KeyLLMDefault, cfg.Providers.LLM.Default)
+	v.Set(KeySummarizer, cfg.Providers.Summarizer)
+	v.Set(KeyUITheme, cfg.UI.Theme)
+	v.Set(KeySyncEnabled, cfg.Sync.Enabled)
+	v.Set(KeySyncEndpoint, cfg.Sync.Endpoint)
+	v.Set(KeySyncBucket, cfg.Sync.Bucket)
+	v.Set(KeyStorageType, cfg.Storage.Type)
+	v.Set(KeyStorageLocalPath, cfg.Storage.Local.Path)
+	v.Set(KeyStorageS3Bucket, cfg.Storage.S3.Bucket)
+	v.Set(KeyStorageS3Region, cfg.Storage.S3.Region)
+	v.Set(KeyStorageS3Endpoint, cfg.Storage.S3.Endpoint)
+	v.Set(KeyRoutingLLMProvider, cfg.Routing.LLMProvider)
+	v.Set(KeyRoutingLLMModel, cfg.Routing.LLMModel)
+	v.Set(KeyRoutingSpeechProvider, cfg.Routing.SpeechProvider)
+	v.Set(KeyRoutingProfile, string(cfg.Routing.Profile))
+
+	tmp := filepath.Join(dir, "config.yaml.tmp")
+	if err := v.WriteConfigAs(tmp); err != nil {
+		return notoerr.Wrap("config_write_failed", "Failed to write config file", err)
+	}
+	if err := os.Chmod(tmp, ConfigFileMode); err != nil {
+		return notoerr.Wrap("config_file_perm_failed", "Could not set config file permissions", err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, "config.yaml")); err != nil {
+		return notoerr.Wrap("config_commit_failed", "Failed to commit config file", err)
+	}
+
 	return nil
+}
+
+func DefaultConfig() Config {
+	cfgDir := DefaultConfigDir()
+	artifactRoot := DefaultArtifactRoot()
+	routing := providers.DefaultRoutingPolicy()
+
+	return Config{
+		SchemaVersion: "config.v1",
+		ConfigDir:     cfgDir,
+		ArtifactRoot:  artifactRoot,
+		RecordingsDir: DefaultRecordingsDir(),
+		Providers: ProviderConfig{
+			STT: STTConfig{
+				Default: DefaultSTTProvider,
+			},
+			LLM: LLMConfig{
+				Default: DefaultLLMProvider,
+			},
+			Summarizer: DefaultSummarizer,
+		},
+		UI: UIConfig{
+			Theme: DefaultUITheme,
+		},
+		Sync: SyncConfig{
+			Enabled:  DefaultSyncEnabled,
+			Endpoint: "",
+			Bucket:   "",
+		},
+		Storage: StorageConfig{
+			Type: DefaultStorageType,
+			Local: LocalStorageConfig{
+				Path: artifactRoot,
+			},
+			S3: S3StorageConfig{
+				Bucket:   "",
+				Region:   "",
+				Endpoint: "",
+			},
+		},
+		Routing: routing,
+	}
+}
+
+func (c Config) GetProviderConfig(provider string) ProviderSettings {
+	return ProviderSettings{
+		Provider: provider,
+		APIKeyRef: fmt.Sprintf("provider:%s", provider),
+	}
+}
+
+type ProviderSettings struct {
+	Provider string
+	APIKeyRef string
+	Endpoint  string
+	Model     string
+}
+
+func (c Config) GetStorageBackend() string {
+	return c.Storage.Type
+}
+
+func (c Config) GetSyncGateway() string {
+	if c.Sync.Enabled {
+		return c.Sync.Endpoint
+	}
+	return ""
+}
+
+func (c Config) GetRecordingsDir() string {
+	if c.RecordingsDir != "" {
+		return c.RecordingsDir
+	}
+	return filepath.Join(c.ArtifactRoot, DefaultRecordingsDir)
+}
+
+func (c Config) GetArtifactRoot() string {
+	return c.ArtifactRoot
+}
+
+func (c Config) GetConfigDir() string {
+	return c.ConfigDir
 }
