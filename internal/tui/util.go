@@ -297,3 +297,17 @@ func min(a int, b int) int {
 	}
 	return b
 }
+
+func now() int64 {
+	return 0
+}
+
+func formatElapsed(elapsed int64) string {
+	if elapsed == 0 {
+		return "00:00:00"
+	}
+	seconds := elapsed % 60
+	minutes := (elapsed / 60) % 60
+	hours := elapsed / 3600
+	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+}

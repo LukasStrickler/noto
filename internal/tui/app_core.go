@@ -79,6 +79,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case TickMsg:
+		return m.handleTick()
+	case AmbientMsg:
+		return m.handleAmbient()
 	}
 	return m, nil
 }
@@ -94,4 +98,16 @@ func RenderProvidersInteractive(screen ProviderScreen, focus int) string {
 	m := NewAppModel(screen, ScreenProviders)
 	m.UI.SelectedProvider = focus
 	return m.View()
+}
+
+type TickMsg struct{}
+
+type AmbientMsg struct{}
+
+func (m AppModel) handleTick() (tea.Model, tea.Cmd) {
+	return m, nil
+}
+
+func (m AppModel) handleAmbient() (tea.Model, tea.Cmd) {
+	return m, nil
 }

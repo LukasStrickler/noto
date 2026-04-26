@@ -113,3 +113,74 @@ func formatDB(db int) string {
 	}
 	return fmt.Sprintf("%ddB", db)
 }
+
+func RenderBubblePup(bp BubblePupState, width int) string {
+	if !bp.Recording {
+		return styles.Muted.Render("  not recording")
+	}
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(renderRecordingDot(bp.IsPulsing()))
+	b.WriteString(" ")
+	b.WriteString(styles.HeaderStrong.Render(bp.ElapsedFormatted()))
+	b.WriteString("\n\n")
+	b.WriteString(renderAudioMeter("mic", bp.MicLevel, width-4))
+	b.WriteString("\n")
+	b.WriteString(renderAudioMeter("speaker", bp.SpeakerLevel, width-4))
+	b.WriteString("\n")
+	b.WriteString(renderAudioMeter("ambient", bp.AmbientLevel, width-4))
+	return b.String()
+}
+
+func renderRecordingDot(on bool) string {
+	if on {
+		return styles.Danger.Render("●")
+	}
+	return styles.Disabled.Render("○")
+}
+
+func renderAudioMeter(label string, db int, width int) string {
+	inner := clamp(width-lipgloss.Width(label)-14, 8, 30)
+	level := clamp((db+60)*inner/60, 0, inner)
+	bar := strings.Repeat("█", level) + strings.Repeat("░", inner-level)
+	prefix := labelStyle.Render(fit(label, 8))
+	return prefix + " [" + bar + "] " + mutedStyle.Render(formatDB(db))
+}
+
+func RenderViewport(items []string, vp ViewportComponent, selectedStyle, unselectedStyle lipgloss.Style) string {
+	start, end := vp.VisibleRange()
+	var b strings.Builder
+	for i := start; i < end && i < len(items); i++ {
+		line := items[i]
+		style := unselectedStyle
+		if i == vp.Selected {
+			style = selectedStyle
+		}
+		b.WriteString(style.Render(" " + fit(line, 40)))
+		b.WriteString("\n")
+	}
+	if len(items) == 0 {
+		b.WriteString(styles.Muted.Render("  no items"))
+	}
+	return b.String()
+}
+
+func RenderCommandPalette(cp CommandPaletteState, width int) string {
+	var b strings.Builder
+	inputDisplay := ":" + cp.Query
+	if inputDisplay == ":" {
+		inputDisplay = ":"
+	}
+	b.WriteString(styles.Input.Width(max(10, width-4)).Render(fit(inputDisplay, max(8, width-8))))
+	b.WriteString("\n")
+	for i, cand := range cp.Candidates {
+		style := styles.Row
+		if i == cp.Selected {
+			style = styles.RowSelected
+		}
+		line := cand.Label + "  " + cand.Hint
+		b.WriteString(style.Width(max(10, width-4)).Render(fit(line, max(8, width-8))))
+		b.WriteString("\n")
+	}
+	return b.String()
+}

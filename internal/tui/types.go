@@ -186,6 +186,163 @@ type AppModel struct {
 	Runtime AppRuntime
 }
 
+type ContextID string
+
+const (
+	ContextRoot        ContextID = "root"
+	ContextMeetingList ContextID = "meeting_list"
+	ContextDetail      ContextID = "detail"
+	ContextTranscript  ContextID = "transcript"
+	ContextSearch      ContextID = "search"
+	ContextRecorder    ContextID = "recorder"
+)
+
+type ContextStack struct {
+	stack []ContextID
+}
+
+func NewContextStack(initial ContextID) ContextStack {
+	return ContextStack{stack: []ContextID{initial}}
+}
+
+func (cs *ContextStack) Current() ContextID {
+	if len(cs.stack) == 0 {
+		return ContextRoot
+	}
+	return cs.stack[len(cs.stack)-1]
+}
+
+func (cs *ContextStack) Push(ctx ContextID) {
+	cs.stack = append(cs.stack, ctx)
+}
+
+func (cs *ContextStack) Pop() ContextID {
+	if len(cs.stack) == 0 {
+		return ContextRoot
+	}
+	ctx := cs.stack[len(cs.stack)-1]
+	cs.stack = cs.stack[:len(cs.stack)-1]
+	return ctx
+}
+
+func (cs *ContextStack) Replace(ctx ContextID) {
+	if len(cs.stack) == 0 {
+		cs.stack = append(cs.stack, ctx)
+		return
+	}
+	cs.stack[len(cs.stack)-1] = ctx
+}
+
+type ViewportComponent struct {
+	TotalItems    int
+	VisibleHeight int
+	ItemHeight   int
+	Offset       int
+	Selected     int
+}
+
+func NewViewportComponent(totalItems, visibleHeight, itemHeight int) ViewportComponent {
+	return ViewportComponent{
+		TotalItems:    totalItems,
+		VisibleHeight: visibleHeight,
+		ItemHeight:    itemHeight,
+		Offset:        0,
+		Selected:      0,
+	}
+}
+
+func (vp ViewportComponent) VisibleRange() (start, end int) {
+	start = vp.Offset
+	end = min(start+vp.VisibleHeight, vp.TotalItems)
+	return start, end
+}
+
+func (vp *ViewportComponent) ScrollDown(n int) {
+	newOffset := min(vp.Offset+n, max(0, vp.TotalItems-vp.VisibleHeight))
+	vp.Offset = newOffset
+}
+
+func (vp *ViewportComponent) ScrollUp(n int) {
+	vp.Offset = max(0, vp.Offset-n)
+}
+
+func (vp *ViewportComponent) ScrollToItem(item int) {
+	if item < vp.Offset {
+		vp.Offset = max(0, item)
+	} else if item >= vp.Offset+vp.VisibleHeight {
+		vp.Offset = min(item, max(0, vp.TotalItems-vp.VisibleHeight))
+	}
+}
+
+func (vp *ViewportComponent) SelectItem(item int) {
+	vp.Selected = clamp(item, 0, vp.TotalItems-1)
+	vp.ScrollToItem(vp.Selected)
+}
+
+type BubblePupState struct {
+	Recording    bool
+	StartTime    int64
+	Elapsed      int64
+	MicLevel     int
+	SpeakerLevel int
+	AmbientLevel int
+	PulseFrame   int
+}
+
+func NewBubblePupState() BubblePupState {
+	return BubblePupState{
+		Recording:    false,
+		StartTime:    0,
+		Elapsed:      0,
+		MicLevel:     -60,
+		SpeakerLevel: -60,
+		AmbientLevel: -60,
+		PulseFrame:   0,
+	}
+}
+
+func (bp *BubblePupState) Start() {
+	bp.Recording = true
+	bp.StartTime = now()
+	bp.Elapsed = 0
+}
+
+func (bp *BubblePupState) Stop() {
+	bp.Recording = false
+}
+
+func (bp *BubblePupState) Tick() {
+	if bp.Recording {
+		bp.Elapsed = now() - bp.StartTime
+	}
+}
+
+func (bp *BubblePupState) PulseFrameCycle() int {
+	frame := (bp.PulseFrame + 1) % 10
+	bp.PulseFrame = frame
+	return frame
+}
+
+func (bp *BubblePupState) IsPulsing() bool {
+	return bp.PulseFrame < 5
+}
+
+func (bp BubblePupState) ElapsedFormatted() string {
+	return formatElapsed(bp.Elapsed)
+}
+
+type CommandPaletteState struct {
+	Query       string
+	Selected    int
+	Candidates  []CommandCandidate
+}
+
+type CommandCandidate struct {
+	Label  string
+	Hint   string
+	Action ActionID
+}
+
 type MeetingFixture struct {
 	ID        string
 	Title     string
