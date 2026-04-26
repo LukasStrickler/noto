@@ -48,13 +48,13 @@ func (a *WhisperAdapter) Transcribe(ctx context.Context, audio []byte, opts Tran
 		fields["language"] = opts.Language
 	}
 
+	if a.APIKey == "" {
+		return nil, notoerr.New("missing_credential", "Whisper API key is not configured.", nil)
+	}
+
 	body, contentType, err := multipartWriter(fields, audio, "audio")
 	if err != nil {
 		return nil, err
-	}
-
-	if a.APIKey == "" {
-		return nil, notoerr.New("missing_credential", "Whisper API key is not configured.", nil)
 	}
 
 	url := strings.TrimRight(baseURL, "/") + "/v1/audio/transcriptions"
@@ -83,11 +83,20 @@ func (a *WhisperAdapter) Transcribe(ctx context.Context, audio []byte, opts Tran
 }
 
 type whisperResponse struct {
-	Text       string  `json:"text"`
-	Language   string  `json:"language"`
-	Duration   float64 `json:"duration"`
-	Words      []word  `json:"words"`
-	Segments   []seg   `json:"segments"`
+	Text       string         `json:"text"`
+	Language   string         `json:"language"`
+	Duration   float64        `json:"duration"`
+	Words      []whisperWord  `json:"words"`
+	Segments   []seg          `json:"segments"`
+}
+
+type whisperWord struct {
+	Text         string  `json:"text"`
+	Start        float64 `json:"start"`
+	End          float64 `json:"end"`
+	Confidence   float64 `json:"confidence"`
+	SpeakerID    string  `json:"speaker_id,omitempty"`
+	SpeakerLabel string  `json:"speaker_label,omitempty"`
 }
 
 type seg struct {
@@ -162,6 +171,16 @@ func (a *WhisperAdapter) parseResponse(raw []byte, meetingID string) (*artifacts
 
 	var words []artifacts.Word
 	for _, w := range resp.Words {
+		speakerLabel := w.SpeakerLabel
+		if speakerLabel == "" {
+			speakerLabel = w.SpeakerID
+		}
+		speakerID := ""
+		if speakerLabel != "" {
+			if id, ok := speakerMap[speakerLabel]; ok {
+				speakerID = id
+			}
+		}
 		conf := w.Confidence
 		words = append(words, artifacts.Word{
 			ID:           "word_" + w.Text,
@@ -169,6 +188,7 @@ func (a *WhisperAdapter) parseResponse(raw []byte, meetingID string) (*artifacts
 			EndSeconds:   w.End,
 			Text:         w.Text,
 			Confidence:   &conf,
+			SpeakerID:    speakerID,
 		})
 	}
 
@@ -185,7 +205,7 @@ func (a *WhisperAdapter) parseResponse(raw []byte, meetingID string) (*artifacts
 		Words:    words,
 		Capabilities: artifacts.TranscriptCapabilities{
 			WordTimestamps:     len(words) > 0,
-			SpeakerDiarization: len(speakers) > 1,
+			SpeakerDiarization: len(speakers) > 0,
 		},
 	}
 

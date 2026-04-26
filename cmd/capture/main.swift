@@ -200,9 +200,12 @@ class AudioCaptureEngine {
     
     private var recordingQueue = DispatchQueue(label: "com.noto.recording", qos: .userInitiated)
     private let stateQueue = DispatchQueue(label: "com.noto.state", attributes: .concurrent)
+    private let meterQueue = DispatchQueue(label: "com.noto.meter")
+    private let audioFileQueue = DispatchQueue(label: "com.noto.audiofile")
     private let recordingGroup = DispatchGroup()
     private var socketFileHandle: FileHandle?
     private var shouldExit = false
+    private var isShuttingDown = false
     
     init(config: CaptureConfig = CaptureConfig()) {
         self.config = config
@@ -286,10 +289,19 @@ class AudioCaptureEngine {
             duration = 0
         }
         
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        recordingGroup.wait()
-        
+        // Stop engine first to stop callbacks from being generated
         audioEngine?.stop()
+        
+        // Now remove tap and wait for in-flight callbacks
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        
+        // Wait for in-flight callbacks with timeout
+        let waitResult = recordingGroup.wait(timeout: .now().addingTimeInterval(5.0))
+        if waitResult == .timedOut {
+            print("Warning: recordingGroup.wait() timed out - callback may not have completed")
+        }
+        
+        // Now safe to nil out since no callbacks can be running
         audioEngine = nil
         
         audioFile = nil
@@ -332,8 +344,14 @@ class AudioCaptureEngine {
     
     func pause() throws -> [String: Any] {
         var currentState: RecordingState = .idle
-        stateQueue.sync { currentState = self.state }
-        guard currentState == .recording else {
+        var transitionSuccessful = false
+        stateQueue.sync {
+            currentState = self.state
+            if currentState == .recording {
+                transitionSuccessful = true
+            }
+        }
+        guard transitionSuccessful else {
             throw CaptureError.invalidState("Not recording")
         }
         
@@ -346,8 +364,14 @@ class AudioCaptureEngine {
     
     func resume() throws -> [String: Any] {
         var currentState: RecordingState = .idle
-        stateQueue.sync { currentState = self.state }
-        guard currentState == .paused else {
+        var transitionSuccessful = false
+        stateQueue.sync {
+            currentState = self.state
+            if currentState == .paused {
+                transitionSuccessful = true
+            }
+        }
+        guard transitionSuccessful else {
             throw CaptureError.invalidState("Not paused")
         }
         
@@ -363,7 +387,7 @@ class AudioCaptureEngine {
     }
     
     func getAudioLevel() -> [String: Float] {
-        return meter.toDict()
+        return meterQueue.sync { meter.toDict() }
     }
     
     func getCapturedAudio() throws -> [String: Any] {
@@ -406,7 +430,7 @@ class AudioCaptureEngine {
         
         let inputNode = engine.inputNode
         
-        inputNode.installTap(onBus: 0, bufferSize: config.bufferSize, format: nil) { [weak self] buffer, time in
+        inputNode.installTap(onBus: 0, bufferSize: config.bufferSize, format: format) { [weak self] buffer, time in
             guard let self = self else { return }
             self.recordingGroup.enter()
             self.recordingQueue.async {
@@ -422,19 +446,23 @@ class AudioCaptureEngine {
         try engine.start()
     }
     
-    private func processMicrophoneBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
-        var currentState: RecordingState = .idle
-        stateQueue.sync { currentState = self.state }
-        guard currentState == .recording else { return }
-        
-        // Write to file
-        if let file = audioFile {
+    private func writeAudioFile(_ buffer: AVAudioPCMBuffer) {
+        audioFileQueue.async { [weak self] in
+            guard let self = self, let file = self.audioFile else { return }
             do {
                 try file.write(from: buffer)
             } catch {
                 print("Error writing audio buffer: \(error)")
             }
         }
+    }
+    
+    private func processMicrophoneBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
+        var currentState: RecordingState = .idle
+        stateQueue.sync { currentState = self.state }
+        guard currentState == .recording else { return }
+        
+        writeAudioFile(buffer)
         
         // Update meters
         updateMeters(buffer: buffer)
@@ -461,19 +489,22 @@ class AudioCaptureEngine {
         }
         
         // Update meter values (left=mic, right=system, ambient=mix)
-        if levels.count > 0 {
-            meter.leftLevel = levels[0]
-        }
-        if levels.count > 1 {
-            meter.rightLevel = levels[1]
-        } else {
-            // If only mono, use same for right
-            meter.rightLevel = levels[0]
-        }
-        
-        // Ambient is average of all channels
-        if !levels.isEmpty {
-            meter.ambientLevel = levels.reduce(0, +) / Float(levels.count)
+        meterQueue.async { [weak self] in
+            guard let self = self else { return }
+            if levels.count > 0 {
+                self.meter.leftLevel = levels[0]
+            }
+            if levels.count > 1 {
+                self.meter.rightLevel = levels[1]
+            } else {
+                // If only mono, use same for right
+                self.meter.rightLevel = levels[0]
+            }
+            
+            // Ambient is average of all channels
+            if !levels.isEmpty {
+                self.meter.ambientLevel = levels.reduce(0, +) / Float(levels.count)
+            }
         }
     }
 }
@@ -549,12 +580,12 @@ class SocketServer {
         
         // Handle SIGTERM and SIGINT for graceful shutdown
         let socketPathForSignal = socketPath
-        signal(SIGTERM) { _ in
-            shouldExit = true
+        signal(SIGTERM) { [weak self] _ in
+            self?.shouldExit = true
             CFRunLoopStop(CFRunLoopGetMain())
         }
-        signal(SIGINT) { _ in
-            shouldExit = true
+        signal(SIGINT) { [weak self] _ in
+            self?.shouldExit = true
             CFRunLoopStop(CFRunLoopGetMain())
         }
         

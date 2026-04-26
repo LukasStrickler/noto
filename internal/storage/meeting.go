@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -277,6 +278,15 @@ func CopyAudioToVersion(layout DirectoryLayout, versionID string, srcAudioPath s
 		return ErrWriteFailed(versionAudioPath, err)
 	}
 
+	if err := fsyncFile(versionAudioPath); err != nil {
+		os.Remove(versionAudioPath)
+		return ErrWriteFailed(versionAudioPath, err)
+	}
+
+	if err := fsyncDir(filepath.Dir(versionAudioPath)); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -289,6 +299,25 @@ func WriteVersionManifest(layout DirectoryLayout, versionID string, m *artifacts
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return ErrWriteFailed(layout.VersionManifestPath(versionID), err)
+	}
+
+	checksum := artifacts.ComputeChecksum(data)
+	checksumPath := layout.VersionChecksumPath(versionID)
+
+	tmpChecksumPath := filepath.Join(layout.TmpDir, "version_checksum.tmp")
+	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
+		return ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := fsyncFile(tmpChecksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := os.Rename(tmpChecksumPath, checksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return ErrAtomicWrite(checksumPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(checksumPath)); err != nil {
+		return err
 	}
 
 	tmpPath := filepath.Join(layout.TmpDir, "version_manifest.tmp")
@@ -331,12 +360,18 @@ func ReadVersionManifest(layout DirectoryLayout, versionID string) (*artifacts.M
 }
 
 func ComputeFileChecksum(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return "", ErrReadFailed(path, err)
 	}
-	hash := sha256.Sum256(data)
-	return "sha256:" + fmt.Sprintf("%x", hash), nil
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", ErrReadFailed(path, err)
+	}
+
+	return "sha256:" + fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 func ListMeetings(recordingsDir string) ([]MeetingRef, error) {

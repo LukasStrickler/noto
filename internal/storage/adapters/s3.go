@@ -515,28 +515,28 @@ func VerifyChecksum(data []byte, expected string) error {
 	return nil
 }
 
-// checksumWriter wraps an io.WriterAt and buffers all written data for checksum verification.
-type checksumWriter struct {
+// streamingChecksumWriter writes to dest while simultaneously computing a SHA256 hash.
+type streamingChecksumWriter struct {
 	w   io.WriterAt
-	buf *bytes.Buffer
+	hash sha256.Hash
 }
 
-func (c *checksumWriter) WriteAt(p []byte, off int64) (n int, err error) {
-	c.buf.Write(p)
+func (c *streamingChecksumWriter) WriteAt(p []byte, off int64) (n int, err error) {
+	c.hash.Write(p)
 	return c.w.WriteAt(p, off)
 }
 
 func GetObjectWithChecksumVerification(ctx context.Context, adapter SyncAdapter, key string, dest io.WriterAt, expectedChecksum string) error {
-	wrapper := &checksumWriter{
+	wrapper := &streamingChecksumWriter{
 		w:   dest,
-		buf: &bytes.Buffer{},
+		hash: sha256.New(),
 	}
 	err := adapter.GetObject(ctx, key, wrapper)
 	if err != nil {
 		return err
 	}
 
-	actual := ComputeChecksum(wrapper.buf.Bytes())
+	actual := "sha256:" + hex.EncodeToString(wrapper.hash.Sum(nil))
 	if actual != expectedChecksum {
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actual)
 	}

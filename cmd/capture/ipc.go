@@ -68,45 +68,45 @@ func (c *IPCClient) EnsureHelperRunning(ctx context.Context) error {
 	c.proc = cmd
 
 	waitCtx, cancel := context.WithTimeout(context.Background(), spawnTimeout)
-	defer cancel()
-
 	if err := c.waitForSocket(waitCtx); err != nil {
+		cancel()
 		c.proc.Kill()
 		c.proc = nil
 		os.Remove(c.socketPath)
 		return fmt.Errorf("Swift helper did not start in time: %w", err)
 	}
-	
+	cancel()
+
 	return nil
 }
 
 func (c *IPCClient) isHelperRunning() bool {
 	c.procMu.Lock()
 	defer c.procMu.Unlock()
-	
+
 	if c.proc == nil || c.proc.Process == nil {
 		return false
 	}
-	
+
 	if c.proc.ProcessState != nil && c.proc.ProcessState.Exited() {
 		return false
 	}
-	
+
 	return true
 }
 
 func (c *IPCClient) waitForSocket(ctx context.Context) error {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
-	
+
 	for {
+		if _, err := os.Stat(c.socketPath); err == nil {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if _, err := os.Stat(c.socketPath); err == nil {
-				return nil
-			}
 		}
 	}
 }
@@ -182,33 +182,47 @@ func (c *IPCClient) Connect(ctx context.Context) error {
 }
 
 func (c *IPCClient) Close() error {
+	// Acquire locks in same order as Connect to avoid deadlock:
+	// Connect: mu -> procMu (via EnsureHelperRunning)
+	// Close must also use: mu -> procMu
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	var errs []error
-	
+
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {
 			errs = append(errs, err)
 		}
 		c.conn = nil
 	}
-	
+
 	c.procMu.Lock()
 	defer c.procMu.Unlock()
-	
+
 	if c.proc != nil && c.proc.Process != nil {
 		if err := c.proc.Process.Kill(); err != nil {
 			errs = append(errs, err)
 		}
 		if c.proc.ProcessState == nil {
-			c.proc.Wait()
+			waitDone := make(chan struct{})
+			go func() {
+				c.proc.Wait()
+				close(waitDone)
+			}()
+			select {
+			case <-waitDone:
+			case <-time.After(2 * time.Second):
+				errs = append(errs, fmt.Errorf("process wait timeout after kill"))
+			}
 		}
 		c.proc = nil
 	}
 
-	os.Remove(c.socketPath)
-	
+	if err := os.Remove(c.socketPath); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, err)
+	}
+
 	if len(errs) > 0 {
 		return errs[0]
 	}
@@ -280,17 +294,10 @@ func (c *IPCClient) call(ctx context.Context, method string, params, result inte
 		return fmt.Errorf("could not set read deadline: %w", err)
 	}
 	
+	const maxRespBufSize = 10 * 1024 * 1024 // 10MB max response size
 	var respBuf bytes.Buffer
 	buf := make([]byte, 65536)
 	for {
-		select {
-		case <-ctx.Done():
-			c.conn.Close()
-			c.conn = nil
-			return fmt.Errorf("context cancelled: %w", ctx.Err())
-		default:
-		}
-
 		if err := c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 			c.conn.Close()
 			c.conn = nil
@@ -298,17 +305,32 @@ func (c *IPCClient) call(ctx context.Context, method string, params, result inte
 		}
 
 		n, err := c.conn.Read(buf)
-		if err != nil && err != io.EOF {
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				c.conn.Close()
+				c.conn = nil
+				return fmt.Errorf("context cancelled: %w", ctx.Err())
+			default:
+			}
+			if err == io.EOF {
+				break
+			}
 			c.conn.Close()
 			c.conn = nil
 			return fmt.Errorf("could not read response: %w", err)
 		}
-		respBuf.Write(buf[:n])
-		if err == io.EOF || n == 0 {
+		if n == 0 {
 			break
 		}
+		if respBuf.Len()+n > maxRespBufSize {
+			c.conn.Close()
+			c.conn = nil
+			return fmt.Errorf("response buffer exceeded maximum size")
+		}
+		respBuf.Write(buf[:n])
 
-		if respBuf.Len() > 0 && respBuf.Bytes()[respBuf.Len()-1] == '\n' {
+		if respBuf.Bytes()[respBuf.Len()-1] == '\n' {
 			break
 		}
 	}

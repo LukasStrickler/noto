@@ -56,7 +56,7 @@ func sortedByKind(all []providers.ProviderSuite, kind providers.ProviderKind) []
 			out = append(out, p)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -368,7 +369,9 @@ func (m *AppModel) commitEdit() {
 			return
 		}
 		if m.Runtime.Secrets != nil {
-			if err := m.Runtime.Secrets.Set(context.Background(), selected.CredentialRef, value); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := m.Runtime.Secrets.Set(ctx, selected.CredentialRef, value); err != nil {
 				m.UI.Banner = &Banner{Kind: BannerError, Message: "Could not save provider key: " + err.Error()}
 				return
 			}
@@ -432,7 +435,9 @@ func (m *AppModel) removeSelectedProvider() {
 		return
 	}
 	if m.Runtime.Secrets != nil {
-		if err := m.Runtime.Secrets.Remove(context.Background(), selected.CredentialRef); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.Runtime.Secrets.Remove(ctx, selected.CredentialRef); err != nil {
 			m.UI.Banner = &Banner{Kind: BannerError, Message: "Could not remove provider key: " + err.Error()}
 			return
 		}

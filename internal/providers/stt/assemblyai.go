@@ -104,7 +104,7 @@ func (a *AssemblyAIAdapter) submit(ctx context.Context, client HTTPDoer, baseURL
 		payload["language_code"] = opts.Language
 	}
 	if len(opts.ContextBias) > 0 {
-		payload["keyterms_prompt"] = opts.ContextBias
+		payload["keyterms_prompt"] = strings.Join(opts.ContextBias, ", ")
 	}
 
 	body, err := json.Marshal(payload)
@@ -192,6 +192,8 @@ func (a *AssemblyAIAdapter) poll(ctx context.Context, client HTTPDoer, baseURL s
 			return respBytes, nil
 		case "error":
 			return nil, notoerr.New("provider_failed", "AssemblyAI transcription failed.", map[string]any{"error": status.Error})
+		case "queued", "processing":
+		case "undefined":
 		}
 
 		select {
@@ -279,7 +281,7 @@ func (a *AssemblyAIAdapter) parseResponse(raw []byte, meetingID string) (*artifa
 	for _, w := range resp.Words {
 		speakerID := ""
 		if w.Speaker != "" {
-			speakerID = "speaker_" + w.Speaker
+			speakerID = w.Speaker
 		}
 		conf := w.Confidence
 		words = append(words, artifacts.Word{

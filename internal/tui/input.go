@@ -322,21 +322,14 @@ func (m *AppModel) selectMeetingAtRow(index int) bool {
 }
 
 func (m *AppModel) selectProviderAtRow(row int) bool {
-	// Provider panel rows: border=0, title=1, speech label=2,
-	// three STT providers=3..5, blank=6, LLM label=7, OpenRouter=8.
-	var index int
-	switch {
-	case row >= 3 && row <= 5:
-		index = row - 3
-	case row == 8:
-		index = 3
-	default:
+	rows := m.providerRows()
+	if len(rows) == 0 {
 		return false
 	}
-	if index < 0 || index >= len(m.providerRows()) {
+	if row < 0 || row >= len(rows) {
 		return false
 	}
-	m.UI.SelectedProvider = index
+	m.UI.SelectedProvider = row
 	m.UI.Focus = FocusPrimary
 	return true
 }

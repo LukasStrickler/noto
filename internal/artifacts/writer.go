@@ -213,6 +213,24 @@ func (wp *WritePipeline) writeManifestAtomic(layout storage.DirectoryLayout, man
 	checksum := ComputeChecksum(data)
 	checksumPath := layout.ChecksumPath
 
+	// First, write manifest so checksum verifies existing data (matching ManifestWriter.writeManifestAtomic)
+	tmpPath := filepath.Join(layout.TmpDir, "manifest.json.tmp")
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return storage.ErrWriteFailed(tmpPath, err)
+	}
+	if err := fsyncFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return storage.ErrWriteFailed(tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, layout.ManifestPath); err != nil {
+		os.Remove(tmpPath)
+		return storage.ErrAtomicWrite(layout.ManifestPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(layout.ManifestPath)); err != nil {
+		return err
+	}
+
+	// Then write checksum
 	tmpChecksumPath := filepath.Join(layout.TmpDir, "manifest_checksum.tmp")
 	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
 		return storage.ErrWriteFailed(tmpChecksumPath, err)
@@ -225,19 +243,8 @@ func (wp *WritePipeline) writeManifestAtomic(layout storage.DirectoryLayout, man
 		os.Remove(tmpChecksumPath)
 		return storage.ErrAtomicWrite(checksumPath, err)
 	}
-
-	tmpPath := filepath.Join(layout.TmpDir, "manifest.json.tmp")
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		os.Remove(tmpChecksumPath)
-		return storage.ErrWriteFailed(tmpPath, err)
-	}
-	if err := fsyncFile(tmpPath); err != nil {
-		os.Remove(tmpPath)
-		return storage.ErrWriteFailed(tmpPath, err)
-	}
-	if err := os.Rename(tmpPath, layout.ManifestPath); err != nil {
-		os.Remove(tmpPath)
-		return storage.ErrAtomicWrite(layout.ManifestPath, err)
+	if err := fsyncDir(filepath.Dir(checksumPath)); err != nil {
+		return err
 	}
 
 	return nil
@@ -285,23 +292,40 @@ func (va *VersionArtifact) CreateVersion(meetingID uuid.UUID, reason VersionReas
 	artifactsToCopy := []struct {
 		srcPath string
 		dstPath string
+		required bool
 	}{
-		{layout.ManifestPath, "manifest.json"},
-		{layout.VersionManifestPath(currentVersionID), "manifest.json"},
-		{layout.VersionTranscriptPath(currentVersionID), "transcript.diarized.json"},
-		{layout.VersionSummaryPath(currentVersionID), "summary.v1.md"},
-		{layout.VersionChecksumPath(currentVersionID), "checksum.sha256"},
+		{layout.ManifestPath, "manifest.json", true},
+		{layout.VersionManifestPath(currentVersionID), "previous_manifest.json", false},
+		{layout.VersionTranscriptPath(currentVersionID), "transcript.diarized.json", false},
+		{layout.VersionSummaryPath(currentVersionID), "summary.v1.md", false},
+		{layout.VersionChecksumPath(currentVersionID), "checksum.sha256", false},
 	}
 
+	var missingFiles []string
 	for _, artifact := range artifactsToCopy {
 		srcPath := artifact.srcPath
 		dstPath := filepath.Join(versionDir, artifact.dstPath)
 
-		if err := copyFile(srcPath, dstPath); err != nil {
+		// Check if source exists before attempting copy
+		if _, err := os.Stat(srcPath); err != nil {
 			if os.IsNotExist(err) {
+				if artifact.required {
+					missingFiles = append(missingFiles, srcPath)
+				}
 				continue
 			}
 			return "", err
+		}
+
+		if err := copyFile(srcPath, dstPath); err != nil {
+			return "", err
+		}
+	}
+
+	if len(missingFiles) > 0 {
+		// At least log the missing required files (could return error if strict mode needed)
+		for _, f := range missingFiles {
+			fmt.Printf("warning: required version artifact missing: %s\n", f)
 		}
 	}
 
@@ -601,7 +625,7 @@ func (ia *ImportAudio) Import(meetingID uuid.UUID, audioPath string) (*ImportRes
 		SchemaVersion:   "audio-asset.v1",
 		MeetingID:       meetingID.String(),
 		AssetID:         assetID,
-		Path:            "audio/recording.m4a",
+		Path:            filepath.Join("audio", "recording"+ext),
 		Format:          format,
 		Codec:           "aac",
 		DurationSeconds: 0,
@@ -626,7 +650,7 @@ func (ia *ImportAudio) Import(meetingID uuid.UUID, audioPath string) (*ImportRes
 		return nil, storage.ErrDirCreate(versionAudioDir, err)
 	}
 
-	versionAudioPath := filepath.Join(versionAudioDir, "recording.m4a")
+	versionAudioPath := filepath.Join(versionAudioDir, "recording"+ext)
 	tmpAudioPath := filepath.Join(layout.TmpDir, "audio_recording.tmp")
 	if err := os.WriteFile(tmpAudioPath, data, 0644); err != nil {
 		return nil, storage.ErrWriteFailed(tmpAudioPath, err)

@@ -64,31 +64,50 @@ func (a *MistralAdapter) Summarize(ctx context.Context, transcript artifacts.Tra
 	if err != nil {
 		return nil, notoerr.Wrap("provider_request_failed", "Could not marshal Mistral request body.", err)
 	}
+	if len(body) > 1024*1024 {
+		return nil, notoerr.New("provider_request_too_large", "Mistral request body exceeds 1MB limit.", nil)
+	}
 	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, notoerr.Wrap("provider_request_failed", "Could not create Mistral request.", err)
 	}
-	if strings.TrimSpace(a.APIKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+a.APIKey)
-	}
+	req.Header.Set("Authorization", "Bearer "+a.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, notoerr.Wrap("retryable_remote_error", "Mistral request failed.", err)
-	}
-	defer resp.Body.Close()
+	var resp *http.Response
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		resp, err = client.Do(req)
+		if err != nil {
+			return nil, notoerr.Wrap("retryable_remote_error", "Mistral request failed.", err)
+		}
 
-	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
-	if err != nil {
-		return nil, notoerr.Wrap("provider_response_invalid", "Could not read Mistral response.", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, notoerr.New("provider_failed", "Mistral summarization failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
+		respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		resp.Body.Close()
+		if err != nil {
+			return nil, notoerr.Wrap("provider_response_invalid", "Could not read Mistral response.", err)
+		}
+
+		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+				return nil, notoerr.New("provider_client_error", "Mistral summarization failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
+			}
+			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			continue
+		}
+
+		return a.parseResponse(respBytes, transcript, opts.MeetingID, model)
 	}
 
-	return a.parseResponse(respBytes, transcript, opts.MeetingID, model)
+	return nil, notoerr.New("provider_server_error", "Mistral service unavailable after retries.", nil)
 }
 
 type chatMessage struct {
@@ -116,7 +135,15 @@ type mistralResponse struct {
 
 func buildMessages(transcript artifacts.Transcript) []chatMessage {
 	var textBuilder strings.Builder
+	totalChars := 0
+	maxChars := 100_000
+	maxSegments := 150
+
 	for i, seg := range transcript.Segments {
+		if i >= maxSegments || totalChars > maxChars {
+			textBuilder.WriteString("... (truncated)")
+			break
+		}
 		speaker := "Unknown"
 		for _, sp := range transcript.Speakers {
 			if sp.ID == seg.SpeakerID {
@@ -124,17 +151,9 @@ func buildMessages(transcript artifacts.Transcript) []chatMessage {
 				break
 			}
 		}
-		textBuilder.WriteString("[")
-		textBuilder.WriteString(seg.ID)
-		textBuilder.WriteString("] ")
-		textBuilder.WriteString(speaker)
-		textBuilder.WriteString(": ")
-		textBuilder.WriteString(seg.Text)
-		textBuilder.WriteString("\n")
-		if i >= 200 {
-			textBuilder.WriteString("... (truncated)")
-			break
-		}
+		segText := "[" + seg.ID + "] " + speaker + ": " + seg.Text + "\n"
+		textBuilder.WriteString(segText)
+		totalChars += len(segText)
 	}
 
 	systemPrompt := `You are a meeting summarization assistant. Given a transcript, extract:
@@ -167,7 +186,7 @@ func (a *MistralAdapter) parseResponse(raw []byte, transcript artifacts.Transcri
 		return nil, notoerr.Wrap("provider_response_invalid", "Could not parse Mistral response.", err)
 	}
 
-	if len(resp.Choices) == 0 || resp.Choices[0].Message == nil || resp.Choices[0].Message.Content == "" {
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
 		return nil, notoerr.New("provider_response_invalid", "Mistral response did not include message content.", nil)
 	}
 
@@ -210,19 +229,7 @@ func (a *MistralAdapter) parseResponse(raw []byte, transcript artifacts.Transcri
 	}
 
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		summary := artifacts.Summary{
-			SchemaVersion: "summary.v1",
-			MeetingID:     meetingID,
-			ShortSummary:  content,
-			Model: artifacts.SummaryModel{
-				Provider: "mistral",
-				ModelID:  model,
-			},
-		}
-		if err := artifacts.ValidateSummary(summary, transcript); err != nil {
-			return nil, err
-		}
-		return &summary, nil
+		return nil, notoerr.Wrap("summary_parse_failed", "Failed to parse summary JSON from Mistral response.", err)
 	}
 
 	decisions := make([]artifacts.SummaryItem, len(parsed.Decisions))

@@ -59,9 +59,8 @@ func (n *DiarizationNormalizer) Normalize(transcript *artifacts.Transcript) (*ar
 
 	for _, seg := range transcript.Segments {
 		if current == nil {
-			// Start first segment
-			newSeg := copySegment(seg)
-			current = &newSeg
+			current = new(artifacts.Segment)
+			*current = copySegment(seg)
 			continue
 		}
 
@@ -170,12 +169,11 @@ func (n *TimestampNormalizer) Normalize(transcript *artifacts.Transcript) (*arti
 					SourceRole:   seg.SourceRole,
 					Channel:      seg.Channel,
 					Overlap:      false,
-					Text:        "[potential gap: " + formatGapDuration(gap) + "]",
+					Text:         "[potential gap: " + formatGapDuration(gap) + "]",
 					Confidence:   nil,
 					WordIDs:      []string{},
 				}
 				segments = append(segments, gapSeg)
-				continue
 			}
 		}
 
@@ -232,7 +230,9 @@ func (n *ConfidenceNormalizer) Normalize(transcript *artifacts.Transcript) (*art
 	for i := range result.Segments {
 		seg := &result.Segments[i]
 		if seg.Confidence != nil && *seg.Confidence < threshold {
-			seg.Text = seg.Text + " [low confidence]"
+			if !strings.Contains(seg.Text, " [low confidence]") {
+				seg.Text = seg.Text + " [low confidence]"
+			}
 		}
 	}
 	return result, nil
@@ -331,11 +331,9 @@ func (p *PunctuationNormalizer) Normalize(transcript *artifacts.Transcript) (*ar
 
 		// Skip if already ends with punctuation
 		if len(text) > 0 {
-			lastChar := rune(text[len(text)-1])
+			trimmed := strings.TrimSpace(text)
+			lastChar := rune(trimmed[len(trimmed)-1])
 			if !unicode.IsPunct(lastChar) {
-				// Text doesn't end with punctuation — check if it should
-				// Add period if text has substantial content and no punctuation
-				trimmed := strings.TrimSpace(text)
 				if len(trimmed) > 3 {
 					seg.Text = trimmed + "."
 				}

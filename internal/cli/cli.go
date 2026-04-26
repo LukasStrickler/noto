@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,7 +40,11 @@ type app struct {
 
 func Run(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 	cfg := config.NewStore(config.DefaultConfigDir())
-	loadedCfg, _ := cfg.Load()
+	loadedCfg, err := cfg.Load()
+	if err != nil {
+		notoerr.WriteJSON(errOut, notoerr.Wrap("config_load_failed", "Could not load config", err))
+		return 1
+	}
 
 	recordingsDir := loadedCfg.GetRecordingsDir()
 	indexPath := filepath.Join(loadedCfg.ConfigDir, "noto.sqlite")
@@ -447,7 +452,7 @@ func (a app) stop(ctx context.Context, args []string) error {
 			return err
 		}
 		audioPath := filepath.Join(layout.MeetingDir, "audio.m4a")
-		if err := os.WriteFile(audioPath, audioData, 0644); err != nil {
+		if err := os.WriteFile(audioPath, audioData, 0600); err != nil {
 			return fmt.Errorf("failed to write audio file: %w", err)
 		}
 		fmt.Fprintf(a.out, "Audio written to: %s\n", audioPath)
@@ -456,7 +461,7 @@ func (a app) stop(ctx context.Context, args []string) error {
 		versionAudioDir := layout.VersionDir(versionID)
 		versionAudioPath := filepath.Join(versionAudioDir, "audio")
 		os.MkdirAll(versionAudioPath, 0755)
-		os.WriteFile(filepath.Join(versionAudioPath, "recording.m4a"), audioData, 0644)
+		os.WriteFile(filepath.Join(versionAudioPath, "recording.m4a"), audioData, 0600)
 
 		audioMeta := &artifacts.AudioMetadata{
 			SchemaVersion:   "audio-asset.v1",
@@ -483,7 +488,7 @@ func (a app) stop(ctx context.Context, args []string) error {
 			stopErrs = append(stopErrs, fmt.Errorf("failed to marshal audio metadata: %w", err))
 		} else {
 			tmpPath := filepath.Join(layout.TmpDir, "audio_meta.tmp")
-			if err := os.WriteFile(tmpPath, audioMetaData, 0644); err != nil {
+			if err := os.WriteFile(tmpPath, audioMetaData, 0600); err != nil {
 				stopErrs = append(stopErrs, fmt.Errorf("failed to write audio metadata temp file: %w", err))
 			} else if err := os.Rename(tmpPath, versionAudioMetaPath); err != nil {
 				stopErrs = append(stopErrs, fmt.Errorf("failed to rename audio metadata file: %w", err))
@@ -554,6 +559,47 @@ func (a app) importAudio(ctx context.Context, args []string) error {
 		return err
 	}
 
+	audioData, err := os.ReadFile(audioPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(a.out, "Processing audio file: %s\n", audioPath)
+	fmt.Fprintf(a.out, "Meeting ID: %s\n", meetingID.String())
+
+	router := providers.CapabilityRouter{Registry: a.reg, Policy: cfg.Routing}
+	speechProvider, err := router.Resolve(providers.CapabilityTranscribe)
+	if err != nil {
+		fmt.Fprintf(a.out, "Warning: No speech provider configured. Audio imported but not transcribed.\n")
+		manifest := &artifacts.MeetingManifest{
+			SchemaVersion:    "manifest.v1",
+			MeetingID:        meetingID.String(),
+			CurrentVersionID: result.VersionID,
+			Metadata:        artifacts.ManifestMetadata{Title: title},
+			Versions: []artifacts.ManifestVersion{
+				{
+					VersionID: result.VersionID,
+					CreatedAt: time.Now(),
+					Reason:    string(artifacts.ReasonAudioImported),
+				},
+			},
+		}
+		if err := storage.WriteManifest(layout, manifest); err != nil {
+			return err
+		}
+		return writeJSON(a.out, map[string]any{
+			"ok":        true,
+			"meeting_id": meetingID.String(),
+			"audio":     result.AudioMetadata,
+			"transcribed": false,
+			"message":   "Audio imported. Configure a speech provider to enable transcription.",
+		})
+	}
+
+	fmt.Fprintf(a.out, "Transcribing with %s...\n", speechProvider.ID)
+
+	transcript, err := a.runTranscription(ctx, speechProvider, audioData, meetingID.String())
+
 	manifest := &artifacts.MeetingManifest{
 		SchemaVersion:    "manifest.v1",
 		MeetingID:        meetingID.String(),
@@ -567,35 +613,10 @@ func (a app) importAudio(ctx context.Context, args []string) error {
 			},
 		},
 	}
-
 	if err := storage.WriteManifest(layout, manifest); err != nil {
 		return err
 	}
 
-	audioData, err := os.ReadFile(audioPath)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintf(a.out, "Processing audio file: %s\n", audioPath)
-	fmt.Fprintf(a.out, "Meeting ID: %s\n", meetingID.String())
-
-	router := providers.CapabilityRouter{Registry: a.reg, Policy: cfg.Routing}
-	speechProvider, err := router.Resolve(providers.CapabilityTranscribe)
-	if err != nil {
-		fmt.Fprintf(a.out, "Warning: No speech provider configured. Audio imported but not transcribed.\n")
-		return writeJSON(a.out, map[string]any{
-			"ok":        true,
-			"meeting_id": meetingID.String(),
-			"audio":     result.AudioMetadata,
-			"transcribed": false,
-			"message":   "Audio imported. Configure a speech provider to enable transcription.",
-		})
-	}
-
-	fmt.Fprintf(a.out, "Transcribing with %s...\n", speechProvider.ID)
-
-	transcript, err := a.runTranscription(ctx, speechProvider, audioData, meetingID.String())
 	if err != nil {
 		fmt.Fprintf(a.errOut, "Transcription failed: %v\n", err)
 		return writeJSON(a.out, map[string]any{
@@ -737,7 +758,12 @@ func (a app) transcribe(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := a.indexMeeting(meetingIDStr, "", transcript, nil); err != nil {
+	meeting, _ := storage.GetMeeting(a.recordingsDir, meetingID)
+	indexTitle := ""
+	if meeting != nil {
+		indexTitle = meeting.Title
+	}
+	if err := a.indexMeeting(meetingIDStr, indexTitle, transcript, nil); err != nil {
 		fmt.Fprintf(a.errOut, "Warning: Failed to index meeting: %v\n", err)
 	}
 
@@ -1050,12 +1076,21 @@ func (a app) transcript(ctx context.Context, args []string) error {
 		return err
 	}
 
+	isJSON := hasJSONFlag(args)
+
 	transcript, err := storage.ReadTranscript(layout)
 	if err != nil {
+		if isJSON {
+			return writeJSON(a.errOut, map[string]any{
+				"ok":          false,
+				"error":       "no_transcript",
+				"message":     "No transcript found.",
+				"meeting_id": meetingIDStr,
+			})
+		}
 		return notoerr.New("no_transcript", "No transcript found.", map[string]any{"meeting_id": meetingIDStr})
 	}
 
-	isJSON := hasJSONFlag(args)
 	if !isJSON {
 		for _, seg := range transcript.Segments {
 			start := formatTimestamp(seg.StartSeconds)
@@ -1180,22 +1215,32 @@ func (a app) files(ctx context.Context, args []string) error {
 		return err
 	}
 
-	files := []map[string]string{
-		{"path": layout.ManifestPath, "type": "manifest"},
-		{"path": layout.AudioPath, "type": "audio"},
-		{"path": layout.TranscriptPath, "type": "transcript"},
-		{"path": layout.SummaryPath, "type": "summary"},
+	fileExists := func(path string) bool {
+		if path == "" {
+			return false
+		}
+		_, err := os.Stat(path)
+		return err == nil
+	}
+
+	files := []map[string]any{
+		{"path": layout.ManifestPath, "type": "manifest", "exists": fileExists(layout.ManifestPath)},
+		{"path": layout.AudioPath, "type": "audio", "exists": fileExists(layout.AudioPath)},
+		{"path": layout.TranscriptPath, "type": "transcript", "exists": fileExists(layout.TranscriptPath)},
+		{"path": layout.SummaryPath, "type": "summary", "exists": fileExists(layout.SummaryPath)},
 	}
 
 	if manifest != nil {
-		files = append(files, map[string]string{
-			"path": layout.VersionManifestPath(manifest.CurrentVersionID),
-			"type": "version_manifest",
+		files = append(files, map[string]any{
+			"path":   layout.VersionManifestPath(manifest.CurrentVersionID),
+			"type":   "version_manifest",
+			"exists": fileExists(layout.VersionManifestPath(manifest.CurrentVersionID)),
 		})
 	} else {
-		files = append(files, map[string]string{
-			"path": "",
-			"type": "version_manifest",
+		files = append(files, map[string]any{
+			"path":   "",
+			"type":   "version_manifest",
+			"exists": false,
 		})
 	}
 
@@ -1347,10 +1392,15 @@ func (a app) benchmarkCompare(ctx context.Context, args []string) error {
 	fmt.Fprintf(a.out, "%-45s %12s %12s %12s %-8s\n", "Metric", "File1", "File2", "Delta", "Change")
 	fmt.Fprintf(a.out, "%s\n", strings.Repeat("-", 80))
 
-	for _, m2 := range result2.Results {
-		m1, ok := result1Map[m2.Metric]
+	result2Map := make(map[string]benchmarks.MetricResult)
+	for _, m := range result2.Results {
+		result2Map[m.Metric] = m
+	}
+
+	for _, m1 := range result1.Results {
+		m2, ok := result2Map[m1.Metric]
 		if !ok {
-			fmt.Fprintf(a.out, "%-45s %12s %12.4f %12s %-8s\n", m2.Metric, "(none)", m2.Value, "N/A", "NEW")
+			fmt.Fprintf(a.out, "%-45s %12.4f %12s %12s %-8s\n", m1.Metric, m1.Value, "---", "N/A", "REMOVED")
 			continue
 		}
 
@@ -1368,12 +1418,12 @@ func (a app) benchmarkCompare(ctx context.Context, args []string) error {
 			change += "!"
 		}
 
-		fmt.Fprintf(a.out, "%-45s %12.4f %12.4f %12s %-8s\n", m2.Metric, m1.Value, m2.Value, deltaStr, change)
+		fmt.Fprintf(a.out, "%-45s %12.4f %12.4f %12s %-8s\n", m1.Metric, m1.Value, m2.Value, deltaStr, change)
 	}
 
-	for _, m1 := range result1.Results {
-		if result2.Results == nil || !containsMetric(result2.Results, m1.Metric) {
-			fmt.Fprintf(a.out, "%-45s %12.4f %12s %12s %-8s\n", m1.Metric, m1.Value, "(none)", "N/A", "REMOVED")
+	for _, m2 := range result2.Results {
+		if _, ok := result1Map[m2.Metric]; !ok {
+			fmt.Fprintf(a.out, "%-45s %12s %12.4f %12s %-8s\n", m2.Metric, "---", m2.Value, "NEW", "NEW")
 		}
 	}
 
@@ -1541,8 +1591,10 @@ func formatTimestamp(seconds float64) string {
 
 func randomSuffix() string {
 	b := make([]byte, 4)
-	for i := range b {
-		b[i] = byte(uuid.New().ID() % 256)
+	if _, err := rand.Read(b); err != nil {
+		for i := range b {
+			b[i] = byte(uuid.New().ID() % 256)
+		}
 	}
 	return fmt.Sprintf("%x", b)
 }
@@ -1562,7 +1614,9 @@ func (a app) setSpeech(providerID string) error {
 		}
 	}
 	cfg.Routing.SpeechProvider = providerID
-	cfg.Routing.LLMProvider = "openrouter"
+	if cfg.Routing.LLMProvider == "" {
+		cfg.Routing.LLMProvider = "openrouter"
+	}
 	if cfg.Routing.Profile == "" {
 		cfg.Routing.Profile = providers.RoutingProfileManual
 	}

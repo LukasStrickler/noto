@@ -53,8 +53,13 @@ func (a *SpeechmaticsAdapter) submit(ctx context.Context, client HTTPDoer, baseU
 		return "", notoerr.New("missing_credential", "Speechmatics API key is not configured.", nil)
 	}
 
+	model := opts.Model
+	if model == "" {
+		model = "base"
+	}
+
 	fields := map[string]string{
-		"model":                           "base",
+		"model":                           model,
 		"language":                        opts.Language,
 		"enable_speakers":                 "true",
 		"enable_word_level_timestamps":    "true",

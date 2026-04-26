@@ -53,7 +53,7 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 	}
 
 	if meeting.Title != "" {
-		if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, "", "", "", "", "", "title"); err != nil {
+		if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, "", "", meeting.Title, "", "", "", "title"); err != nil {
 			return err
 		}
 	}
@@ -68,7 +68,7 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 
 	for _, dec := range meeting.Decisions {
 		if dec.Text != "" {
-			if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, "", "", dec.Text, "", "", "", "decision"); err != nil {
+			if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, "", "", "", "", dec.Text, "", "decision"); err != nil {
 				return err
 			}
 		}
@@ -105,8 +105,8 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 func (s *SearchIndex) insertEntry(tx *sql.Tx, meetingID, title, segmentText, speaker, decisions, actions, risks, segmentID, resultType string) error {
 	content := buildContent(title, segmentText, speaker, decisions, actions, risks)
 	_, err := tx.Exec(
-		`INSERT INTO meetings_fts(content, meeting_id, segment_text, speaker, decisions, actions, risks, segment_id, result_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		content, meetingID, segmentText, speaker, decisions, actions, risks, segmentID, resultType,
+		`INSERT INTO meetings_fts(content, meeting_id, title, segment_text, speaker, decisions, actions, risks, segment_id, result_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		content, meetingID, title, segmentText, speaker, decisions, actions, risks, segmentID, resultType,
 	)
 	if err != nil {
 		return fmt.Errorf("insert entry: %w", err)
@@ -150,6 +150,26 @@ func validateFTS5Query(query string) (string, error) {
 		return "", fmt.Errorf("unbalanced parentheses")
 	}
 
+	upperQuery := strings.ToUpper(query)
+	if strings.Contains(upperQuery, " AND ") || strings.HasSuffix(upperQuery, " AND") || strings.HasPrefix(upperQuery, "AND ") {
+		return "", fmt.Errorf("AND operator not allowed")
+	}
+	if strings.Contains(upperQuery, " OR ") || strings.HasSuffix(upperQuery, " OR") || strings.HasPrefix(upperQuery, "OR ") {
+		return "", fmt.Errorf("OR operator not allowed")
+	}
+	if strings.Contains(upperQuery, " NOT ") || strings.HasSuffix(upperQuery, " NOT") || strings.HasPrefix(upperQuery, "NOT ") {
+		return "", fmt.Errorf("NOT operator not allowed")
+	}
+	if strings.Contains(upperQuery, " NEAR ") || strings.HasPrefix(upperQuery, "NEAR") {
+		return "", fmt.Errorf("NEAR operator not allowed")
+	}
+	if strings.Contains(query, ":") {
+		return "", fmt.Errorf("column filters not allowed")
+	}
+	if strings.Contains(query, "*") {
+		return "", fmt.Errorf("wildcards not allowed")
+	}
+
 	return strings.ReplaceAll(strings.ReplaceAll(query, "\\", "\\\\"), "\"", "\"\""), nil
 }
 
@@ -170,6 +190,7 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			meeting_id,
+			title,
 			segment_text,
 			speaker,
 			decisions,
@@ -177,7 +198,7 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 			risks,
 			segment_id,
 			result_type,
-			bm25(meetings_fts, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0) as rank,
+			bm25(meetings_fts, `+fmt.Sprintf("%.1f, %.2f", BM25K1, BM25B)+`) as rank,
 			snippet(meetings_fts, 2, '**', '**', '...', 32) as snippet
 		FROM meetings_fts
 		WHERE meetings_fts MATCH ?
@@ -192,13 +213,14 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		var segmentText, speaker, decisions, actions, risks, segmentID, resultType, snippet sql.NullString
+		var title, segmentText, speaker, decisions, actions, risks, segmentID, resultType, snippet sql.NullString
 		var rank sql.NullFloat64
 
-		if err := rows.Scan(&r.MeetingID, &segmentText, &speaker, &decisions, &actions, &risks, &segmentID, &resultType, &rank, &snippet); err != nil {
+		if err := rows.Scan(&r.MeetingID, &title, &segmentText, &speaker, &decisions, &actions, &risks, &segmentID, &resultType, &rank, &snippet); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 
+		r.Title = title.String
 		r.SegmentText = segmentText.String
 		r.Speaker = speaker.String
 		r.Snippet = snippet.String
@@ -209,7 +231,9 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 		}
 
 		if r.Snippet == "" {
-			if segmentText.String != "" {
+			if title.String != "" {
+				r.Snippet = title.String
+			} else if segmentText.String != "" {
 				r.Snippet = segmentText.String
 			} else if decisions.String != "" {
 				r.Snippet = decisions.String
@@ -257,6 +281,7 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 		CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(
 			content,
 			meeting_id,
+			title,
 			segment_text,
 			speaker,
 			decisions,

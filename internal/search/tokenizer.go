@@ -13,9 +13,25 @@ func getHighlightRegex(keyword string) *regexp.Regexp {
 	if re, ok := highlightRegexCache.Load(keyword); ok {
 		return re.(*regexp.Regexp)
 	}
-	re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(keyword))
+	if !isSafeRegexPattern(keyword) {
+		keyword = regexp.QuoteMeta(keyword)
+	}
+	re := regexp.MustCompile("(?i)" + keyword)
 	highlightRegexCache.Store(keyword, re)
 	return re
+}
+
+func isSafeRegexPattern(pattern string) bool {
+	if len(pattern) > 100 {
+		return false
+	}
+	dangerous := []string{"++", "--", "**", "(+", ")+", "*(", ")*", "(?", ")?", "({", "){", "\\{.*\\{", "\\{.*\\+"}
+	for _, d := range dangerous {
+		if strings.Contains(pattern, d) {
+			return false
+		}
+	}
+	return true
 }
 
 func NormalizeText(text string) string {
@@ -82,6 +98,9 @@ func ExtractKeywords(text string) []string {
 	for _, word := range words {
 		if len(word) > 2 && !stopWords[word] {
 			keywords = append(keywords, word)
+			if len(keywords) >= 50 {
+				break
+			}
 		}
 	}
 	return keywords

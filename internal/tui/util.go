@@ -134,6 +134,7 @@ func (m *AppModel) syncSearch(query string) {
 		store = fixtures
 	}
 	m.App.SearchResults = store.SearchSegments(query)
+	m.UI.CachedSearchResults = m.App.SearchResults
 	if len(m.App.SearchResults) == 0 {
 		m.UI.SelectedResult = 0
 		return
@@ -142,11 +143,10 @@ func (m *AppModel) syncSearch(query string) {
 }
 
 func (m AppModel) filteredSearchResults() []SearchResult {
-	store := m.Runtime.Meetings
-	if store == nil {
-		store = fixtureStore{meetings: m.App.Meetings}
+	if m.Runtime.Meetings == nil {
+		return m.App.SearchResults
 	}
-	return store.SearchSegments(m.UI.SearchQuery)
+	return m.UI.CachedSearchResults
 }
 
 type commandRow struct {
@@ -240,11 +240,24 @@ func fit(s string, width int) string {
 	if width <= 1 {
 		return "..."
 	}
-	runes := []rune(s)
-	if len(runes) > width-1 {
-		runes = runes[:width-1]
+	// Account for "..." (3 chars) in the target width
+	ellipsisWidth := lipgloss.Width("...")
+	availableWidth := width - ellipsisWidth
+	if availableWidth <= 0 {
+		return "..."
 	}
-	return string(runes) + "..."
+	// Accumulate runes by visual width, not rune count
+	var result []rune
+	accumulatedWidth := 0
+	for _, r := range s {
+		rWidth := lipgloss.Width(string(r))
+		if accumulatedWidth+rWidth > availableWidth {
+			break
+		}
+		result = append(result, r)
+		accumulatedWidth += rWidth
+	}
+	return string(result) + "..."
 }
 
 func padRight(s string, width int) string {

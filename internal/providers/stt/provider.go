@@ -15,6 +15,10 @@ type TranscribeOptions struct {
 	ContextBias []string
 	// NumSpeakers hints the expected number of speakers for diarization.
 	NumSpeakers int
+	// Model is the transcription model to use (provider-specific).
+	// Speechmatics supports: "base" (default), "enhanced", "best".
+	// Whisper supports: "whisper-1" (default).
+	Model string
 	// MeetingID is the noto meeting ID for artifact lineage.
 	MeetingID string
 }

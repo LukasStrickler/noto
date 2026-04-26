@@ -48,6 +48,7 @@ func NewAppModelWithRuntime(screen ProviderScreen, initial Screen, runtime AppRu
 		Runtime: runtime,
 	}
 	model.syncSearch("")
+	model.UI.CachedSearchResults = model.App.SearchResults
 	return model
 }
 

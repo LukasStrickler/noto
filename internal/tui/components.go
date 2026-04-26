@@ -101,7 +101,15 @@ func modalOverlayCommands(modal string, width int, height int) string {
 	var b strings.Builder
 	b.WriteString("\x1b[s")
 	for i, line := range lines {
-		b.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", y+i+1, x+1, line))
+		row := y + i + 1
+		col := x + 1
+		if row > height {
+			row = height
+		}
+		if col > width {
+			col = width
+		}
+		b.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", row, col, line))
 	}
 	b.WriteString("\x1b[u")
 	return b.String()

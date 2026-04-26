@@ -50,7 +50,7 @@ func safeJoin(basePath, key string) (string, error) {
 		return "", errors.New("path traversal attempt detected: " + key)
 	}
 
-	return fullPath, nil
+	return resolvedPath, nil
 }
 
 func (a *localAdapter) PutObject(ctx context.Context, key string, body io.Reader, opts PutOptions) error {
@@ -75,7 +75,15 @@ func (a *localAdapter) PutObject(ctx context.Context, key string, body io.Reader
 		return ErrUpload(key, err)
 	}
 
+	// Sync to ensure data is durable before close - if sync succeeds,
+	// data is safely on disk even if close fails afterward
+	if err := file.Sync(); err != nil {
+		os.Remove(fullPath)
+		return ErrUpload(key, err)
+	}
+
 	if err := file.Close(); err != nil {
+		// Data is already synced to disk, file is valid despite close error
 		return ErrUpload(key, err)
 	}
 

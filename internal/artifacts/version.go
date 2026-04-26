@@ -20,6 +20,9 @@ func (p *PromptVersion) Validate() *notoerr.Error {
 	if p.SchemaVersion == "" {
 		return NewMissingFieldError("schema_version")
 	}
+	if p.SchemaVersion != "prompt.v1" {
+		return notoerr.New(ErrCodeValidationFailed, "schema_version must be prompt.v1", map[string]any{"schema_version": p.SchemaVersion})
+	}
 	if p.Version == "" {
 		return NewMissingFieldError("version")
 	}

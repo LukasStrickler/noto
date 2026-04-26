@@ -127,21 +127,22 @@ type AppState struct {
 }
 
 type UIState struct {
-	Active           Screen
-	Previous         Screen
-	Focus            Focus
-	Width            int
-	Height           int
-	Banner           *Banner
-	SelectedNav      int
-	SelectedMeeting  int
-	SelectedProvider int
-	SelectedResult   int
-	SelectedSetting  int
-	SearchQuery      string
-	Overlay          OverlayState
-	ActionBounds     []ActionBound
-	Quitting         bool
+	Active             Screen
+	Previous           Screen
+	Focus              Focus
+	Width              int
+	Height             int
+	Banner             *Banner
+	SelectedNav        int
+	SelectedMeeting    int
+	SelectedProvider   int
+	SelectedResult     int
+	SelectedSetting    int
+	SearchQuery        string
+	Overlay            OverlayState
+	ActionBounds       []ActionBound
+	Quitting           bool
+	CachedSearchResults []SearchResult
 }
 
 type ConfigSaver interface {
