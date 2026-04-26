@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -49,8 +50,13 @@ func newS3AdapterWithBucket(bucket, region string) (*s3Adapter, error) {
 
 	var awsCfg aws.Config
 	var err error
+	var r2Endpoint string
 
 	if isR2Configured() {
+		r2Endpoint, err = getR2Endpoint()
+		if err != nil {
+			return nil, ErrConfig("R2 endpoint configuration error: " + err.Error())
+		}
 		awsCfg, err = loadR2Config(ctx, region)
 		if err != nil {
 			return nil, ErrConfig("failed to load R2 config: " + err.Error())
@@ -64,7 +70,7 @@ func newS3AdapterWithBucket(bucket, region string) (*s3Adapter, error) {
 
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		if isR2Configured() {
-			o.BaseEndpoint = aws.String(getR2Endpoint())
+			o.BaseEndpoint = aws.String(r2Endpoint)
 			o.UsePathStyle = true
 		}
 	})
@@ -366,12 +372,12 @@ func getR2SecretKey() string {
 	return os.Getenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY")
 }
 
-func getR2Endpoint() string {
+func getR2Endpoint() (string, error) {
 	accountID := getR2AccountID()
 	if accountID == "" {
-		return "https://1234567890abcdef.r2.cloudflarestorage.com"
+		return "", errors.New("CLOUDFLARE_R2_ACCOUNT_ID is required for R2 backend")
 	}
-	return fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID)
+	return fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID), nil
 }
 
 func isR2Configured() bool {
@@ -410,11 +416,16 @@ func loadR2Config(ctx context.Context, region string) (aws.Config, error) {
 		return aws.Config{}, fmt.Errorf("R2 credentials not configured")
 	}
 
+	r2Endpoint, err := getR2Endpoint()
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("R2 endpoint not configured: %w", err)
+	}
+
 	creds := credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")
 
 	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
 		return aws.Endpoint{
-			URL:               getR2Endpoint(),
+			URL:               r2Endpoint,
 			SigningRegion:     "auto",
 			HostnameImmutable: true,
 		}, nil
