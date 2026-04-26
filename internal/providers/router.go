@@ -1,6 +1,11 @@
 package providers
 
-import "github.com/lukasstrickler/noto/internal/notoerr"
+import (
+	"context"
+
+	"github.com/lukasstrickler/noto/internal/artifacts"
+	"github.com/lukasstrickler/noto/internal/notoerr"
+)
 
 type RoutingProfile string
 
@@ -11,16 +16,20 @@ const (
 )
 
 type RoutingPolicy struct {
-	SpeechProvider string         `json:"speech_provider"`
-	LLMProvider    string         `json:"llm_provider"`
-	LLMModel       string         `json:"llm_model"`
-	Profile        RoutingProfile `json:"profile"`
+	SpeechProvider       string         `json:"speech_provider"`
+	SpeechProviders     []string       `json:"speech_providers"`
+	LLMProvider         string         `json:"llm_provider"`
+	LLMProviders        []string       `json:"llm_providers"`
+	LLMModel            string         `json:"llm_model"`
+	Profile             RoutingProfile `json:"profile"`
 }
 
 func DefaultRoutingPolicy() RoutingPolicy {
 	return RoutingPolicy{
 		SpeechProvider: "mistral",
+		SpeechProviders: []string{"mistral", "assemblyai"},
 		LLMProvider:    "openrouter",
+		LLMProviders:   []string{"openrouter", "mistral"},
 		LLMModel:       "openai/gpt-4.1-mini",
 		Profile:        RoutingProfileManual,
 	}
@@ -71,4 +80,84 @@ func providerWithCapability(reg Registry, id string, cap Capability) (ProviderSu
 
 func (p RoutingProfile) String() string {
 	return string(p)
+}
+
+type ProviderRouter struct {
+	Registry Registry
+	Policy   RoutingPolicy
+}
+
+func (r ProviderRouter) STTProvider() STTProviderSuite {
+	return STTProviderSuite{
+		Primary:   r.Policy.SpeechProvider,
+		Fallback: r.fallbackProviders(r.Policy.SpeechProviders, r.Policy.SpeechProvider),
+	}
+}
+
+func (r ProviderRouter) LLMProvider() LLMProviderSuite {
+	return LLMProviderSuite{
+		Primary:   r.Policy.LLMProvider,
+		Fallback: r.fallbackProviders(r.Policy.LLMProviders, r.Policy.LLMProvider),
+	}
+}
+
+func (r ProviderRouter) fallbackProviders(providers []string, primary string) []string {
+	var fallback []string
+	for _, p := range providers {
+		if p != primary {
+			fallback = append(fallback, p)
+		}
+	}
+	return fallback
+}
+
+type STTProviderSuite struct {
+	Primary   string
+	Fallback  []string
+}
+
+type LLMProviderSuite struct {
+	Primary   string
+	Fallback  []string
+}
+
+type STTProviderWrapper struct {
+	inner   STTProvider
+	jobID   string
+}
+
+func NewSTTProviderWrapper(inner STTProvider) *STTProviderWrapper {
+	return &STTProviderWrapper{inner: inner}
+}
+
+func (w *STTProviderWrapper) ProviderID() string {
+	return w.inner.ProviderID()
+}
+
+func (w *STTProviderWrapper) Transcribe(ctx context.Context, audio []byte, opts TranscribeOptions) (*artifacts.Transcript, error) {
+	transcript, err := w.inner.Transcribe(ctx, audio, opts)
+	if transcript != nil {
+		w.jobID = transcript.Provider.JobID
+	}
+	return transcript, err
+}
+
+func (w *STTProviderWrapper) JobID() string {
+	return w.jobID
+}
+
+type LLMProviderWrapper struct {
+	inner LLMProvider
+}
+
+func NewLLMProviderWrapper(inner LLMProvider) *LLMProviderWrapper {
+	return &LLMProviderWrapper{inner: inner}
+}
+
+func (w *LLMProviderWrapper) ProviderID() string {
+	return w.inner.ProviderID()
+}
+
+func (w *LLMProviderWrapper) Summarize(ctx context.Context, transcript artifacts.Transcript, opts SummarizeOptions) (*artifacts.Summary, error) {
+	return w.inner.Summarize(ctx, transcript, opts)
 }

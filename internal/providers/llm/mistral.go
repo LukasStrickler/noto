@@ -12,22 +12,22 @@ import (
 	"github.com/lukasstrickler/noto/internal/notoerr"
 )
 
-type OpenRouterAdapter struct {
-	BaseURL  string
-	APIKey   string
-	ModelID  string
-	HTTP     HTTPDoer
+type MistralAdapter struct {
+	BaseURL string
+	APIKey  string
+	Model   string
+	HTTP    HTTPDoer
 }
 
 type HTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-func (a *OpenRouterAdapter) ProviderID() string {
-	return "openrouter"
+func (a *MistralAdapter) ProviderID() string {
+	return "mistral"
 }
 
-func (a *OpenRouterAdapter) Summarize(ctx context.Context, transcript artifacts.Transcript, opts SummarizeOptions) (*artifacts.Summary, error) {
+func (a *MistralAdapter) Summarize(ctx context.Context, transcript artifacts.Transcript, opts SummarizeOptions) (*artifacts.Summary, error) {
 	client := a.HTTP
 	if client == nil {
 		client = http.DefaultClient
@@ -35,53 +35,76 @@ func (a *OpenRouterAdapter) Summarize(ctx context.Context, transcript artifacts.
 
 	baseURL := a.BaseURL
 	if baseURL == "" {
-		baseURL = "https://openrouter.ai/api/v1"
+		baseURL = "https://api.mistral.ai/v1"
 	}
 
-	modelID := a.ModelID
-	if modelID == "" {
-		modelID = "openai/gpt-4.1-mini"
+	model := a.Model
+	if model == "" {
+		model = "mistral-large-latest"
 	}
 
-	messages := buildSummaryMessages(transcript)
+	messages := buildMessages(transcript)
 
 	payload := map[string]any{
-		"model":    modelID,
+		"model":    model,
 		"messages": messages,
 	}
 	if opts.Temperature != nil {
 		payload["temperature"] = *opts.Temperature
+	} else {
+		payload["temperature"] = 0.2
 	}
 
 	body, _ := json.Marshal(payload)
 	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, notoerr.Wrap("provider_request_failed", "Could not create OpenRouter request.", err)
+		return nil, notoerr.Wrap("provider_request_failed", "Could not create Mistral request.", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+a.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("HTTP-Referer", "https://github.com/lukasstrickler/noto")
-	req.Header.Set("X-Title", "Noto")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, notoerr.Wrap("retryable_remote_error", "OpenRouter request failed.", err)
+		return nil, notoerr.Wrap("retryable_remote_error", "Mistral request failed.", err)
 	}
 	defer resp.Body.Close()
 
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, notoerr.Wrap("provider_response_invalid", "Could not read OpenRouter response.", err)
+		return nil, notoerr.Wrap("provider_response_invalid", "Could not read Mistral response.", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, notoerr.New("provider_failed", "OpenRouter summarization failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
+		return nil, notoerr.New("provider_failed", "Mistral summarization failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
 	}
 
-	return parseOpenRouterResponse(respBytes, transcript, opts.MeetingID, modelID)
+	return a.parseResponse(respBytes, transcript, opts.MeetingID, model)
 }
 
-func buildSummaryMessages(transcript artifacts.Transcript) []ChatMessage {
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type mistralResponse struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int    `json:"created"`
+	Model   string `json:"model"`
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+func buildMessages(transcript artifacts.Transcript) []chatMessage {
 	var textBuilder strings.Builder
 	for i, seg := range transcript.Segments {
 		speaker := "Unknown"
@@ -119,31 +142,20 @@ Return your response as a JSON object with the following structure:
 
 	userContent := "Please summarize this meeting transcript:\n\n" + textBuilder.String()
 
-	return []ChatMessage{
+	return []chatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userContent},
 	}
 }
 
-type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetingID string, modelID string) (*artifacts.Summary, error) {
-	var resp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
+func (a *MistralAdapter) parseResponse(raw []byte, transcript artifacts.Transcript, meetingID string, model string) (*artifacts.Summary, error) {
+	var resp mistralResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, notoerr.Wrap("provider_response_invalid", "Could not parse OpenRouter response.", err)
+		return nil, notoerr.Wrap("provider_response_invalid", "Could not parse Mistral response.", err)
 	}
 
 	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
-		return nil, notoerr.New("provider_response_invalid", "OpenRouter response did not include message content.", nil)
+		return nil, notoerr.New("provider_response_invalid", "Mistral response did not include message content.", nil)
 	}
 
 	content := resp.Choices[0].Message.Content
@@ -190,8 +202,8 @@ func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetin
 			MeetingID:     meetingID,
 			ShortSummary:  content,
 			Model: artifacts.SummaryModel{
-				Provider: "openrouter",
-				ModelID:  modelID,
+				Provider: "mistral",
+				ModelID:  model,
 			},
 		}
 		return &summary, nil
@@ -269,14 +281,14 @@ func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetin
 		OpenQuestions: openQuestions,
 		Risks:         risks,
 		Model: artifacts.SummaryModel{
-			Provider:      "openrouter",
-			ModelID:       modelID,
+			Provider:      "mistral",
+			ModelID:       model,
 			PromptVersion: "summary.v1",
 		},
 	}
 
 	if err := summary.Validate(); err != nil {
-		return nil, notoerr.Wrap("summary_invalid", "OpenRouter summary failed validation.", err)
+		return nil, notoerr.Wrap("summary_invalid", "Mistral summary failed validation.", err)
 	}
 
 	return summary, nil
