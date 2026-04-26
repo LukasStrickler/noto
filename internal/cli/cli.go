@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lukasstrickler/noto/cmd/capture"
 	"github.com/lukasstrickler/noto/internal/artifacts"
 	"github.com/lukasstrickler/noto/internal/config"
 	"github.com/lukasstrickler/noto/internal/notoerr"
@@ -31,6 +32,8 @@ type app struct {
 	reg            providers.Registry
 	recordingsDir  string
 	searchIndex    *search.SearchIndex
+	manifestWriter *artifacts.ManifestWriter
+	ipcClient      *capture.IPCClient
 }
 
 func Run(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
@@ -45,8 +48,16 @@ func Run(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 		return 1
 	}
 
+	ipcClient, err := capture.NewIPCClient()
+	if err != nil {
+		notoerr.WriteJSON(errOut, notoerr.Wrap("ipc_client_init_failed", "Could not initialize capture IPC client", err))
+		return 1
+	}
+
+	mw := artifacts.NewManifestWriter(recordingsDir)
+
 	a := app{
-		in:            in,
+		in:             in,
 		out:           out,
 		errOut:        errOut,
 		config:        cfg,
@@ -54,6 +65,8 @@ func Run(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 		reg:           providers.DefaultRegistry(),
 		recordingsDir: recordingsDir,
 		searchIndex:   idx,
+		manifestWriter: mw,
+		ipcClient:     ipcClient,
 	}
 	if len(args) == 0 {
 		return a.appTUIInteractive(tui.ScreenDashboard)
@@ -345,6 +358,7 @@ func (a app) record(ctx context.Context, args []string) error {
 		SchemaVersion:    "manifest.v1",
 		MeetingID:        meetingID.String(),
 		CurrentVersionID: versionID,
+		Title:           title,
 		Versions: []artifacts.ManifestVersion{
 			{
 				VersionID: versionID,
@@ -354,8 +368,18 @@ func (a app) record(ctx context.Context, args []string) error {
 		},
 	}
 
-	if err := storage.WriteManifest(layout, m); err != nil {
+	if err := a.manifestWriter.WriteManifest(meetingID, m); err != nil {
 		return err
+	}
+
+	if err := a.ipcClient.Connect(ctx); err != nil {
+		fmt.Fprintf(a.out, "Warning: Could not connect to capture helper: %v\n", err)
+		fmt.Fprintf(a.out, "Recording metadata created. Audio capture will need manual intervention.\n")
+	} else {
+		sources := []string{"mic", "system"}
+		if _, err := a.ipcClient.Start(ctx, sources, 48000); err != nil {
+			fmt.Fprintf(a.out, "Warning: Could not start audio capture: %v\n", err)
+		}
 	}
 
 	fmt.Fprintf(a.out, "Recording started.\nMeeting ID: %s\nTitle: %s\n", meetingID.String(), title)
@@ -373,13 +397,96 @@ func (a app) stop(ctx context.Context, args []string) error {
 	router := providers.CapabilityRouter{Registry: a.reg, Policy: cfg.Routing}
 	speechProvider, err := router.Resolve(providers.CapabilityTranscribe)
 	if err != nil {
-		return notoerr.New("no_speech_provider", "No speech provider configured. Run 'noto providers auth set' first.", nil)
+		fmt.Fprintf(a.out, "Warning: No speech provider configured.\n")
+	} else {
+		fmt.Fprintf(a.out, "Speech provider: %s\n", speechProvider.ID)
 	}
 
-	fmt.Fprintf(a.out, "Stopping recording...\n")
-	fmt.Fprintf(a.out, "Note: Capture helper integration (Task 12) handles actual audio capture.\n")
-	fmt.Fprintf(a.out, "Use 'noto import-audio <path> --title \"X\"' to import recorded audio.\n")
-	fmt.Fprintf(a.out, "Speech provider: %s\n", speechProvider.ID)
+	var stopResult *capture.StopResult
+	var audioData []byte
+	var durationSecs float64
+
+	if a.ipcClient != nil {
+		if result, err := a.ipcClient.Stop(ctx); err == nil {
+			stopResult = result
+			durationSecs = result.DurationSecs
+
+			if capAudio, err := a.ipcClient.GetCapturedAudio(ctx); err == nil {
+				audioData = []byte(capAudio.Data)
+			}
+
+			fmt.Fprintf(a.out, "Capture stopped. Duration: %.1fs\n", durationSecs)
+			fmt.Fprintf(a.out, "Output: %s\n", result.OutputPath)
+		} else {
+			fmt.Fprintf(a.out, "Note: Capture helper integration (Task 12) handles actual audio capture.\n")
+			fmt.Fprintf(a.out, "Use 'noto import-audio <path> --title \"X\"' to import recorded audio.\n")
+		}
+	} else {
+		fmt.Fprintf(a.out, "Note: Capture helper integration (Task 12) handles actual audio capture.\n")
+		fmt.Fprintf(a.out, "Use 'noto import-audio <path> --title \"X\"' to import recorded audio.\n")
+	}
+
+	if stopResult != nil && len(audioData) > 0 {
+		refs, err := storage.ListMeetings(a.recordingsDir)
+		if err == nil && len(refs) > 0 {
+			lastMeeting := refs[0]
+			layout, err := storage.LayoutFor(a.recordingsDir, lastMeeting.MeetingID)
+			if err == nil {
+				audioPath := filepath.Join(layout.MeetingDir, "audio.m4a")
+				if err := os.WriteFile(audioPath, audioData, 0644); err == nil {
+					fmt.Fprintf(a.out, "Audio written to: %s\n", audioPath)
+
+					versionID := lastMeeting.CurrentVersionID
+					versionAudioDir := layout.VersionDir(versionID)
+					versionAudioPath := filepath.Join(versionAudioDir, "audio")
+					os.MkdirAll(versionAudioPath, 0755)
+					os.WriteFile(filepath.Join(versionAudioPath, "recording.m4a"), audioData, 0644)
+
+					audioMeta := &artifacts.AudioMetadata{
+						SchemaVersion:   "audio-asset.v1",
+						MeetingID:       lastMeeting.MeetingID.String(),
+						AssetID:         fmt.Sprintf("aud_%s", uuid.New().String()[:12]),
+						Path:            "audio/recording.m4a",
+						Format:          stopResult.Format,
+						Codec:           stopResult.Codec,
+						DurationSeconds: durationSecs,
+						Channels:        stopResult.Channels,
+						SampleRateHz:    stopResult.SampleRateHz,
+						SizeBytes:       stopResult.SizeBytes,
+						Sources: []artifacts.AudioSource{
+							{ID: "src_mic", Role: "local_speaker", Label: "Microphone", Channel: 0},
+							{ID: "src_system", Role: "participants", Label: "System Audio", Channel: 1},
+						},
+					}
+
+					versionAudioMetaPath := filepath.Join(versionAudioDir, "audio.json")
+					audioMetaData, _ := json.MarshalIndent(audioMeta, "", "  ")
+					tmpPath := filepath.Join(layout.TmpDir, "audio_meta.tmp")
+					os.WriteFile(tmpPath, audioMetaData, 0644)
+					os.Rename(tmpPath, versionAudioMetaPath)
+
+					fmt.Fprintf(a.out, "Audio metadata written.\n")
+
+					if speechProvider != nil && durationSecs > 0 {
+						fmt.Fprintf(a.out, "Transcribing...\n")
+						transcript, err := a.runTranscription(ctx, speechProvider, audioData, lastMeeting.MeetingID.String())
+						if err == nil {
+							if err := storage.WriteTranscript(layout, transcript); err == nil {
+								fmt.Fprintf(a.out, "Transcript written.\n")
+
+								if err := a.indexMeeting(lastMeeting.MeetingID.String(), lastMeeting.Title, transcript, nil); err == nil {
+									fmt.Fprintf(a.out, "Indexed for search.\n")
+								}
+							}
+						} else {
+							fmt.Fprintf(a.errOut, "Transcription failed: %v\n", err)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
