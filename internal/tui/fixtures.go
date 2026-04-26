@@ -62,13 +62,14 @@ func fixtureMeetings() []MeetingFixture {
 			"Provider keys or macOS capture permissions can block live jobs.",
 			"Diarization quality must stay measurable across speech providers.",
 		},
-		Actions: []string{"Add transcript fixture", "Wire search index", "Implement capture helper"},
-		Files:   []string{"transcript.diarized.json", "summary.json", "summary.md"},
+		Actions:      []string{"Add transcript fixture", "Wire search index", "Implement capture helper"},
+		Files:        []string{"transcript.diarized.json", "summary.json", "summary.md"},
 		Segments: []TranscriptSegment{
 			{"seg_000210", "00:14:02", "Maya", "participants", "Terminal UI should be the primary interface."},
 			{"seg_000245", "00:16:44", "Lukas", "local_speaker", "Agents need JSON and direct artifact paths, not a UI they scrape."},
 			{"seg_000301", "00:22:10", "Chen", "participants", "Provider benchmarks need WER, DER, latency, and cost."},
 		},
+		Recording: false,
 	}, {
 		ID:       "mtg_vendor_benchmark",
 		Title:    "Vendor benchmark",
@@ -80,13 +81,15 @@ func fixtureMeetings() []MeetingFixture {
 		Decisions: []string{
 			"Benchmark-selected remains a routing option, not a fourth provider.",
 		},
-		Risks:   []string{"Cost can dominate quality gains on long recurring meetings."},
-		Actions: []string{"Run AMI sample", "Compare STT providers"},
-		Files:   []string{"audio.json"},
+		Risks:        []string{"Cost can dominate quality gains on long recurring meetings."},
+		Actions:      []string{"Run AMI sample", "Compare STT providers"},
+		OpenQuestions: []string{"Should we prioritize latency or accuracy for V1?"},
+		Files:        []string{"audio.json"},
 		Segments: []TranscriptSegment{
 			{"seg_000120", "00:08:41", "Sam", "participants", "Cost and diarization quality both matter for the default provider."},
 			{"seg_000165", "00:11:03", "Lukas", "local_speaker", "The UI should expose cost and data-leaves-device state before live jobs."},
 		},
+		Recording: false,
 	}}
 }
 

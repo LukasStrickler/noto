@@ -344,18 +344,20 @@ type CommandCandidate struct {
 }
 
 type MeetingFixture struct {
-	ID        string
-	Title     string
-	Date      string
-	Duration  string
-	Status    string
-	Speakers  int
-	Summary   string
-	Decisions []string
-	Risks     []string
-	Actions   []string
-	Files     []string
-	Segments  []TranscriptSegment
+	ID           string
+	Title        string
+	Date         string
+	Duration     string
+	Status       string
+	Speakers     int
+	Summary      string
+	Decisions    []string
+	Risks        []string
+	Actions      []string
+	OpenQuestions []string
+	Files        []string
+	Segments     []TranscriptSegment
+	Recording    bool
 }
 
 type TranscriptSegment struct {

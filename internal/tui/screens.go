@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/lukasstrickler/noto/internal/providers"
 )
+
 
 func (m AppModel) renderActive() string {
 	width := m.contentWidth()
@@ -17,106 +17,489 @@ func (m AppModel) renderActive() string {
 	case ScreenMeetings:
 		return m.meetingsView(width, height)
 	case ScreenSearch:
-		return m.searchWorkspaceView(width, height)
-	case ScreenRecorder:
-		return m.recorderView(width, height)
+		return m.searchView(width, height)
 	case ScreenDetail:
 		return m.detailView(width, height)
 	case ScreenTranscript:
 		return m.transcriptView(width, height)
-	case ScreenProviders:
-		return m.providersView(width, height)
-	case ScreenStorage:
-		return m.storageView(width, height)
-	case ScreenSettings:
-		return m.settingsView(width, height)
 	default:
 		return m.dashboardView(width, height)
 	}
 }
 
+
 func (m AppModel) dashboardView(width int, height int) string {
 	if m.compactLayout() {
-		top := clamp(height/2, 9, height-8)
+		top := clamp(height/2, 10, height-9)
 		return lipgloss.JoinVertical(lipgloss.Left,
-			m.meetingList(width, top, "meetings"),
-			m.opsPanel(width, height-top-1),
+			m.dashboardCompact(width, top),
+			m.dashboardBottomBar(width, height-top-1),
 		)
 	}
-	leftWidth := m.dashboardListWidth()
+
+	leftWidth := clamp(width*38/100, 40, min(58, width/2-2))
 	rightWidth := width - leftWidth - 1
-	topHeight := clamp(height*2/3, 11, height-8)
-	rightTop := m.meetingPreview(rightWidth, topHeight)
-	rightBottom := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.jobsPanel(rightWidth/2, height-topHeight-1),
-		" ",
-		m.healthPanel(rightWidth-rightWidth/2-1, height-topHeight-1),
-	)
+	rightTopHeight := clamp(height*40/100, 10, height-12)
+	rightBottomHeight := height - rightTopHeight - 1
+
+	left := m.dashboardRecentMeetings(leftWidth, height)
+	rightTop := m.dashboardRecordingState(rightWidth, rightTopHeight)
+	rightBottom := m.dashboardStats(rightWidth, rightBottomHeight)
+
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		m.meetingList(leftWidth, height, "meetings"),
+		left,
 		" ",
 		lipgloss.JoinVertical(lipgloss.Left, rightTop, rightBottom),
 	)
 }
 
-func (m AppModel) meetingsView(width int, height int) string {
-	if m.compactLayout() {
-		return m.meetingList(width, height, "meetings")
-	}
-	leftWidth, rightWidth := splitWidths(width)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		m.meetingList(leftWidth, height, "meetings"),
-		" ",
-		m.meetingPreview(rightWidth, height),
-	)
+func (m AppModel) dashboardCompact(width int, height int) string {
+	body := m.dashboardRecordingState(width, height)
+	return Panel{Title: "dashboard", Width: width, Height: height, Focused: true, Body: body}.Render()
 }
 
-func (m AppModel) searchWorkspaceView(width int, height int) string {
-	results := m.filteredSearchResults()
-	if m.compactLayout() {
-		return Panel{Title: "search", Subtitle: "local evidence", Width: width, Height: height, Focused: true, Body: m.searchResultsBody(width, results)}.Render()
+func (m AppModel) dashboardRecentMeetings(width int, height int) string {
+	recent := m.appRecentMeetings(5)
+	if len(recent) == 0 {
+		body := styles.Muted.Render("No meetings yet. Press r to record or i to import.")
+		return Panel{Title: "recent", Width: width, Height: height, Focused: true, Body: body}.Render()
 	}
-	leftWidth, rightWidth := splitWidths(width)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		Panel{Title: "search", Subtitle: "local evidence", Width: leftWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: m.searchResultsBody(leftWidth, results)}.Render(),
-		" ",
-		Panel{Title: "evidence", Subtitle: "selected segment", Width: rightWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.searchEvidenceBody(rightWidth, results)}.Render(),
-	)
-}
 
-func (m AppModel) searchResultsBody(width int, results []SearchResult) string {
 	var b strings.Builder
+	for i, mtg := range recent {
+		style := styles.Row
+		prefix := " "
+		if i == m.UI.SelectedMeeting && m.UI.Active == ScreenDashboard {
+			style = styles.RowSelected
+			prefix = ">"
+		}
+		badge := mtg.StatusBadge()
+		duration := mtg.Duration
+		if mtg.Recording {
+			duration = mtg.ElapsedFormatted()
+		}
+		line := fmt.Sprintf("%s%s  %s  %s", prefix, fit(mtg.Title, 28), duration, badge)
+		b.WriteString(style.Width(width-4).Render(fit(line, width-6)))
+		b.WriteString("\n")
+	}
+	body := b.String()
+	return Panel{Title: "recent", Subtitle: fmt.Sprintf("%d total", len(m.App.Meetings)), Width: width, Height: height, Focused: true, Body: body}.Render()
+}
+
+func (m AppModel) dashboardRecordingState(width int, height int) string {
+	bp := m.appBubblePup()
+	if bp.Recording {
+		body := RenderBubblePup(bp, width)
+		return Panel{Title: "recording", Width: width, Height: height, Focused: true, Body: body}.Render()
+	}
+
+	state := "idle"
+	if !m.speechConfigured() {
+		state = "blocked"
+	}
+	lines := []string{
+		"state   " + state,
+		"provider  " + m.App.Config.Routing.SpeechProvider,
+	}
+	if !m.speechConfigured() {
+		lines = append(lines, "", "configure a speech provider to enable recording")
+	}
+	body := detailLines(width-4, lines)
+	return Panel{Title: "recording", Subtitle: state, Width: width, Height: height, Focused: false, Body: body}.Render()
+}
+
+func (m AppModel) dashboardStats(width int, height int) string {
+	today := m.appTodayStats()
+	lines := []string{
+		fmt.Sprintf("today   %d meetings   %d actions   %d decisions", today.Meetings, today.Actions, today.Decisions),
+		fmt.Sprintf("index   %s", m.App.Storage.Index),
+	}
+	body := detailLines(width-4, lines)
+	return Panel{Title: "today", Width: width, Height: height, Focused: false, Body: body}.Render()
+}
+
+func (m AppModel) dashboardBottomBar(width int, height int) string {
+	var b strings.Builder
+	b.WriteString(m.dashboardRecordingBadge())
+	b.WriteString("   ")
+	b.WriteString(m.dashboardIndexBadge())
+	b.WriteString("\n")
+	b.WriteString(styles.Muted.Render("r record   i import   / search   : command   ? help   q quit"))
+	body := b.String()
+	return lipgloss.NewStyle().Width(width).Height(height).Foreground(defaultTheme.Muted).Render(body)
+}
+
+func (m AppModel) dashboardRecordingBadge() string {
+	bp := m.appBubblePup()
+	if bp.Recording {
+		pulse := "●"
+		if !bp.IsPulsing() {
+			pulse = "○"
+		}
+		return styles.Danger.Render(pulse) + " " + styles.HeaderStrong.Render(bp.ElapsedFormatted())
+	}
+	return styles.Muted.Render("○ idle")
+}
+
+func (m AppModel) dashboardIndexBadge() string {
+	idx := m.App.Storage.Index
+	if idx == "clean" {
+		return styles.Success.Render(idx)
+	}
+	return styles.Warning.Render(idx)
+}
+
+
+func (m AppModel) meetingsView(width int, height int) string {
+	filterWidth := min(40, width/3)
+	listWidth := width - filterWidth - 1
+
+	if m.compactLayout() {
+		return m.meetingsListBody(width, height, false)
+	}
+
+	filterPanel := m.meetingsFilterPanel(filterWidth, height)
+	listPanel := m.meetingsListPanel(listWidth, height)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		filterPanel,
+		" ",
+		listPanel,
+	)
+}
+
+func (m AppModel) meetingsFilterPanel(width int, height int) string {
 	query := m.UI.SearchQuery
 	if query == "" {
-		query = "<type to filter>"
+		query = "_"
 	}
-	b.WriteString(renderInput("Query", query, false, width-4))
+	input := styles.Input.Width(max(8, width-4)).Render(">" + query)
+	body := input + "\n" + styles.Muted.Render("/ filter   s sort   d delete   n new")
+	return Panel{Title: "filter", Width: width, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: body}.Render()
+}
+
+func (m AppModel) meetingsListPanel(width int, height int) string {
+	body := m.meetingsListBody(width, height, true)
+	return Panel{Title: "meetings", Width: width, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: body}.Render()
+}
+
+func (m AppModel) meetingsListBody(width int, height int, showHeader bool) string {
+	meetings := m.appFilteredMeetings()
+	if len(meetings) == 0 {
+		return styles.Muted.Render("No meetings match the filter.")
+	}
+
+	vp := m.appMeetingsViewport(len(meetings), height)
+	start, end := vp.VisibleRange()
+
+	var b strings.Builder
+	if showHeader {
+		header := styles.Muted.Render("  TITLE              DUR   DATE     D    A    R")
+		b.WriteString(header)
+		b.WriteString("\n")
+	}
+
+	for i := start; i < end && i < len(meetings); i++ {
+		mtg := meetings[i]
+		style := styles.Row
+		prefix := " "
+		if i == vp.Selected {
+			style = styles.RowSelected
+			prefix = ">"
+		}
+		title := fit(mtg.Title, 18)
+		date := mtg.Date
+		dCount := fmt.Sprintf("%d", mtg.DecisionCount())
+		aCount := fmt.Sprintf("%d", mtg.ActionCount())
+		rCount := fmt.Sprintf("%d", mtg.RiskCount())
+		line := fmt.Sprintf("%s%-18s %5s  %-9s %3s %3s %3s", prefix, title, mtg.Duration, date, dCount, aCount, rCount)
+		b.WriteString(style.Width(width-4).Render(fit(line, width-6)))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func (m AppModel) appMeetingsViewport(totalItems int, visibleHeight int) ViewportComponent {
+	itemHeight := 1
+	vp := NewViewportComponent(totalItems, visibleHeight, itemHeight)
+	vp.Offset = clamp(m.UI.SelectedMeeting-itemHeight+1, 0, max(0, totalItems-visibleHeight))
+	vp.Selected = m.UI.SelectedMeeting
+	return vp
+}
+
+
+func (m AppModel) detailView(width int, height int) string {
+	meeting := m.selectedMeeting()
+	if meeting == nil {
+		return Panel{Title: "detail", Width: width, Height: height, Focused: true, Body: styles.Muted.Render("No meeting selected.")}.Render()
+	}
+
+	if m.compactLayout() {
+		return Panel{Title: meeting.Title, Width: width, Height: height, Focused: true, Body: m.detailBody(width, meeting)}.Render()
+	}
+
+	if width >= 120 {
+		leftWidth, rightWidth := splitWidths(width)
+		left := Panel{Title: "summary", Width: leftWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: m.detailBody(leftWidth, meeting)}.Render()
+		right := Panel{Title: "evidence", Width: rightWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.detailEvidenceBody(rightWidth, meeting)}.Render()
+		return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	}
+
+	return Panel{Title: fit(meeting.Title, width-4), Width: width, Height: height, Focused: true, Body: m.detailBody(width, meeting)}.Render()
+}
+
+func (m AppModel) detailBody(width int, meeting *MeetingFixture) string {
+	var b strings.Builder
+
+	b.WriteString(styles.HeaderStrong.Render(meeting.Title))
 	b.WriteString("\n")
-	b.WriteString(styles.Muted.Render("Type to filter  Enter open  C copy citation  Esc clear/back"))
+	meta := fmt.Sprintf("%s   %s   %d speakers", meeting.Date, meeting.Duration, meeting.Speakers)
+	b.WriteString(styles.Muted.Render(meta))
 	b.WriteString("\n\n")
+	b.WriteString(styles.Muted.Render(meeting.Summary))
+	b.WriteString("\n\n")
+
+	b.WriteString(m.detailCollapsibleSection("decisions", meeting.Decisions, styles.Semantic.Decision, true, width))
+	b.WriteString("\n")
+
+	b.WriteString(m.detailCollapsibleSection("action items", meeting.Actions, styles.Semantic.Action, false, width))
+	b.WriteString("\n")
+
+	b.WriteString(m.detailCollapsibleSection("risks", meeting.Risks, styles.Semantic.Risk, false, width))
+	b.WriteString("\n")
+
+	b.WriteString(m.detailCollapsibleSection("open questions", meeting.OpenQuestions, styles.Semantic.Info, false, width))
+
+	return b.String()
+}
+
+func (m AppModel) detailCollapsibleSection(title string, items []string, style lipgloss.Style, numbered bool, width int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	prefix := "▸"
+	if numbered {
+		prefix = "▸"
+	}
+	b.WriteString(style.Render(prefix + " " + strings.ToUpper(title) + fmt.Sprintf(" (%d)", len(items))))
+	b.WriteString("\n")
+	for i, item := range items {
+		num := ""
+		if numbered {
+			num = fmt.Sprintf("  %d. ", i+1)
+		} else {
+			num = "  • "
+		}
+		citation := ""
+		if seg := m.itemSegment(meeting, item); seg != nil {
+			citation = "  " + styles.Muted.Render("["+seg.ID+"]")
+		}
+		line := num + fit(item, max(8, width-20))
+		b.WriteString(style.Width(width-4).Render(line) + citation + "\n")
+	}
+	return b.String()
+}
+
+func (m AppModel) itemSegment(meeting *MeetingFixture, itemText string) *TranscriptSegment {
+	return nil
+}
+
+func (m AppModel) detailEvidenceBody(width int, meeting *MeetingFixture) string {
+	if len(meeting.Segments) == 0 {
+		return styles.Muted.Render("No transcript segments available.")
+	}
+	var b strings.Builder
+	b.WriteString(styles.Label.Render("TRANSCRIPT"))
+	b.WriteString("\n\n")
+	for _, seg := range meeting.Segments {
+		timeStyle := styles.Muted
+		speakerStyle := styles.Semantic.SpeakerA
+		segStyle := styles.Muted
+		line := fmt.Sprintf("%s %s [%s] %s", timeStyle.Render(seg.Time), speakerStyle.Render(seg.Speaker), segStyle.Render(seg.Role), seg.ID)
+		b.WriteString(style.Width(max(8, width-4)).Render(fit(line, width-6)))
+		b.WriteString("\n")
+		b.WriteString("  " + fit(seg.Text, width-8))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+
+func (m AppModel) transcriptView(width int, height int) string {
+	meeting := m.selectedMeeting()
+	if meeting == nil {
+		return Panel{Title: "transcript", Width: width, Height: height, Focused: true, Body: styles.Muted.Render("No meeting selected.")}.Render()
+	}
+
+	if m.compactLayout() {
+		return Panel{Title: "transcript", Subtitle: meeting.Title, Width: width, Height: height, Focused: true, Body: m.transcriptBody(width, meeting)}.Render()
+	}
+
+	railWidth := clamp(width/5, 18, 28)
+	bodyWidth := width - railWidth - 1
+
+	rail := m.transcriptTimeline(railWidth, height, meeting)
+	body := m.transcriptBody(bodyWidth, meeting)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		Panel{Title: "timeline", Width: railWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: rail}.Render(),
+		" ",
+		Panel{Title: "transcript", Subtitle: meeting.Title, Width: bodyWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: body}.Render(),
+	)
+}
+
+func (m AppModel) transcriptTimeline(width int, height int, meeting *MeetingFixture) string {
+	if meeting == nil || len(meeting.Segments) == 0 {
+		return styles.Muted.Render("(no segments)")
+	}
+	vp := m.appTranscriptViewport(len(meeting.Segments), height)
+	start, end := vp.VisibleRange()
+
+	var b strings.Builder
+	for i := start; i < end && i < len(meeting.Segments); i++ {
+		seg := meeting.Segments[i]
+		style := styles.Row
+		if i == vp.Selected {
+			style = styles.RowSelected
+		}
+		line := fit(seg.Time+" "+seg.ID, width-4)
+		b.WriteString(style.Width(width-2).Render(line))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m AppModel) transcriptBody(width int, meeting *MeetingFixture) string {
+	if meeting == nil || len(meeting.Segments) == 0 {
+		return styles.Muted.Render("No transcript segments.")
+	}
+	vp := m.appTranscriptViewport(len(meeting.Segments), m.contentHeight())
+	start, end := vp.VisibleRange()
+
+	var b strings.Builder
+	for i := start; i < end && i < len(meeting.Segments); i++ {
+		seg := meeting.Segments[i]
+
+		timeStr := styles.Muted.Render("[" + seg.Time + "]")
+		speakerStr := m.semanticSpeakerStyle(seg.Speaker).Render(seg.Speaker)
+		roleStr := styles.Muted.Render("[" + seg.Role + "]")
+		segStr := styles.Muted.Render("  " + seg.ID)
+
+		b.WriteString(timeStr)
+		b.WriteString(" ")
+		b.WriteString(speakerStr)
+		b.WriteString(" ")
+		b.WriteString(roleStr)
+		b.WriteString(segStr)
+		b.WriteString("\n")
+
+		b.WriteString("  " + fit(seg.Text, max(8, width-8)))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+func (m AppModel) semanticSpeakerStyle(speaker string) lipgloss.Style {
+	switch hashSpeaker(speaker) % 3 {
+	case 0:
+		return styles.Semantic.SpeakerA
+	case 1:
+		return styles.Semantic.SpeakerB
+	default:
+		return styles.Semantic.SpeakerC
+	}
+}
+
+func hashSpeaker(s string) int {
+	h := 0
+	for _, c := range s {
+		h = h*31 + int(c)
+	}
+	return h
+}
+
+func (m AppModel) appTranscriptViewport(totalItems int, visibleHeight int) ViewportComponent {
+	itemHeight := 3
+	vp := NewViewportComponent(totalItems, visibleHeight, itemHeight)
+	vp.Offset = clamp(m.UI.SelectedResult/itemHeight, 0, max(0, totalItems-visibleHeight/itemHeight))
+	vp.Selected = m.UI.SelectedResult
+	return vp
+}
+
+
+func (m AppModel) searchView(width int, height int) string {
+	showEvidence := width >= 120
+
+	if m.compactLayout() {
+		return Panel{Title: "search", Subtitle: "evidence", Width: width, Height: height, Focused: true, Body: m.searchBody(width, height, false)}.Render()
+	}
+
+	if showEvidence {
+		leftWidth, rightWidth := splitWidths(width)
+		left := Panel{Title: "search", Subtitle: "results", Width: leftWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: m.searchBody(leftWidth, height, false)}.Render()
+		right := Panel{Title: "evidence", Subtitle: "selected", Width: rightWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.searchEvidenceBody(rightWidth)}.Render()
+		return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	}
+
+	leftWidth, rightWidth := splitWidths(width)
+	left := Panel{Title: "search", Subtitle: "results", Width: leftWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: m.searchBody(leftWidth, height, false)}.Render()
+	right := Panel{Title: "preview", Width: rightWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.searchPreviewBody(rightWidth)}.Render()
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+}
+
+func (m AppModel) searchBody(width int, height int, showEvidence bool) string {
+	var b strings.Builder
+
+	query := m.UI.SearchQuery
+	if query == "" {
+		query = "_"
+	}
+	inputStyle := styles.Input.Width(max(12, width-4))
+	b.WriteString(inputStyle.Render("> " + query))
+	b.WriteString("\n")
+	b.WriteString(styles.Muted.Render("/ filter   enter open   c copy citation   esc close"))
+	b.WriteString("\n\n")
+
+	results := m.filteredSearchResults()
 	if len(results) == 0 {
 		b.WriteString(styles.Muted.Render("No matching transcript segments."))
 		return b.String()
 	}
-	rows := make([]TableRow, 0, len(results))
-	for i, result := range results {
-		rows = append(rows, TableRow{
-			Selected: i == m.UI.SelectedResult,
-			Cells: []string{
-				result.Segment.Time,
-				result.Segment.Speaker,
-				result.MeetingTitle,
-				result.Segment.Text,
-			},
-		})
+
+	vp := m.appSearchViewport(len(results), height-8)
+	start, end := vp.VisibleRange()
+
+	for i := start; i < end && i < len(results); i++ {
+		result := results[i]
+		style := styles.Row
+		prefix := " "
+		if i == vp.Selected {
+			style = styles.RowSelected
+			prefix = ">"
+		}
+
+		timeStr := fit(result.Segment.Time, 8)
+		speakerStr := fit(result.Segment.Speaker, 12)
+		meetingStr := fit(result.MeetingTitle, 20)
+		textStr := fit(result.Segment.Text, max(16, width-50))
+
+		line := fmt.Sprintf("%s%-8s %-12s %-20s %s", prefix, timeStr, speakerStr, meetingStr, textStr)
+		b.WriteString(style.Width(width-4).Render(fit(line, width-6)))
+		b.WriteString("\n")
 	}
-	b.WriteString(renderTable(width, rows, 8, 10, max(14, width/3), max(16, width/2)))
+
+	b.WriteString("\n")
+	b.WriteString(styles.Muted.Render(fmt.Sprintf("%d matches in %d meetings", len(results), m.uniqueMeetingCount(results))))
+
 	return b.String()
 }
 
-func (m AppModel) searchEvidenceBody(width int, results []SearchResult) string {
+func (m AppModel) searchEvidenceBody(width int) string {
+	results := m.filteredSearchResults()
 	if len(results) == 0 {
-		return detailLines(width-4, []string{"No selected result.", "Try provider, terminal, cost, or local_speaker."})
+		return detailLines(width-4, []string{"No selected result.", "Type to search, Enter to open."})
 	}
 	result := results[clamp(m.UI.SelectedResult, 0, len(results)-1)]
 	lines := []string{
@@ -132,341 +515,147 @@ func (m AppModel) searchEvidenceBody(width int, results []SearchResult) string {
 	return detailLines(width-4, lines)
 }
 
-func (m AppModel) recorderView(width int, height int) string {
-	ready := m.speechConfigured()
-	status := "ready"
-	if !ready {
-		status = "blocked: missing STT key"
+func (m AppModel) searchPreviewBody(width int) string {
+	results := m.filteredSearchResults()
+	if len(results) == 0 {
+		return styles.Muted.Render("No preview available.")
 	}
-	preflight := []string{
-		"title       " + m.App.Recorder.Title,
-		"state       " + status,
-		"provider    " + m.App.Config.Routing.SpeechProvider,
-		"permission  " + m.App.Recorder.Permission,
-		"retention   " + m.App.Recorder.Retention,
-		"pipeline    ingest -> transcribe -> summarize -> index",
-	}
-	if !ready {
-		preflight = append(preflight, "", "missing     configure Mistral, AssemblyAI, or ElevenLabs before live capture.")
-	}
-	if m.compactLayout() {
-		sources := m.recorderSources(width)
-		lines := append(preflight, "")
-		lines = append(lines, sources...)
-		return Panel{Title: "recorder", Subtitle: "preflight", Width: width, Height: height, Focused: true, Body: detailLines(width-4, lines)}.Render()
-	}
-	leftWidth, rightWidth := splitWidths(width)
-	sources := m.recorderSources(rightWidth)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		Panel{Title: "recorder", Subtitle: "preflight", Width: leftWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: detailLines(leftWidth-4, preflight)}.Render(),
-		" ",
-		Panel{Title: "sources", Subtitle: "meters", Width: rightWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: detailLines(rightWidth-4, sources)}.Render(),
-	)
-}
-
-func (m AppModel) recorderSources(width int) []string {
-	return []string{
-		"source roles",
-		"me/mic       -> local_speaker",
-		"participants -> participants/system",
-		"",
-		renderMeter("me/mic       ", m.App.Recorder.MicDB, width-10),
-		renderMeter("participants ", m.App.Recorder.ParticipantsDB, width-10),
-	}
-}
-
-func (m AppModel) detailView(width int, height int) string {
-	meeting := m.selectedMeetingFixture()
-	if m.compactLayout() {
-		return Panel{Title: meeting.Title, Width: width, Height: height, Focused: true, Body: m.meetingDetailBody(width, meeting)}.Render()
-	}
-	leftWidth, rightWidth := splitWidths(width)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		Panel{Title: "summary", Width: leftWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: m.meetingDetailBody(leftWidth, meeting)}.Render(),
-		" ",
-		Panel{Title: "evidence", Width: rightWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.evidenceBody(rightWidth, meeting)}.Render(),
-	)
-}
-
-func (m AppModel) transcriptView(width int, height int) string {
-	meeting := m.selectedMeetingFixture()
-	if m.compactLayout() {
-		return Panel{Title: "transcript", Width: width, Height: height, Focused: true, Body: m.transcriptBody(width, meeting)}.Render()
-	}
-	railWidth := clamp(width/4, 20, 30)
-	bodyWidth := width - railWidth - 1
-	var rail strings.Builder
-	for i, seg := range meeting.Segments {
-		style := styles.Row
-		if i == m.UI.SelectedResult {
-			style = styles.RowSelected
-		}
-		rail.WriteString(style.Width(railWidth - 4).Render(fit(seg.Time+" "+seg.ID, railWidth-8)))
-		rail.WriteString("\n")
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		Panel{Title: "timeline", Width: railWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: rail.String()}.Render(),
-		" ",
-		Panel{Title: "transcript", Width: bodyWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.transcriptBody(bodyWidth, meeting)}.Render(),
-	)
-}
-
-func (m AppModel) providersView(width int, height int) string {
-	if m.compactLayout() {
-		return Panel{Title: "providers", Width: width, Height: height, Focused: true, Body: m.providerList(width)}.Render()
-	}
-	leftWidth, rightWidth := splitWidths(width)
-	selected := m.selectedProviderSuite()
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		Panel{Title: "providers", Subtitle: "speech-to-text / openrouter", Width: leftWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: m.providerList(leftWidth)}.Render(),
-		" ",
-		Panel{Title: "provider detail", Width: rightWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.providerDetail(rightWidth, selected)}.Render(),
-	)
-}
-
-func (m AppModel) storageView(width int, height int) string {
-	status := "verified"
-	if !m.App.Storage.Verified {
-		status = "warning"
-	}
-	lines := []string{
-		"artifact root   " + m.App.Config.ArtifactRoot,
-		"config dir      " + m.App.Config.ConfigDir,
-		"schema          " + m.App.Storage.Schema,
-		"checksums       " + m.App.Storage.Checksum,
-		"index           " + m.App.Storage.Index,
-		"meetings        " + fmt.Sprintf("%d fixture-backed", len(m.App.Meetings)),
-		"status          " + status,
-		"last verify     " + m.App.Storage.LastResult,
-		"",
-		"agent command   noto verify --json",
-	}
-	if m.App.Storage.Warning != "" {
-		lines = append(lines, "warning         "+m.App.Storage.Warning)
-	}
-	return Panel{Title: "storage and verification", Width: width, Height: height, Focused: true, Body: detailLines(width-4, lines)}.Render()
-}
-
-func (m AppModel) settingsView(width int, height int) string {
-	if m.compactLayout() {
-		return Panel{Title: "settings", Width: width, Height: height, Focused: true, Body: m.settingsList(width)}.Render()
-	}
-	leftWidth, rightWidth := splitWidths(width)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		Panel{Title: "settings", Width: leftWidth, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: m.settingsList(leftWidth)}.Render(),
-		" ",
-		Panel{Title: "selection", Width: rightWidth, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.settingDetail(rightWidth)}.Render(),
-	)
-}
-
-func (m AppModel) meetingList(width int, height int, title string) string {
-	rows := make([]TableRow, 0, len(m.App.Meetings))
-	for i, meeting := range m.App.Meetings {
-		rows = append(rows, TableRow{Selected: i == m.UI.SelectedMeeting, Cells: []string{meeting.Title, meeting.Duration, meeting.Status}})
-	}
-	body := styles.Muted.Render("  / search evidence   enter open") + "\n" + renderTable(width, rows, max(18, width-26), 6, 12)
-	if len(m.App.Meetings) == 0 {
-		body = styles.Muted.Render("No meetings yet. Press r to record or i to import.")
-	}
-	return Panel{Title: title, Width: width, Height: height, Focused: m.UI.Focus == FocusPrimary, Body: body}.Render()
-}
-
-func (m AppModel) meetingPreview(width int, height int) string {
-	meeting := m.selectedMeetingFixture()
-	return Panel{Title: "evidence preview", Subtitle: meeting.Title, Width: width, Height: height, Focused: m.UI.Focus == FocusDetail, Body: m.meetingDetailBody(width, meeting)}.Render()
-}
-
-func (m AppModel) meetingDetailBody(width int, meeting MeetingFixture) string {
-	lines := []string{
-		meeting.Title,
-		meeting.Date + "  " + meeting.Duration + "  " + fmt.Sprintf("%d speakers", meeting.Speakers),
-		meeting.Summary,
-		"",
-		"Decisions",
-	}
-	lines = append(lines, prefixLines(meeting.Decisions, "  - ")...)
-	lines = append(lines, "", "Actions")
-	lines = append(lines, prefixLines(meeting.Actions, "  - ")...)
-	lines = append(lines, "", "Risks")
-	lines = append(lines, prefixLines(meeting.Risks, "  - ")...)
-	lines = append(lines, "", "Files  "+strings.Join(meeting.Files, ", "))
-	return detailLines(width-4, lines)
-}
-
-func (m AppModel) evidenceBody(width int, meeting MeetingFixture) string {
-	lines := []string{"Transcript evidence", ""}
-	for _, seg := range meeting.Segments {
-		lines = append(lines, seg.ID+" "+seg.Time+" "+seg.Speaker+" ["+seg.Role+"]", "  "+seg.Text)
-	}
-	lines = append(lines, "", "Copy command  noto transcript --json "+meeting.ID)
-	return detailLines(width-4, lines)
-}
-
-func (m AppModel) transcriptBody(width int, meeting MeetingFixture) string {
+	result := results[clamp(m.UI.SelectedResult, 0, len(results)-1)]
 	var b strings.Builder
-	for _, seg := range meeting.Segments {
-		b.WriteString(styles.Label.Render(seg.Time + " " + seg.Speaker))
-		b.WriteString(" ")
-		b.WriteString(styles.Muted.Render("[" + seg.Role + "] " + seg.ID))
-		b.WriteString("\n")
-		b.WriteString("  " + fit(seg.Text, width-8))
-		b.WriteString("\n\n")
-	}
+	b.WriteString(styles.Label.Render(result.MeetingTitle))
+	b.WriteString("\n\n")
+	b.WriteString(styles.Muted.Render("[" + result.Segment.Time + "]"))
+	b.WriteString(" ")
+	b.WriteString(styles.Semantic.SpeakerA.Render(result.Segment.Speaker))
+	b.WriteString(" ")
+	b.WriteString(styles.Muted.Render("[" + result.Segment.Role + "]"))
+	b.WriteString("\n\n")
+	b.WriteString(fit(result.Segment.Text, max(8, width-8)))
+	b.WriteString("\n\n")
+	b.WriteString(styles.Muted.Render("seg: " + result.Segment.ID))
 	return b.String()
 }
 
-func (m AppModel) jobsPanel(width int, height int) string {
-	var lines []string
-	for _, job := range m.App.Jobs {
-		lines = append(lines, job.Name+"  "+job.Status+"  "+job.Detail)
+func (m AppModel) appSearchViewport(totalItems int, visibleHeight int) ViewportComponent {
+	itemHeight := 1
+	vp := NewViewportComponent(totalItems, visibleHeight, itemHeight)
+	vp.Offset = clamp(m.UI.SelectedResult-itemHeight+1, 0, max(0, totalItems-visibleHeight))
+	vp.Selected = m.UI.SelectedResult
+	return vp
+}
+
+func (m AppModel) uniqueMeetingCount(results []SearchResult) int {
+	seen := make(map[string]bool)
+	for _, r := range results {
+		seen[r.MeetingID] = true
 	}
-	return Panel{Title: "jobs", Width: width, Height: height, Focused: m.UI.Focus == FocusJobs, Body: detailLines(width-4, lines)}.Render()
+	return len(seen)
 }
 
-func (m AppModel) healthPanel(width int, height int) string {
-	lines := []string{
-		"recorder   " + m.App.Recorder.State,
-		"storage    " + m.App.Storage.Index,
-		"schema     " + m.App.Storage.Schema,
-		"provider   " + fmt.Sprintf("%d missing", m.missingKeyCount()),
-		"llm        openrouter",
+
+func (m AppModel) appRecentMeetings(n int) []MeetingFixture {
+	all := m.App.Meetings
+	if len(all) <= n {
+		return all
 	}
-	return Panel{Title: "health", Width: width, Height: height, Focused: false, Body: detailLines(width-4, lines)}.Render()
+	return all[:n]
 }
 
-func (m AppModel) opsPanel(width int, height int) string {
-	return lipgloss.JoinVertical(lipgloss.Left, m.jobsPanel(width, height/2), m.healthPanel(width, height-height/2))
-}
-
-func (m AppModel) providerList(width int) string {
-	var b strings.Builder
-	b.WriteString(styles.Muted.Render("Speech-to-text"))
-	b.WriteString("\n")
-	for i, p := range m.providerRows() {
-		if i == len(sortedByKind(m.App.Providers, providers.ProviderKindSpeech)) {
-			b.WriteString("\n")
-			b.WriteString(styles.Muted.Render("LLM via OpenRouter"))
-			b.WriteString("\n")
+func (m AppModel) appFilteredMeetings() []MeetingFixture {
+	query := strings.ToLower(m.UI.SearchQuery)
+	if query == "" || query == "_" {
+		return m.App.Meetings
+	}
+	var result []MeetingFixture
+	for _, mtg := range m.App.Meetings {
+		if strings.Contains(strings.ToLower(mtg.Title), query) {
+			result = append(result, mtg)
 		}
-		status := m.App.Statuses[p.ID]
-		selected := " "
-		if p.ID == m.App.Config.Routing.SpeechProvider || p.ID == "openrouter" {
-			selected = "*"
-		}
-		kind := "stt"
-		if p.ID == "openrouter" {
-			kind = "llm"
-		}
-		style := styles.Row
-		if i == m.UI.SelectedProvider {
-			style = styles.RowSelected
-		}
-		line := fmt.Sprintf("%s %-3s %-11s %-12s %s", selected, kind, p.ID, keyState(status), providerEnv(p.CredentialRef))
-		b.WriteString(style.Width(width - 4).Render(fit(line, width-8)))
-		b.WriteString("\n")
 	}
-	return b.String()
+	return result
 }
 
-func (m AppModel) providerDetail(width int, selected providers.ProviderSuite) string {
-	status := m.App.Statuses[selected.ID]
-	lines := []string{
-		"id             " + selected.ID,
-		"credential     " + selected.CredentialRef,
-		"key status     " + keyState(status) + " (" + status.Source + ")",
-		"env fallback   " + providerEnv(selected.CredentialRef),
-		"model          " + firstModel(selected),
-		"data leaves    " + boolText(selected.SendsRawAudioOffDevice),
-		"benchmark      compare WER, DER/JER, latency, cost before defaulting",
-		"notes          " + selected.Notes,
-	}
-	if selected.ID == "openrouter" {
-		lines = append(lines, "", "OpenRouter model  "+m.App.Config.Routing.LLMModel, "Real LLM work is fixed to OpenRouter.")
-	}
-	return detailLines(width-4, lines)
-}
-
-func (m AppModel) settingsList(width int) string {
-	rows := m.settingRows()
-	tableRows := make([]TableRow, 0, len(rows))
-	for i, row := range rows {
-		action := "view"
-		if row.Target != "" {
-			action = "edit"
-		}
-		if row.Cycle {
-			action = "cycle"
-		}
-		tableRows = append(tableRows, TableRow{Selected: i == m.UI.SelectedSetting, Cells: []string{row.Label, row.Value, action}})
-	}
-	return renderTable(width, tableRows, 17, max(16, width-34), 8)
-}
-
-func (m AppModel) settingDetail(width int) string {
-	row := m.selectedSettingRow()
-	lines := []string{"name      " + row.Label, "value     " + row.Value}
-	if row.Target != "" {
-		lines = append(lines, "action    Enter opens an in-TUI edit form.")
-	} else if row.Cycle {
-		lines = append(lines, "action    Space cycles this value.")
-	} else {
-		lines = append(lines, "action    read-only")
-	}
-	lines = append(lines, "", "Provider keys live in Providers. Config stores credential refs and routing only.")
-	return detailLines(width-4, lines)
-}
-
-func (m AppModel) selectedMeetingFixture() MeetingFixture {
+func (m AppModel) selectedMeeting() *MeetingFixture {
 	if len(m.App.Meetings) == 0 {
-		return MeetingFixture{Title: "No meeting", Status: "empty"}
+		return nil
 	}
-	return m.App.Meetings[clamp(m.UI.SelectedMeeting, 0, len(m.App.Meetings)-1)]
+	idx := clamp(m.UI.SelectedMeeting, 0, len(m.App.Meetings)-1)
+	return &m.App.Meetings[idx]
 }
 
-func (m AppModel) providerRows() []providers.ProviderSuite {
-	rows := sortedByKind(m.App.Providers, providers.ProviderKindSpeech)
-	for _, p := range sortedByKind(m.App.Providers, providers.ProviderKindLLM) {
-		if p.ID == "openrouter" {
-			rows = append(rows, p)
+func (m AppModel) appBubblePup() BubblePupState {
+	bp := NewBubblePupState()
+	if m.App.Recorder.State == "recording" {
+		bp.Recording = true
+		bp.StartTime = now()
+		bp.Elapsed = bp.Elapsed
+	}
+	bp.MicLevel = m.App.Recorder.MicDB
+	bp.SpeakerLevel = m.App.Recorder.ParticipantsDB
+	bp.AmbientLevel = -50
+	bp.PulseFrame = bp.PulseFrameCycle()
+	return bp
+}
+
+type todayStats struct {
+	Meetings  int
+	Actions   int
+	Decisions int
+}
+
+func (m AppModel) appTodayStats() todayStats {
+	stats := todayStats{}
+	for _, mtg := range m.App.Meetings {
+		if mtg.Date == "2026-04-24" || mtg.Date == "2026-04-23" {
+			stats.Meetings++
+			stats.Decisions += mtg.DecisionCount()
+			stats.Actions += mtg.ActionCount()
 		}
 	}
-	return rows
+	if stats.Meetings == 0 {
+		stats.Meetings = len(m.App.Meetings)
+		for _, mtg := range m.App.Meetings {
+			stats.Decisions += mtg.DecisionCount()
+			stats.Actions += mtg.ActionCount()
+		}
+	}
+	return stats
 }
 
-func (m AppModel) selectedProviderSuite() providers.ProviderSuite {
-	rows := m.providerRows()
-	if len(rows) == 0 {
-		return providers.ProviderSuite{ID: "none", DisplayName: "No providers"}
-	}
-	return rows[clamp(m.UI.SelectedProvider, 0, len(rows)-1)]
-}
-
-func (m AppModel) settingRows() []settingRow {
-	return []settingRow{
-		{Key: "artifact", Label: "Artifact root", Value: m.App.Config.ArtifactRoot, Target: EditArtifactRoot},
-		{Key: "speech", Label: "Speech provider", Value: m.App.Config.Routing.SpeechProvider, Cycle: true},
-		{Key: "llm_model", Label: "OpenRouter model", Value: m.App.Config.Routing.LLMModel, Target: EditOpenRouterModel},
-		{Key: "retention", Label: "Retention", Value: "delete raw audio after valid transcript", Cycle: true},
-		{Key: "config", Label: "Config dir", Value: m.App.Config.ConfigDir},
-		{Key: "keys", Label: "Key storage", Value: "macOS Keychain + env fallback"},
+func (m MeetingFixture) StatusBadge() string {
+	switch m.Status {
+	case "summarized":
+		return styles.Success.Render("summarized")
+	case "todo", "pending":
+		return styles.Warning.Render("pending")
+	case "recorded":
+		return styles.Info.Render("recorded")
+	default:
+		return styles.Muted.Render(m.Status)
 	}
 }
 
-func (m AppModel) selectedSettingRow() settingRow {
-	rows := m.settingRows()
-	if len(rows) == 0 {
-		return settingRow{}
+func (m MeetingFixture) DecisionCount() int {
+	if m.Decisions == nil {
+		return 0
 	}
-	return rows[clamp(m.UI.SelectedSetting, 0, len(rows)-1)]
+	return len(m.Decisions)
 }
 
-func prefixLines(lines []string, prefix string) []string {
-	if len(lines) == 0 {
-		return []string{prefix + "none"}
+func (m MeetingFixture) ActionCount() int {
+	if m.Actions == nil {
+		return 0
 	}
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		out = append(out, prefix+line)
+	return len(m.Actions)
+}
+
+func (m MeetingFixture) RiskCount() int {
+	if m.Risks == nil {
+		return 0
 	}
-	return out
+	return len(m.Risks)
+}
+
+func (m MeetingFixture) ElapsedFormatted() string {
+	return "00:00"
 }
