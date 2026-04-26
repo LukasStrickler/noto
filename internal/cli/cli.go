@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lukasstrickler/noto/cmd/capture"
 	"github.com/lukasstrickler/noto/internal/artifacts"
+	"github.com/lukasstrickler/noto/internal/benchmarks"
 	"github.com/lukasstrickler/noto/internal/config"
 	"github.com/lukasstrickler/noto/internal/notoerr"
 	"github.com/lukasstrickler/noto/internal/providers"
@@ -1168,11 +1169,180 @@ func (a app) benchmark(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
-	case "run", "compare", "report":
-		return notoerr.New("not_implemented", "Benchmark commands are not yet implemented.", map[string]any{"command": args[0]})
+	case "run":
+		return a.benchmarkRun(ctx)
+	case "report":
+		return a.benchmarkReport(ctx, args[1:])
+	case "compare":
+		return a.benchmarkCompare(ctx, args[1:])
 	default:
 		return notoerr.New("unknown_command", "Unknown benchmark subcommand.", map[string]any{"command": args[0]})
 	}
+}
+
+func (a app) benchmarkRun(ctx context.Context) error {
+	fmt.Fprintf(a.out, "Running Noto benchmarks...\n\n")
+
+	benchmarker, err := benchmarks.NewBenchmarker(benchmarks.DefaultBenchmarkConfig())
+	if err != nil {
+		return notoerr.Wrap("benchmark_init_failed", "Could not initialize benchmarker.", err)
+	}
+	defer benchmarker.Cleanup()
+
+	result, err := benchmarker.Run()
+	if err != nil {
+		return notoerr.Wrap("benchmark_run_failed", "Benchmark run failed.", err)
+	}
+
+	defaultPath := filepath.Join(os.Getenv("HOME"), ".noto", "benchmark-results.json")
+	if err := benchmarker.SaveResults(result, defaultPath); err != nil {
+		return notoerr.Wrap("benchmark_save_failed", "Could not save benchmark results.", err)
+	}
+
+	fmt.Fprintf(a.out, "Benchmark results saved to: %s\n\n", defaultPath)
+
+	passCount := 0
+	failCount := 0
+	for _, m := range result.Results {
+		status := "PASS"
+		if !m.Pass {
+			status = "FAIL"
+			failCount++
+		} else {
+			passCount++
+		}
+		fmt.Fprintf(a.out, "  %-45s %12.4f %-15s [%s]\n", m.Metric, m.Value, m.Unit, status)
+	}
+
+	fmt.Fprintf(a.out, "\n--- Summary: %d passed, %d failed ---\n", passCount, failCount)
+
+	if result.AllPasses() {
+		fmt.Fprintf(a.out, "All benchmarks PASSED\n")
+	} else {
+		fmt.Fprintf(a.out, "Some benchmarks FAILED\n")
+	}
+
+	return nil
+}
+
+func (a app) benchmarkReport(ctx context.Context, args []string) error {
+	path := filepath.Join(os.Getenv("HOME"), ".noto", "benchmark-results.json")
+	if len(args) > 0 && args[0] != "" {
+		path = args[0]
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return notoerr.Wrap("benchmark_load_failed", "Could not read benchmark results file.", err)
+	}
+
+	var result benchmarks.BenchmarkResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return notoerr.Wrap("benchmark_parse_failed", "Could not parse benchmark results.", err)
+	}
+
+	fmt.Fprintf(a.out, "Benchmark Report\n")
+	fmt.Fprintf(a.out, "Run ID:    %s\n", result.RunID)
+	fmt.Fprintf(a.out, "Timestamp: %s\n\n", result.Timestamp)
+
+	passCount := 0
+	failCount := 0
+	for _, m := range result.Results {
+		status := "PASS"
+		if !m.Pass {
+			status = "FAIL"
+			failCount++
+		} else {
+			passCount++
+		}
+		fmt.Fprintf(a.out, "  %-45s %12.4f %-15s [%s]\n", m.Metric, m.Value, m.Unit, status)
+	}
+
+	fmt.Fprintf(a.out, "\n--- Summary: %d passed, %d failed ---\n", passCount, failCount)
+
+	if result.AllPasses() {
+		fmt.Fprintf(a.out, "All benchmarks PASSED\n")
+	} else {
+		fmt.Fprintf(a.out, "Some benchmarks FAILED\n")
+	}
+
+	return nil
+}
+
+func (a app) benchmarkCompare(ctx context.Context, args []string) error {
+	if len(args) < 2 {
+		return notoerr.New("missing_arguments", "Usage: noto benchmark compare <file1> <file2>.", nil)
+	}
+
+	path1, path2 := args[0], args[1]
+
+	data1, err := os.ReadFile(path1)
+	if err != nil {
+		return notoerr.Wrap("benchmark_load_failed", "Could not read first benchmark results file.", err)
+	}
+
+	data2, err := os.ReadFile(path2)
+	if err != nil {
+		return notoerr.Wrap("benchmark_load_failed", "Could not read second benchmark results file.", err)
+	}
+
+	var result1, result2 benchmarks.BenchmarkResult
+	if err := json.Unmarshal(data1, &result1); err != nil {
+		return notoerr.Wrap("benchmark_parse_failed", "Could not parse first benchmark results.", err)
+	}
+	if err := json.Unmarshal(data2, &result2); err != nil {
+		return notoerr.Wrap("benchmark_parse_failed", "Could not parse second benchmark results.", err)
+	}
+
+	result1Map := make(map[string]benchmarks.MetricResult)
+	for _, m := range result1.Results {
+		result1Map[m.Metric] = m
+	}
+
+	fmt.Fprintf(a.out, "Benchmark Comparison: %s vs %s\n\n", path1, path2)
+	fmt.Fprintf(a.out, "%-45s %12s %12s %12s %-8s\n", "Metric", "File1", "File2", "Delta", "Change")
+	fmt.Fprintf(a.out, "%s\n", strings.Repeat("-", 80))
+
+	for _, m2 := range result2.Results {
+		m1, ok := result1Map[m2.Metric]
+		if !ok {
+			fmt.Fprintf(a.out, "%-45s %12s %12.4f %12s %-8s\n", m2.Metric, "(none)", m2.Value, "N/A", "NEW")
+			continue
+		}
+
+		delta := m2.Value - m1.Value
+		deltaStr := fmt.Sprintf("%+.4f", delta)
+
+		change := "="
+		if delta > 0.001 {
+			change = "+"
+		} else if delta < -0.001 {
+			change = "-"
+		}
+
+		if m1.Pass != m2.Pass {
+			change += "!"
+		}
+
+		fmt.Fprintf(a.out, "%-45s %12.4f %12.4f %12s %-8s\n", m2.Metric, m1.Value, m2.Value, deltaStr, change)
+	}
+
+	for _, m1 := range result1.Results {
+		if _, ok := result2.Results == nil || !containsMetric(result2.Results, m1.Metric) {
+			fmt.Fprintf(a.out, "%-45s %12.4f %12s %12s %-8s\n", m1.Metric, m1.Value, "(none)", "N/A", "REMOVED")
+		}
+	}
+
+	return nil
+}
+
+func containsMetric(results []benchmarks.MetricResult, metric string) bool {
+	for _, r := range results {
+		if r.Metric == metric {
+			return true
+		}
+	}
+	return false
 }
 
 func (a app) runTranscription(ctx context.Context, provider providers.ProviderSuite, audioData []byte, meetingID string) (*artifacts.Transcript, error) {
