@@ -36,9 +36,17 @@ func safeJoin(basePath, key string) (string, error) {
 	fullPath := filepath.Join(basePath, key)
 	cleanPath := filepath.Clean(fullPath)
 
+	// Resolve any symlinks in the final path to prevent symlink-based bypass attacks
+	// This is critical for security - attackers could create symlinks inside basePath
+	// that point outside, bypassing the prefix check
+	resolvedPath, err := filepath.EvalSymlinks(cleanPath)
+	if err != nil && !os.IsNotExist(err) {
+		return "", errors.New("path traversal attempt detected: " + key)
+	}
+
 	// Ensure the clean path starts with basePath (with trailing separator)
 	// This prevents attacks like "../../../etc/passwd"
-	if !strings.HasPrefix(cleanPath+string(filepath.Separator), basePath+string(filepath.Separator)) {
+	if !strings.HasPrefix(resolvedPath+string(filepath.Separator), basePath+string(filepath.Separator)) {
 		return "", errors.New("path traversal attempt detected: " + key)
 	}
 
@@ -119,7 +127,10 @@ func (a *localAdapter) GetObject(ctx context.Context, key string, dest io.Writer
 }
 
 func (a *localAdapter) DeleteObject(ctx context.Context, key string) error {
-	fullPath := filepath.Join(a.basePath, key)
+	fullPath, err := safeJoin(a.basePath, key)
+	if err != nil {
+		return ErrDelete(key, err)
+	}
 
 	if err := os.Remove(fullPath); err != nil {
 		if os.IsNotExist(err) {
@@ -135,7 +146,10 @@ func (a *localAdapter) DeleteObject(ctx context.Context, key string) error {
 }
 
 func (a *localAdapter) ListObjects(ctx context.Context, prefix string) ([]ObjectMeta, error) {
-	fullPath := filepath.Join(a.basePath, prefix)
+	fullPath, err := safeJoin(a.basePath, prefix)
+	if err != nil {
+		return nil, ErrList(prefix, err)
+	}
 
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
@@ -157,6 +171,8 @@ func (a *localAdapter) ListObjects(ctx context.Context, prefix string) ([]Object
 		}
 
 		key := filepath.Join(prefix, entry.Name())
+		// Clean the key to remove any traversal sequences for consistent API responses
+		key = filepath.Clean(key)
 		objects = append(objects, ObjectMeta{
 			Key:          key,
 			Size:         info.Size(),
@@ -168,7 +184,10 @@ func (a *localAdapter) ListObjects(ctx context.Context, prefix string) ([]Object
 }
 
 func (a *localAdapter) GetPresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	fullPath := filepath.Join(a.basePath, key)
+	fullPath, err := safeJoin(a.basePath, key)
+	if err != nil {
+		return "", ErrPresign(key, err)
+	}
 
 	if _, err := os.Stat(fullPath); err != nil {
 		if os.IsNotExist(err) {

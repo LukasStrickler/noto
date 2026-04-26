@@ -362,6 +362,9 @@ func (m *AppModel) selectSearchResultAtRow(index int) bool {
 
 func (m *AppModel) selectTranscriptAtRow(index int) bool {
 	segments := m.selectedMeetingFixture().Segments
+	if segments == nil {
+		return false
+	}
 	if index < 0 || index >= len(segments) {
 		return false
 	}
@@ -396,6 +399,9 @@ func (m *AppModel) setScreen(screen Screen) {
 }
 
 func (m *AppModel) jumpNumber(value string) {
+	if len(value) == 0 {
+		return
+	}
 	index := int(value[0] - '1')
 	items := navItems()
 	if index < 0 || index >= len(items) {
@@ -479,24 +485,47 @@ func (m *AppModel) move(delta int) {
 	}
 	switch m.UI.Active {
 	case ScreenDashboard, ScreenMeetings, ScreenDetail:
-		m.UI.SelectedMeeting = wrapIndex(m.UI.SelectedMeeting, delta, len(m.App.Meetings))
+		if len(m.App.Meetings) > 0 {
+			m.UI.SelectedMeeting = wrapIndex(m.UI.SelectedMeeting, delta, len(m.App.Meetings))
+		}
 	case ScreenTranscript:
-		m.UI.SelectedResult = wrapIndex(m.UI.SelectedResult, delta, len(m.selectedMeetingFixture().Segments))
+		seg := m.selectedMeetingFixture()
+		if seg != nil && len(seg.Segments) > 0 {
+			m.UI.SelectedResult = wrapIndex(m.UI.SelectedResult, delta, len(seg.Segments))
+		}
 	case ScreenProviders:
-		m.UI.SelectedProvider = wrapIndex(m.UI.SelectedProvider, delta, len(m.providerRows()))
+		if len(m.providerRows()) > 0 {
+			m.UI.SelectedProvider = wrapIndex(m.UI.SelectedProvider, delta, len(m.providerRows()))
+		}
 	case ScreenSearch:
-		m.UI.SelectedResult = wrapIndex(m.UI.SelectedResult, delta, len(m.filteredSearchResults()))
+		if len(m.filteredSearchResults()) > 0 {
+			m.UI.SelectedResult = wrapIndex(m.UI.SelectedResult, delta, len(m.filteredSearchResults()))
+		}
 	case ScreenSettings:
-		m.UI.SelectedSetting = wrapIndex(m.UI.SelectedSetting, delta, len(m.settingRows()))
+		if len(m.settingRows()) > 0 {
+			m.UI.SelectedSetting = wrapIndex(m.UI.SelectedSetting, delta, len(m.settingRows()))
+		}
+	case ScreenRecorder, ScreenStorage:
+		return
+	default:
+		return
 	}
 }
 
 func (m *AppModel) moveOverlay(delta int) {
 	switch m.UI.Overlay.Kind {
 	case OverlaySearch:
-		m.UI.Overlay.Selected = clamp(m.UI.Overlay.Selected+delta, 0, len(m.filteredSearchResults())-1)
+		results := m.filteredSearchResults()
+		if len(results) == 0 {
+			return
+		}
+		m.UI.Overlay.Selected = clamp(m.UI.Overlay.Selected+delta, 0, len(results)-1)
 	case OverlayCommand:
-		m.UI.Overlay.Selected = clamp(m.UI.Overlay.Selected+delta, 0, len(m.commandRows())-1)
+		rows := m.commandRows()
+		if len(rows) == 0 {
+			return
+		}
+		m.UI.Overlay.Selected = clamp(m.UI.Overlay.Selected+delta, 0, len(rows)-1)
 	}
 }
 

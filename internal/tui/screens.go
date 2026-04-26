@@ -223,7 +223,7 @@ func (m AppModel) meetingsListBody(width int, height int, showHeader bool) strin
 func (m AppModel) appMeetingsViewport(totalItems int, visibleHeight int) ViewportComponent {
 	itemHeight := 1
 	vp := NewViewportComponent(totalItems, visibleHeight, itemHeight)
-	vp.Offset = clamp(m.UI.SelectedMeeting-itemHeight+1, 0, max(0, totalItems-visibleHeight))
+	vp.Offset = clamp(m.UI.SelectedMeeting-visibleHeight+1, 0, max(0, totalItems-visibleHeight))
 	vp.Selected = m.UI.SelectedMeeting
 	return vp
 }
@@ -260,21 +260,21 @@ func (m AppModel) detailBody(width int, meeting *MeetingFixture) string {
 	b.WriteString(styles.Muted.Render(meeting.Summary))
 	b.WriteString("\n\n")
 
-	b.WriteString(m.detailCollapsibleSection("decisions", meeting.Decisions, styles.Semantic.Decision, true, width))
-	b.WriteString("\n")
+	b.WriteString(m.detailCollapsibleSection("decisions", meeting.Decisions, styles.Semantic.Decision, true, width, meeting))
+		b.WriteString("\n")
 
-	b.WriteString(m.detailCollapsibleSection("action items", meeting.Actions, styles.Semantic.Action, false, width))
-	b.WriteString("\n")
+		b.WriteString(m.detailCollapsibleSection("action items", meeting.Actions, styles.Semantic.Action, false, width, meeting))
+		b.WriteString("\n")
 
-	b.WriteString(m.detailCollapsibleSection("risks", meeting.Risks, styles.Semantic.Risk, false, width))
-	b.WriteString("\n")
+		b.WriteString(m.detailCollapsibleSection("risks", meeting.Risks, styles.Semantic.Risk, false, width, meeting))
+		b.WriteString("\n")
 
-	b.WriteString(m.detailCollapsibleSection("open questions", meeting.OpenQuestions, styles.Semantic.Info, false, width))
+		b.WriteString(m.detailCollapsibleSection("open questions", meeting.OpenQuestions, styles.Semantic.Info, false, width, meeting))
 
 	return b.String()
 }
 
-func (m AppModel) detailCollapsibleSection(title string, items []string, style lipgloss.Style, numbered bool, width int) string {
+func (m AppModel) detailCollapsibleSection(title string, items []string, style lipgloss.Style, numbered bool, width int, meeting *MeetingFixture) string {
 	if len(items) == 0 {
 		return ""
 	}
@@ -303,6 +303,14 @@ func (m AppModel) detailCollapsibleSection(title string, items []string, style l
 }
 
 func (m AppModel) itemSegment(meeting *MeetingFixture, itemText string) *TranscriptSegment {
+	if meeting == nil || itemText == "" {
+		return nil
+	}
+	for i := range meeting.Segments {
+		if strings.Contains(strings.ToLower(meeting.Segments[i].Text), strings.ToLower(itemText)) {
+			return &meeting.Segments[i]
+		}
+	}
 	return nil
 }
 
@@ -423,7 +431,7 @@ func hashSpeaker(s string) int {
 func (m AppModel) appTranscriptViewport(totalItems int, visibleHeight int) ViewportComponent {
 	itemHeight := 3
 	vp := NewViewportComponent(totalItems, visibleHeight, itemHeight)
-	vp.Offset = clamp(m.UI.SelectedResult/itemHeight, 0, max(0, totalItems-visibleHeight/itemHeight))
+	vp.Offset = clamp(m.UI.SelectedResult/itemHeight-visibleHeight+1, 0, max(0, totalItems/itemHeight-visibleHeight))
 	vp.Selected = m.UI.SelectedResult
 	return vp
 }
@@ -501,7 +509,10 @@ func (m AppModel) searchEvidenceBody(width int) string {
 	if len(results) == 0 {
 		return detailLines(width-4, []string{"No selected result.", "Type to search, Enter to open."})
 	}
-	result := results[clamp(m.UI.SelectedResult, 0, len(results)-1)]
+	if m.UI.SelectedResult < 0 || m.UI.SelectedResult >= len(results) {
+		return detailLines(width-4, []string{"No selected result.", "Type to search, Enter to open."})
+	}
+	result := results[m.UI.SelectedResult]
 	lines := []string{
 		"meeting    " + result.MeetingTitle,
 		"segment    " + result.Segment.ID,
@@ -520,7 +531,10 @@ func (m AppModel) searchPreviewBody(width int) string {
 	if len(results) == 0 {
 		return styles.Muted.Render("No preview available.")
 	}
-	result := results[clamp(m.UI.SelectedResult, 0, len(results)-1)]
+	if m.UI.SelectedResult < 0 || m.UI.SelectedResult >= len(results) {
+		return styles.Muted.Render("No preview available.")
+	}
+	result := results[m.UI.SelectedResult]
 	var b strings.Builder
 	b.WriteString(styles.Label.Render(result.MeetingTitle))
 	b.WriteString("\n\n")
@@ -539,7 +553,7 @@ func (m AppModel) searchPreviewBody(width int) string {
 func (m AppModel) appSearchViewport(totalItems int, visibleHeight int) ViewportComponent {
 	itemHeight := 1
 	vp := NewViewportComponent(totalItems, visibleHeight, itemHeight)
-	vp.Offset = clamp(m.UI.SelectedResult-itemHeight+1, 0, max(0, totalItems-visibleHeight))
+	vp.Offset = clamp(m.UI.SelectedResult-visibleHeight+1, 0, max(0, totalItems-visibleHeight))
 	vp.Selected = m.UI.SelectedResult
 	return vp
 }
@@ -587,8 +601,8 @@ func (m AppModel) appBubblePup() BubblePupState {
 	bp := NewBubblePupState()
 	if m.App.Recorder.State == "recording" {
 		bp.Recording = true
-		bp.StartTime = now()
-		bp.Elapsed = bp.Elapsed
+		bp.StartTime = m.App.Recorder.StartTime
+		bp.Elapsed = now() - bp.StartTime
 	}
 	bp.MicLevel = m.App.Recorder.MicDB
 	bp.SpeakerLevel = m.App.Recorder.ParticipantsDB
@@ -657,5 +671,8 @@ func (m MeetingFixture) RiskCount() int {
 }
 
 func (m MeetingFixture) ElapsedFormatted() string {
-	return "00:00"
+	if m.Recording {
+		return "recording..."
+	}
+	return m.Duration
 }

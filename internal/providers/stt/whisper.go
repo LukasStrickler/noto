@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/lukasstrickler/noto/internal/artifacts"
 	"github.com/lukasstrickler/noto/internal/notoerr"
@@ -26,7 +27,7 @@ func (a *WhisperAdapter) ProviderID() string {
 func (a *WhisperAdapter) Transcribe(ctx context.Context, audio []byte, opts TranscribeOptions) (*artifacts.Transcript, error) {
 	client := a.HTTP
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 
 	baseURL := a.BaseURL
@@ -47,9 +48,13 @@ func (a *WhisperAdapter) Transcribe(ctx context.Context, audio []byte, opts Tran
 		fields["language"] = opts.Language
 	}
 
-	body, contentType, err := multipartWriter(fields, audio, "audio.mp3")
+	body, contentType, err := multipartWriter(fields, audio, "audio")
 	if err != nil {
 		return nil, err
+	}
+
+	if a.APIKey == "" {
+		return nil, notoerr.New("missing_credential", "Whisper API key is not configured.", nil)
 	}
 
 	url := strings.TrimRight(baseURL, "/") + "/v1/audio/transcriptions"
@@ -113,7 +118,7 @@ func (a *WhisperAdapter) parseResponse(raw []byte, meetingID string) (*artifacts
 			speakerLabel = seg.SpeakerID
 		}
 		if speakerLabel == "" {
-			speakerLabel = "speaker_1"
+			speakerLabel = "speaker_UNK"
 		}
 
 		speakerID, ok := speakerMap[speakerLabel]

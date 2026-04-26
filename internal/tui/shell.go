@@ -199,25 +199,27 @@ func (m AppModel) searchOverlay(width int, height int) string {
 	b.WriteString("\n")
 	b.WriteString(styles.Muted.Render("Enter open  C copy citation  Esc close"))
 	b.WriteString("\n\n")
-	if len(results) == 0 {
-		b.WriteString(styles.Muted.Render("No matching transcript segments."))
-	} else {
-		for i, result := range results {
-			style := styles.Row
-			if i == m.UI.Overlay.Selected {
-				style = styles.RowSelected
+if len(results) == 0 {
+			b.WriteString(styles.Muted.Render("No matching transcript segments."))
+		} else {
+			for i, result := range results {
+				style := styles.Row
+				if i == m.UI.Overlay.Selected {
+					style = styles.RowSelected
+				}
+				line := fmt.Sprintf("%s  %s  %s  %s", result.Segment.Time, result.Segment.Speaker, result.MeetingTitle, result.Segment.Text)
+				b.WriteString(style.Width(min(width-10, 96)).Render(fit(line, min(width-14, 92))))
+				b.WriteString("\n")
 			}
-			line := fmt.Sprintf("%s  %s  %s  %s", result.Segment.Time, result.Segment.Speaker, result.MeetingTitle, result.Segment.Text)
-			b.WriteString(style.Width(min(width-10, 96)).Render(fit(line, min(width-14, 92))))
-			b.WriteString("\n")
+			if len(results) > 0 {
+				selected := results[clamp(m.UI.Overlay.Selected, 0, len(results)-1)]
+				b.WriteString("\n")
+				b.WriteString(styles.Label.Render("evidence "))
+				b.WriteString(styles.Muted.Render(selected.Segment.ID + " " + selected.Segment.Role))
+				b.WriteString("\n")
+				b.WriteString("  " + fit(selected.Segment.Text, min(width-14, 92)))
+			}
 		}
-		selected := results[clamp(m.UI.Overlay.Selected, 0, len(results)-1)]
-		b.WriteString("\n")
-		b.WriteString(styles.Label.Render("evidence "))
-		b.WriteString(styles.Muted.Render(selected.Segment.ID + " " + selected.Segment.Role))
-		b.WriteString("\n")
-		b.WriteString("  " + fit(selected.Segment.Text, min(width-14, 92)))
-	}
 	return overlayContent("search", b.String())
 }
 

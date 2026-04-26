@@ -33,7 +33,7 @@ func (a *AssemblyAIAdapter) ProviderID() string {
 func (a *AssemblyAIAdapter) Transcribe(ctx context.Context, audio []byte, opts TranscribeOptions) (*artifacts.Transcript, error) {
 	client := a.HTTP
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 
 	baseURL := a.BaseURL
@@ -60,6 +60,10 @@ func (a *AssemblyAIAdapter) Transcribe(ctx context.Context, audio []byte, opts T
 }
 
 func (a *AssemblyAIAdapter) upload(ctx context.Context, client HTTPDoer, baseURL string, audio []byte) (string, error) {
+	if a.APIKey == "" {
+		return "", notoerr.New("missing_credential", "AssemblyAI API key is not configured.", nil)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v2/upload", bytes.NewReader(audio))
 	if err != nil {
 		return "", notoerr.Wrap("provider_request_failed", "Could not create AssemblyAI upload request.", err)
@@ -103,7 +107,10 @@ func (a *AssemblyAIAdapter) submit(ctx context.Context, client HTTPDoer, baseURL
 		payload["keyterms_prompt"] = opts.ContextBias
 	}
 
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", notoerr.Wrap("provider_request_failed", "Could not marshal AssemblyAI transcript payload.", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v2/transcript", bytes.NewReader(body))
 	if err != nil {
 		return "", notoerr.Wrap("provider_request_failed", "Could not create AssemblyAI transcript request.", err)
@@ -146,6 +153,9 @@ func (a *AssemblyAIAdapter) poll(ctx context.Context, client HTTPDoer, baseURL s
 
 	pollURL := strings.TrimRight(baseURL, "/") + "/v2/transcript/" + jobID
 
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
 	for i := 0; i < maxPolls; i++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
 		if err != nil {
@@ -159,7 +169,9 @@ func (a *AssemblyAIAdapter) poll(ctx context.Context, client HTTPDoer, baseURL s
 		}
 
 		respBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return nil, notoerr.Wrap("provider_response_invalid", "Could not read AssemblyAI poll response.", closeErr)
+		}
 		if err != nil {
 			return nil, notoerr.Wrap("provider_response_invalid", "Could not read AssemblyAI poll response.", err)
 		}
@@ -185,7 +197,11 @@ func (a *AssemblyAIAdapter) poll(ctx context.Context, client HTTPDoer, baseURL s
 		select {
 		case <-ctx.Done():
 			return nil, notoerr.Wrap("provider_cancelled", "AssemblyAI transcription polling cancelled.", ctx.Err())
-		case <-time.After(interval):
+		case <-timer.C:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(interval)
 		}
 	}
 

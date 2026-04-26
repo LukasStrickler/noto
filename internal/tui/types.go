@@ -186,6 +186,11 @@ type AppModel struct {
 	Runtime AppRuntime
 }
 
+// AppModel is not thread-safe. It must only be accessed from a single goroutine
+// (the main bubbletea goroutine). All mutations happen through tea.Model.Update()
+// which is called sequentially. Do not spawn goroutines that access AppModel
+// without external synchronization.
+
 type ContextID string
 
 const (
@@ -275,6 +280,10 @@ func (vp *ViewportComponent) ScrollToItem(item int) {
 }
 
 func (vp *ViewportComponent) SelectItem(item int) {
+	if vp.TotalItems <= 0 {
+		vp.Selected = 0
+		return
+	}
 	vp.Selected = clamp(item, 0, vp.TotalItems-1)
 	vp.ScrollToItem(vp.Selected)
 }
@@ -387,6 +396,8 @@ type RecorderState struct {
 	ParticipantsDB int
 	Permission     string
 	Retention      string
+	StartTime      int64
+	Elapsed        int64
 }
 
 type StorageState struct {

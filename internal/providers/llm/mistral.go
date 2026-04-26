@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/lukasstrickler/noto/internal/artifacts"
 	"github.com/lukasstrickler/noto/internal/notoerr"
@@ -28,9 +29,13 @@ func (a *MistralAdapter) ProviderID() string {
 }
 
 func (a *MistralAdapter) Summarize(ctx context.Context, transcript artifacts.Transcript, opts SummarizeOptions) (*artifacts.Summary, error) {
+	if strings.TrimSpace(a.APIKey) == "" {
+		return nil, notoerr.New("provider_config_invalid", "Mistral API key is required.", nil)
+	}
+
 	client := a.HTTP
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 60 * time.Second}
 	}
 
 	baseURL := a.BaseURL
@@ -55,13 +60,18 @@ func (a *MistralAdapter) Summarize(ctx context.Context, transcript artifacts.Tra
 		payload["temperature"] = 0.2
 	}
 
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, notoerr.Wrap("provider_request_failed", "Could not marshal Mistral request body.", err)
+	}
 	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, notoerr.Wrap("provider_request_failed", "Could not create Mistral request.", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.APIKey)
+	if strings.TrimSpace(a.APIKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+a.APIKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
@@ -70,7 +80,7 @@ func (a *MistralAdapter) Summarize(ctx context.Context, transcript artifacts.Tra
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := io.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		return nil, notoerr.Wrap("provider_response_invalid", "Could not read Mistral response.", err)
 	}
@@ -114,11 +124,14 @@ func buildMessages(transcript artifacts.Transcript) []chatMessage {
 				break
 			}
 		}
+		textBuilder.WriteString("[")
+		textBuilder.WriteString(seg.ID)
+		textBuilder.WriteString("] ")
 		textBuilder.WriteString(speaker)
 		textBuilder.WriteString(": ")
 		textBuilder.WriteString(seg.Text)
 		textBuilder.WriteString("\n")
-		if i >= 50 {
+		if i >= 200 {
 			textBuilder.WriteString("... (truncated)")
 			break
 		}
@@ -206,6 +219,9 @@ func (a *MistralAdapter) parseResponse(raw []byte, transcript artifacts.Transcri
 				ModelID:  model,
 			},
 		}
+		if err := artifacts.ValidateSummary(summary, transcript); err != nil {
+			return nil, err
+		}
 		return &summary, nil
 	}
 
@@ -287,7 +303,7 @@ func (a *MistralAdapter) parseResponse(raw []byte, transcript artifacts.Transcri
 		},
 	}
 
-	if err := summary.Validate(); err != nil {
+	if err := artifacts.ValidateSummary(summary, transcript); err != nil {
 		return nil, notoerr.Wrap("summary_invalid", "Mistral summary failed validation.", err)
 	}
 

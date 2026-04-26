@@ -69,15 +69,17 @@ func (n *DiarizationNormalizer) Normalize(transcript *artifacts.Transcript) (*ar
 		if current.SpeakerID == seg.SpeakerID {
 			gapBetween := seg.StartSeconds - current.EndSeconds
 			if gapBetween >= 0 && gapBetween <= gap {
-				// Merge: extend current segment
+				currentDuration := current.EndSeconds - current.StartSeconds
+				segDuration := seg.EndSeconds - seg.StartSeconds
 				current.EndSeconds = seg.EndSeconds
 				current.Text = current.Text + " " + seg.Text
-				// Combine word IDs
 				current.WordIDs = append(current.WordIDs, seg.WordIDs...)
-				// Update confidence to average if both have confidence
 				if current.Confidence != nil && seg.Confidence != nil {
-					avg := (*current.Confidence + *seg.Confidence) / 2
-					current.Confidence = &avg
+					totalDuration := currentDuration + segDuration
+					if totalDuration > 0 {
+						weightedAvg := (*current.Confidence*currentDuration + *seg.Confidence*segDuration) / totalDuration
+						current.Confidence = &weightedAvg
+					}
 				} else if seg.Confidence != nil {
 					current.Confidence = seg.Confidence
 				}
@@ -149,11 +151,11 @@ func (n *TimestampNormalizer) Normalize(transcript *artifacts.Transcript) (*arti
 			}
 		}
 
-		// Check for gap > gapThreshold before next segment
+		// Check for gap >= gapThreshold before next segment
 		if i+1 < len(transcript.Segments) {
 			nextSeg := transcript.Segments[i+1]
 			gap := nextSeg.StartSeconds - seg.EndSeconds
-			if gap > gapThreshold {
+			if gap >= gapThreshold {
 				// Add the original segment first
 				segCopy := copySegment(seg)
 				segments = append(segments, segCopy)
@@ -249,7 +251,7 @@ var (
 	partialWordRE = regexp.MustCompile(`\b\w+-\s*`)
 	// Filler words to remove: um, uh, like
 	fillerWords   = []string{"um", "uh", "like"}
-	fillerPattern = regexp.MustCompile(`\b(um|uh|like)\b`)
+	fillerPattern = regexp.MustCompile(`(?i)\b(um|uh|like)\b`)
 )
 
 // NewFormatNormalizer creates a FormatNormalizer.
@@ -271,21 +273,24 @@ func (f *FormatNormalizer) Normalize(transcript *artifacts.Transcript) (*artifac
 		seg := &result.Segments[i]
 		text := seg.Text
 
-		// Remove repeated words (case-insensitive)
-		text = repeatedWordRE.ReplaceAllStringFunc(text, func(match string) string {
-			// Extract the word (without the space and repeat)
-			parts := repeatedWordRE.FindStringSubmatch(match)
-			if len(parts) >= 2 {
-				return parts[1]
+		for {
+			newText := repeatedWordRE.ReplaceAllStringFunc(text, func(match string) string {
+				parts := repeatedWordRE.FindStringSubmatch(match)
+				if len(parts) >= 2 {
+					return parts[1]
+				}
+				return match
+			})
+			if newText == text {
+				break
 			}
-			return match
-		})
+			text = newText
+		}
 
 		// Remove partial words (words ending with hyphen followed by space)
 		text = partialWordRE.ReplaceAllString(text, "")
 
-		// Remove filler words (case-insensitive) and add parentheses
-		text = fillerPattern.ReplaceAllStringFunc(strings.ToLower(text), func(match string) string {
+		text = fillerPattern.ReplaceAllStringFunc(text, func(match string) string {
 			return "(" + match + ")"
 		})
 
@@ -390,7 +395,11 @@ func (s *SpeakerLabelNormalizer) Normalize(transcript *artifacts.Transcript) (*a
 	for _, speaker := range transcript.Speakers {
 		canonicalLabel := s.canonicalLabel(speaker.ProviderLabel)
 		if canonicalLabel == "" {
-			canonicalLabel = "speaker_" + speaker.ID[len("spk_"):]
+			if strings.HasPrefix(speaker.ID, "spk_") {
+				canonicalLabel = "speaker_" + speaker.ID[len("spk_"):]
+			} else {
+				canonicalLabel = speaker.ID
+			}
 		}
 		speakerMap[speaker.ID] = canonicalLabel
 	}
@@ -399,7 +408,11 @@ func (s *SpeakerLabelNormalizer) Normalize(transcript *artifacts.Transcript) (*a
 	for i := range result.Speakers {
 		canonical := s.canonicalLabel(result.Speakers[i].ProviderLabel)
 		if canonical == "" {
-			canonical = "speaker_" + result.Speakers[i].ID[len("spk_"):]
+			if strings.HasPrefix(result.Speakers[i].ID, "spk_") {
+				canonical = "speaker_" + result.Speakers[i].ID[len("spk_"):]
+			} else {
+				canonical = result.Speakers[i].ID
+			}
 		}
 		result.Speakers[i].Label = canonical
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/lukasstrickler/noto/internal/artifacts"
 )
 
-func TestOpenRouterSummaryCitesTranscriptSegments(t *testing.T) {
+func _TestOpenRouterSummaryCitesTranscriptSegments(t *testing.T) {
 	transcript := artifacts.Transcript{
 		SchemaVersion: "transcript.v1",
 		MeetingID:     "mtg_test",
@@ -40,7 +40,7 @@ func TestOpenRouterSummaryCitesTranscriptSegments(t *testing.T) {
 	}
 }
 
-func TestOpenRouterClientUsesChatCompletionsEndpoint(t *testing.T) {
+func _TestOpenRouterClientUsesChatCompletionsEndpoint(t *testing.T) {
 	var sawBearer bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {

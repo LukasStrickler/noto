@@ -11,6 +11,11 @@ type MeetingManifest struct {
 	MeetingID         string             `json:"meeting_id"`
 	CurrentVersionID  string             `json:"current_version_id"`
 	Versions          []ManifestVersion  `json:"versions"`
+	Metadata          ManifestMetadata    `json:"metadata"`
+}
+
+type ManifestMetadata struct {
+	Title string `json:"title"`
 }
 
 type ManifestVersion struct {

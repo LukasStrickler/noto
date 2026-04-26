@@ -151,15 +151,15 @@ func LoadWithFlags(cfgDir string, flags *pflag.FlagSet) (Config, error) {
 
 	BindFlags(flags, v)
 
+	cfg := DefaultConfig()
+
 	if err := v.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
-		if errors.As(err, &notFound) {
-		} else {
+		if !errors.As(err, &notFound) {
 			return Config{}, notoerr.Wrap("config_read_failed", "Failed to read config file", err)
 		}
 	}
 
-	cfg := Config{}
 	if err := v.Unmarshal(&cfg); err != nil {
 		return Config{}, notoerr.Wrap("config_unmarshal_failed", "Failed to unmarshal config", err)
 	}

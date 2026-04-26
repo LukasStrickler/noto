@@ -1,9 +1,22 @@
 package search
 
 import (
+	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 )
+
+var highlightRegexCache sync.Map
+
+func getHighlightRegex(keyword string) *regexp.Regexp {
+	if re, ok := highlightRegexCache.Load(keyword); ok {
+		return re.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(keyword))
+	highlightRegexCache.Store(keyword, re)
+	return re
+}
 
 func NormalizeText(text string) string {
 	text = strings.ToLower(text)
@@ -79,10 +92,12 @@ func HighlightMatches(text, query string) string {
 	if len(keywords) == 0 {
 		return text
 	}
-
 	result := text
 	for _, keyword := range keywords {
-		result = strings.Replace(result, keyword, "**"+keyword+"**", -1)
+		re := getHighlightRegex(keyword)
+		result = re.ReplaceAllStringFunc(result, func(match string) string {
+			return "**" + match + "**"
+		})
 	}
 	return result
 }

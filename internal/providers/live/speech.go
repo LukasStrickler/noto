@@ -103,7 +103,7 @@ func (c AssemblyAISpeechClient) Transcribe(ctx context.Context, req SpeechReques
 	}
 	httpClient := c.HTTP
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: 2 * time.Minute}
 	}
 	uploadURL, err := c.upload(ctx, httpClient, baseURL, req)
 	if err != nil {
@@ -153,7 +153,10 @@ func (c AssemblyAISpeechClient) submit(ctx context.Context, httpClient HTTPDoer,
 	if len(req.ContextBias) > 0 {
 		payload["keyterms_prompt"] = req.ContextBias
 	}
-	b, _ := json.Marshal(payload)
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", notoerr.Wrap("provider_request_failed", "Could not marshal AssemblyAI transcript payload.", err)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v2/transcript", bytes.NewReader(b))
 	if err != nil {
 		return "", notoerr.Wrap("provider_request_failed", "Could not create AssemblyAI transcript request.", err)
@@ -182,6 +185,10 @@ func (c AssemblyAISpeechClient) poll(ctx context.Context, httpClient HTTPDoer, b
 	if maxPolls == 0 {
 		maxPolls = 120
 	}
+
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
 	for i := 0; i < maxPolls; i++ {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/v2/transcript/"+id, nil)
 		if err != nil {
@@ -208,7 +215,11 @@ func (c AssemblyAISpeechClient) poll(ctx context.Context, httpClient HTTPDoer, b
 		select {
 		case <-ctx.Done():
 			return nil, notoerr.Wrap("provider_cancelled", "AssemblyAI transcription polling was cancelled.", ctx.Err())
-		case <-time.After(interval):
+		case <-timer.C:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(interval)
 		}
 	}
 	return nil, notoerr.New("provider_timeout", "AssemblyAI transcription did not finish before the polling limit.", map[string]any{"provider": "assemblyai", "transcript_id": id})
@@ -245,7 +256,7 @@ func multipartBody(audioPath string, fields map[string]string) (io.Reader, strin
 
 func doJSON(client HTTPDoer, req *http.Request, provider string) ([]byte, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

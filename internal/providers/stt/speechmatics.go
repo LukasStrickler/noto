@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lukasstrickler/noto/internal/artifacts"
 	"github.com/lukasstrickler/noto/internal/notoerr"
@@ -25,7 +27,7 @@ func (a *SpeechmaticsAdapter) ProviderID() string {
 func (a *SpeechmaticsAdapter) Transcribe(ctx context.Context, audio []byte, opts TranscribeOptions) (*artifacts.Transcript, error) {
 	client := a.HTTP
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 
 	baseURL := a.BaseURL
@@ -47,6 +49,10 @@ func (a *SpeechmaticsAdapter) Transcribe(ctx context.Context, audio []byte, opts
 }
 
 func (a *SpeechmaticsAdapter) submit(ctx context.Context, client HTTPDoer, baseURL string, audio []byte, opts TranscribeOptions) (string, error) {
+	if a.APIKey == "" {
+		return "", notoerr.New("missing_credential", "Speechmatics API key is not configured.", nil)
+	}
+
 	fields := map[string]string{
 		"model":                           "base",
 		"language":                        opts.Language,
@@ -56,8 +62,11 @@ func (a *SpeechmaticsAdapter) submit(ctx context.Context, client HTTPDoer, baseU
 	if opts.Language == "" {
 		fields["language"] = "auto"
 	}
+	if opts.NumSpeakers > 0 {
+		fields["expected_speakers"] = strconv.Itoa(opts.NumSpeakers)
+	}
 
-	body, contentType, err := multipartWriter(fields, audio, "audio.mp3")
+	body, contentType, err := multipartWriter(fields, audio, "audio")
 	if err != nil {
 		return "", err
 	}
@@ -94,28 +103,67 @@ func (a *SpeechmaticsAdapter) submit(ctx context.Context, client HTTPDoer, baseU
 }
 
 func (a *SpeechmaticsAdapter) fetch(ctx context.Context, client HTTPDoer, baseURL string, jobID string) ([]byte, error) {
-	url := strings.TrimRight(baseURL, "/") + "/asr/" + jobID + "/transcript"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, notoerr.Wrap("provider_request_failed", "Could not create Speechmatics fetch request.", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+a.APIKey)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, notoerr.Wrap("retryable_remote_error", "Speechmatics fetch request failed.", err)
-	}
-	defer resp.Body.Close()
-
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, notoerr.Wrap("provider_response_invalid", "Could not read Speechmatics fetch response.", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, notoerr.New("provider_failed", "Speechmatics fetch failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
+	if a.APIKey == "" {
+		return nil, notoerr.New("missing_credential", "Speechmatics API key is not configured.", nil)
 	}
 
-	return respBytes, nil
+	interval := 2 * time.Second
+	maxPolls := 60
+
+	pollURL := strings.TrimRight(baseURL, "/") + "/asr/" + jobID + "/transcript"
+
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	for i := 0; i < maxPolls; i++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+		if err != nil {
+			return nil, notoerr.Wrap("provider_request_failed", "Could not create Speechmatics fetch request.", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+a.APIKey)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, notoerr.Wrap("retryable_remote_error", "Speechmatics fetch request failed.", err)
+		}
+
+		respBytes, err := io.ReadAll(resp.Body)
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return nil, notoerr.Wrap("provider_response_invalid", "Could not read Speechmatics fetch response.", closeErr)
+		}
+		if err != nil {
+			return nil, notoerr.Wrap("provider_response_invalid", "Could not read Speechmatics fetch response.", err)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, notoerr.New("provider_failed", "Speechmatics fetch failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
+		}
+
+		var statusResp struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(respBytes, &statusResp); err != nil {
+			return nil, notoerr.Wrap("provider_response_invalid", "Could not parse Speechmatics fetch status.", err)
+		}
+
+		switch statusResp.Status {
+		case "completed":
+			return respBytes, nil
+		case "error":
+			return nil, notoerr.New("provider_failed", "Speechmatics transcription failed.", map[string]any{"body": string(respBytes)})
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, notoerr.Wrap("provider_cancelled", "Speechmatics transcription polling cancelled.", ctx.Err())
+		case <-timer.C:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(interval)
+		}
+	}
+
+	return nil, notoerr.New("provider_timeout", "Speechmatics transcription timed out.", map[string]any{"job_id": jobID})
 }
 
 type speechmaticsResponse struct {

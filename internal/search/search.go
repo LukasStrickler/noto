@@ -95,6 +95,10 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 
+	if _, err := s.db.Exec(`PRAGMA optimize`); err != nil {
+		return fmt.Errorf("optimize index: %w", err)
+	}
+
 	return nil
 }
 
@@ -133,16 +137,38 @@ func buildContent(title, segmentText, speaker, decisions, actions, risks string)
 	return strings.Join(parts, " ")
 }
 
+func validateFTS5Query(query string) (string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", fmt.Errorf("empty query")
+	}
+
+	if strings.Count(query, "\"")%2 != 0 {
+		return "", fmt.Errorf("unbalanced quotes")
+	}
+	if strings.Count(query, "(") != strings.Count(query, ")") {
+		return "", fmt.Errorf("unbalanced parentheses")
+	}
+
+	return strings.ReplaceAll(strings.ReplaceAll(query, "\\", "\\\\"), "\"", "\"\""), nil
+}
+
 func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 	if query == "" {
 		return nil, fmt.Errorf("query required")
+	}
+
+	// Validate and sanitize FTS5 query
+	query, err := validateFTS5Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("invalid query: %w", err)
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`
-		SELECT 
+		SELECT
 			meeting_id,
 			segment_text,
 			speaker,
@@ -151,11 +177,11 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 			risks,
 			segment_id,
 			result_type,
-			bm25(meetings_fts) as rank,
-			snippet(meetings_fts, 0, '**', '**', '...', 32) as snippet
+			bm25(meetings_fts, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0) as rank,
+			snippet(meetings_fts, 2, '**', '**', '...', 32) as snippet
 		FROM meetings_fts
 		WHERE meetings_fts MATCH ?
-		ORDER BY rank
+		ORDER BY rank ASC
 		LIMIT 100
 	`, query)
 	if err != nil {
@@ -183,7 +209,9 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 		}
 
 		if r.Snippet == "" {
-			if decisions.String != "" {
+			if segmentText.String != "" {
+				r.Snippet = segmentText.String
+			} else if decisions.String != "" {
 				r.Snippet = decisions.String
 			} else if actions.String != "" {
 				r.Snippet = actions.String
@@ -225,12 +253,6 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	_, err = db.Exec(`PRAGMA journal_mode=WAL`)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-
 	_, err = db.Exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(
 			content,
@@ -242,9 +264,7 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 			risks,
 			segment_id,
 			result_type,
-			tokenize='unicode61',
-			content='',
-			contentless_delete=1
+			tokenize='unicode61'
 		)
 	`)
 	if err != nil {
@@ -252,11 +272,8 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 		return nil, fmt.Errorf("create FTS table: %w", err)
 	}
 
-	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_meeting_id ON meetings_fts(meeting_id)`)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create index: %w", err)
-	}
+	// Index on FTS5 virtual table not supported - commented out
+	// _, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_meeting_id ON meetings_fts(meeting_id)`)
 
 	return &SearchIndex{
 		db:  db,

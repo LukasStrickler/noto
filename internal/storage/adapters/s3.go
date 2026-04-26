@@ -91,14 +91,42 @@ func (a *s3Adapter) PutObject(ctx context.Context, key string, body io.Reader, o
 		opts.ContentType = detectContentType(key)
 	}
 
-	content, err := io.ReadAll(body)
-	if err != nil {
+	// Use a buffered reader to avoid loading entire file into memory
+	// while still being able to determine if multipart is needed
+	buffered := &bufferedReader{reader: body, buf: make([]byte, 32*1024)}
+	n, err := buffered.Read(buffered.buf)
+	if err != nil && err != io.EOF {
 		return ErrUpload(key, err)
 	}
 
-	if len(content) > multipartThreshold {
-		return a.uploadMultipart(ctx, key, bytes.NewReader(content), opts, int64(len(content)))
+	if n == 0 {
+		// Empty content, use simple put
+		input := &s3.PutObjectInput{
+			Bucket:      aws.String(a.bucket),
+			Key:         aws.String(key),
+			Body:       bytes.NewReader([]byte{}),
+			ContentType: aws.String(opts.ContentType),
+		}
+		_, err = a.client.PutObject(ctx, input)
+		return ErrUpload(key, err)
 	}
+
+	// Put back the first chunk and remaining data into a single reader for upload
+	reader := io.MultiReader(bytes.NewReader(buffered.buf[:n]), buffered)
+	size := int64(n) + buffered.remain
+
+	if size > multipartThreshold {
+		return a.uploadMultipart(ctx, key, io.MultiReader(bytes.NewReader(buffered.buf[:n]), buffered), opts, size)
+	}
+
+	// Small content, read all and put
+	content := make([]byte, n)
+	copy(content, buffered.buf[:n])
+	remaining, err := io.ReadAll(reader)
+	if err != nil {
+		return ErrUpload(key, err)
+	}
+	content = append(content, remaining...)
 
 	input := &s3.PutObjectInput{
 		Bucket:      aws.String(a.bucket),
@@ -121,6 +149,28 @@ func (a *s3Adapter) PutObject(ctx context.Context, key string, body io.Reader, o
 	}
 
 	return nil
+}
+
+type bufferedReader struct {
+	reader io.Reader
+	buf    []byte
+	n      int
+	remain int64
+}
+
+func (b *bufferedReader) Read(p []byte) (int, error) {
+	if b.n < len(b.buf) {
+		// Return buffered data first
+		n := copy(p, b.buf[b.n:])
+		b.n += n
+		return n, nil
+	}
+	// Read from underlying reader
+	n, err := b.reader.Read(p)
+	if n > 0 {
+		b.remain += int64(n)
+	}
+	return n, err
 }
 
 func (a *s3Adapter) uploadMultipart(ctx context.Context, key string, body io.ReadSeeker, opts PutOptions, size int64) error {
@@ -465,10 +515,30 @@ func VerifyChecksum(data []byte, expected string) error {
 	return nil
 }
 
+// checksumWriter wraps an io.WriterAt and buffers all written data for checksum verification.
+type checksumWriter struct {
+	w   io.WriterAt
+	buf *bytes.Buffer
+}
+
+func (c *checksumWriter) WriteAt(p []byte, off int64) (n int, err error) {
+	c.buf.Write(p)
+	return c.w.WriteAt(p, off)
+}
+
 func GetObjectWithChecksumVerification(ctx context.Context, adapter SyncAdapter, key string, dest io.WriterAt, expectedChecksum string) error {
-	err := adapter.GetObject(ctx, key, dest)
+	wrapper := &checksumWriter{
+		w:   dest,
+		buf: &bytes.Buffer{},
+	}
+	err := adapter.GetObject(ctx, key, wrapper)
 	if err != nil {
 		return err
+	}
+
+	actual := ComputeChecksum(wrapper.buf.Bytes())
+	if actual != expectedChecksum {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actual)
 	}
 	return nil
 }

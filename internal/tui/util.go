@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lukasstrickler/noto/internal/providers"
@@ -257,6 +258,9 @@ func activeLabel(screen Screen) string {
 	if screen == "" {
 		return "Dashboard"
 	}
+	if len(screen) == 1 {
+		return strings.ToUpper(string(screen))
+	}
 	return strings.ToUpper(string(screen[:1])) + string(screen[1:])
 }
 
@@ -299,7 +303,7 @@ func min(a int, b int) int {
 }
 
 func now() int64 {
-	return 0
+	return time.Now().Unix()
 }
 
 func formatElapsed(elapsed int64) string {
@@ -310,4 +314,43 @@ func formatElapsed(elapsed int64) string {
 	minutes := (elapsed / 60) % 60
 	hours := elapsed / 3600
 	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+}
+
+func (m AppModel) selectedMeetingFixture() *MeetingFixture {
+	if len(m.App.Meetings) == 0 {
+		return nil
+	}
+	idx := clamp(m.UI.SelectedMeeting, 0, len(m.App.Meetings)-1)
+	return &m.App.Meetings[idx]
+}
+
+func (m AppModel) providerRows() []providers.ProviderSuite {
+	return m.App.Providers
+}
+
+func (m AppModel) selectedProviderSuite() providers.ProviderSuite {
+	rows := m.providerRows()
+	if len(rows) == 0 {
+		return providers.ProviderSuite{}
+	}
+	idx := clamp(m.UI.SelectedProvider, 0, len(rows)-1)
+	return rows[idx]
+}
+
+func (m AppModel) settingRows() []settingRow {
+	return []settingRow{
+		{Key: "artifact", Label: "Artifact Root", Value: m.App.Config.ArtifactRoot, Target: EditArtifactRoot, Cycle: false},
+		{Key: "speech", Label: "Speech Provider", Value: m.App.Config.Routing.SpeechProvider, Target: EditProviderKey, Cycle: true},
+		{Key: "model", Label: "OpenRouter Model", Value: m.App.Config.Routing.LLMModel, Target: EditOpenRouterModel, Cycle: false},
+		{Key: "retention", Label: "Retention", Value: "delete after transcript", Target: EditProviderKey, Cycle: true},
+	}
+}
+
+func (m AppModel) selectedSettingRow() settingRow {
+	rows := m.settingRows()
+	if len(rows) == 0 {
+		return settingRow{}
+	}
+	idx := clamp(m.UI.SelectedSetting, 0, len(rows)-1)
+	return rows[idx]
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -39,21 +40,40 @@ func (mw *ManifestWriter) writeManifestAtomic(layout storage.DirectoryLayout, ma
 		return storage.ErrWriteFailed(layout.ManifestPath, err)
 	}
 
+	checksum := ComputeChecksum(data)
+	checksumPath := layout.ChecksumPath
+
+	// First, write manifest data so checksum verifies existing data
 	tmpPath := filepath.Join(layout.TmpDir, "manifest.json.tmp")
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return storage.ErrWriteFailed(tmpPath, err)
 	}
-
-	checksum := ComputeChecksum(data)
-	checksumPath := layout.ChecksumPath
-	if err := os.WriteFile(checksumPath, []byte(checksum), 0644); err != nil {
+	if err := fsyncFile(tmpPath); err != nil {
 		os.Remove(tmpPath)
-		return storage.ErrWriteFailed(checksumPath, err)
+		return storage.ErrWriteFailed(tmpPath, err)
 	}
-
 	if err := os.Rename(tmpPath, layout.ManifestPath); err != nil {
 		os.Remove(tmpPath)
 		return storage.ErrAtomicWrite(layout.ManifestPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(layout.ManifestPath)); err != nil {
+		return err
+	}
+
+	tmpChecksumPath := filepath.Join(layout.TmpDir, "manifest_checksum.tmp")
+	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
+		return storage.ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := fsyncFile(tmpChecksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := os.Rename(tmpChecksumPath, checksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrAtomicWrite(checksumPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(checksumPath)); err != nil {
+		return err
 	}
 
 	return nil
@@ -83,11 +103,10 @@ func (wp *WritePipeline) WriteAll(meetingID uuid.UUID, artifacts []ArtifactToWri
 		return err
 	}
 
+	checksums := make(map[string]string)
 	for _, artifact := range artifacts {
-		tmpPath := filepath.Join(layout.TmpDir, artifact.Path+".tmp")
-		if err := os.WriteFile(tmpPath, artifact.Content, 0644); err != nil {
-			return storage.ErrWriteFailed(tmpPath, err)
-		}
+		checksum := ComputeChecksum(artifact.Content)
+		checksums[artifact.Path] = checksum
 	}
 
 	for _, artifact := range artifacts {
@@ -98,25 +117,52 @@ func (wp *WritePipeline) WriteAll(meetingID uuid.UUID, artifacts []ArtifactToWri
 			return storage.ErrDirCreate(filepath.Dir(finalPath), err)
 		}
 
+		if err := os.WriteFile(tmpPath, artifact.Content, 0644); err != nil {
+			return storage.ErrWriteFailed(tmpPath, err)
+		}
+		if err := fsyncFile(tmpPath); err != nil {
+			os.Remove(tmpPath)
+			return storage.ErrWriteFailed(tmpPath, err)
+		}
 		if err := os.Rename(tmpPath, finalPath); err != nil {
+			os.Remove(tmpPath)
 			return storage.ErrAtomicWrite(finalPath, err)
 		}
-	}
-
-	checksums := make(map[string]string)
-	for _, artifact := range artifacts {
-		checksum, err := wp.computeChecksumForFile(filepath.Join(layout.MeetingDir, artifact.Path))
-		if err != nil {
+		if err := fsyncDir(filepath.Dir(finalPath)); err != nil {
 			return err
 		}
-		checksums[artifact.Path] = checksum
 	}
 
-	if err := wp.writeChecksumManifest(layout, checksums); err != nil {
+	if err := wp.writeManifestAtomic(layout, manifest); err != nil {
 		return err
 	}
 
-	return wp.writeManifestAtomic(layout, manifest)
+	checksumData := map[string]interface{}{
+		"schema_version": "checksums.v1",
+		"algorithm":      "sha256",
+		"files":          checksums,
+	}
+	data, err := json.MarshalIndent(checksumData, "", "  ")
+	if err != nil {
+		return storage.ErrWriteFailed(layout.ChecksumPath, err)
+	}
+	tmpChecksumPath := filepath.Join(layout.TmpDir, "checksums.json.tmp")
+	if err := os.WriteFile(tmpChecksumPath, data, 0644); err != nil {
+		return storage.ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := fsyncFile(tmpChecksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := os.Rename(tmpChecksumPath, layout.ChecksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrAtomicWrite(layout.ChecksumPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(layout.ChecksumPath)); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (wp *WritePipeline) computeChecksumForFile(path string) (string, error) {
@@ -143,10 +189,16 @@ func (wp *WritePipeline) writeChecksumManifest(layout storage.DirectoryLayout, c
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return storage.ErrWriteFailed(tmpPath, err)
 	}
-
+	if err := fsyncFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return storage.ErrWriteFailed(tmpPath, err)
+	}
 	if err := os.Rename(tmpPath, layout.ChecksumPath); err != nil {
 		os.Remove(tmpPath)
 		return storage.ErrAtomicWrite(layout.ChecksumPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(layout.ChecksumPath)); err != nil {
+		return err
 	}
 
 	return nil
@@ -158,18 +210,31 @@ func (wp *WritePipeline) writeManifestAtomic(layout storage.DirectoryLayout, man
 		return storage.ErrWriteFailed(layout.ManifestPath, err)
 	}
 
-	tmpPath := filepath.Join(layout.TmpDir, "manifest.json.tmp")
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return storage.ErrWriteFailed(tmpPath, err)
-	}
-
 	checksum := ComputeChecksum(data)
 	checksumPath := layout.ChecksumPath
-	if err := os.WriteFile(checksumPath, []byte(checksum), 0644); err != nil {
-		os.Remove(tmpPath)
-		return storage.ErrWriteFailed(checksumPath, err)
+
+	tmpChecksumPath := filepath.Join(layout.TmpDir, "manifest_checksum.tmp")
+	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
+		return storage.ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := fsyncFile(tmpChecksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := os.Rename(tmpChecksumPath, checksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrAtomicWrite(checksumPath, err)
 	}
 
+	tmpPath := filepath.Join(layout.TmpDir, "manifest.json.tmp")
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrWriteFailed(tmpPath, err)
+	}
+	if err := fsyncFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return storage.ErrWriteFailed(tmpPath, err)
+	}
 	if err := os.Rename(tmpPath, layout.ManifestPath); err != nil {
 		os.Remove(tmpPath)
 		return storage.ErrAtomicWrite(layout.ManifestPath, err)
@@ -232,11 +297,10 @@ func (va *VersionArtifact) CreateVersion(meetingID uuid.UUID, reason VersionReas
 		srcPath := artifact.srcPath
 		dstPath := filepath.Join(versionDir, artifact.dstPath)
 
-		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-			continue
-		}
-
 		if err := copyFile(srcPath, dstPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return "", err
 		}
 	}
@@ -245,7 +309,7 @@ func (va *VersionArtifact) CreateVersion(meetingID uuid.UUID, reason VersionReas
 		VersionID: newVersionID,
 		CreatedAt: now,
 		Reason:    string(reason),
-		Checksum:  fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(newVersionID))),
+		Checksum:  ComputeChecksum([]byte(newVersionID)),
 	}
 
 	manifest.Versions = append(manifest.Versions, newVersion)
@@ -272,7 +336,10 @@ func (va *VersionArtifact) CreateVersion(meetingID uuid.UUID, reason VersionReas
 	if err := os.WriteFile(tmpPath, vmData, 0644); err != nil {
 		return "", storage.ErrWriteFailed(tmpPath, err)
 	}
-
+	if err := fsyncFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return "", storage.ErrWriteFailed(tmpPath, err)
+	}
 	if err := os.Rename(tmpPath, versionManifestPath); err != nil {
 		os.Remove(tmpPath)
 		return "", storage.ErrAtomicWrite(versionManifestPath, err)
@@ -287,21 +354,39 @@ func (va *VersionArtifact) writeManifestAtomic(layout storage.DirectoryLayout, m
 		return storage.ErrWriteFailed(layout.ManifestPath, err)
 	}
 
+	checksum := ComputeChecksum(data)
+	checksumPath := layout.ChecksumPath
+
 	tmpPath := filepath.Join(layout.TmpDir, "manifest.json.tmp")
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return storage.ErrWriteFailed(tmpPath, err)
 	}
-
-	checksum := ComputeChecksum(data)
-	checksumPath := layout.ChecksumPath
-	if err := os.WriteFile(checksumPath, []byte(checksum), 0644); err != nil {
+	if err := fsyncFile(tmpPath); err != nil {
 		os.Remove(tmpPath)
-		return storage.ErrWriteFailed(checksumPath, err)
+		return storage.ErrWriteFailed(tmpPath, err)
 	}
-
 	if err := os.Rename(tmpPath, layout.ManifestPath); err != nil {
 		os.Remove(tmpPath)
 		return storage.ErrAtomicWrite(layout.ManifestPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(layout.ManifestPath)); err != nil {
+		return err
+	}
+
+	tmpChecksumPath := filepath.Join(layout.TmpDir, "manifest_checksum.tmp")
+	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
+		return storage.ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := fsyncFile(tmpChecksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := os.Rename(tmpChecksumPath, checksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return storage.ErrAtomicWrite(checksumPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(checksumPath)); err != nil {
+		return err
 	}
 
 	return nil
@@ -310,14 +395,44 @@ func (va *VersionArtifact) writeManifestAtomic(layout storage.DirectoryLayout, m
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return storage.ErrReadFailed(src, err)
+		return err
 	}
 
-	if err := os.WriteFile(dst, data, 0644); err != nil {
-		return storage.ErrWriteFailed(dst, err)
+	tmpPath := dst + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	if err := fsyncFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := fsyncDir(filepath.Dir(dst)); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+func fsyncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
+
+func fsyncDir(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_DIRECTORY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 func randomSuffix4() string {
@@ -367,11 +482,10 @@ func (vc *VerifyChecksums) VerifyAll(meetingID uuid.UUID) (*VerificationResult, 
 	checksumPath := layout.ChecksumPath
 	data, err := os.ReadFile(checksumPath)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return nil, storage.ErrReadFailed(checksumPath, err)
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("checksum file %s not found", checksumPath)
 		}
-		result.Valid = len(result.Errors) == 0
-		return result, nil
+		return nil, storage.ErrReadFailed(checksumPath, err)
 	}
 
 	var checksums struct {
@@ -398,7 +512,10 @@ func (vc *VerifyChecksums) verifyManifestChecksum(layout storage.DirectoryLayout
 
 	expectedData, err := os.ReadFile(checksumPath)
 	if err != nil {
-		return VerificationError{Path: checksumPath, Expected: "", Actual: ""}
+		if os.IsNotExist(err) {
+			return fmt.Errorf("manifest checksum file not found: %s", checksumPath)
+		}
+		return fmt.Errorf("failed to read manifest checksum: %w", err)
 	}
 	expected := string(expectedData)
 
@@ -510,8 +627,20 @@ func (ia *ImportAudio) Import(meetingID uuid.UUID, audioPath string) (*ImportRes
 	}
 
 	versionAudioPath := filepath.Join(versionAudioDir, "recording.m4a")
-	if err := os.WriteFile(versionAudioPath, data, 0644); err != nil {
-		return nil, storage.ErrWriteFailed(versionAudioPath, err)
+	tmpAudioPath := filepath.Join(layout.TmpDir, "audio_recording.tmp")
+	if err := os.WriteFile(tmpAudioPath, data, 0644); err != nil {
+		return nil, storage.ErrWriteFailed(tmpAudioPath, err)
+	}
+	if err := fsyncFile(tmpAudioPath); err != nil {
+		os.Remove(tmpAudioPath)
+		return nil, storage.ErrWriteFailed(tmpAudioPath, err)
+	}
+	if err := os.Rename(tmpAudioPath, versionAudioPath); err != nil {
+		os.Remove(tmpAudioPath)
+		return nil, storage.ErrAtomicWrite(versionAudioPath, err)
+	}
+	if err := fsyncDir(versionAudioDir); err != nil {
+		return nil, err
 	}
 
 	audioMetaPath := filepath.Join(layout.VersionDir(versionID), "audio.json")
@@ -524,10 +653,16 @@ func (ia *ImportAudio) Import(meetingID uuid.UUID, audioPath string) (*ImportRes
 	if err := os.WriteFile(tmpPath, audioMetaData, 0644); err != nil {
 		return nil, storage.ErrWriteFailed(tmpPath, err)
 	}
-
+	if err := fsyncFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return nil, storage.ErrWriteFailed(tmpPath, err)
+	}
 	if err := os.Rename(tmpPath, audioMetaPath); err != nil {
 		os.Remove(tmpPath)
 		return nil, storage.ErrAtomicWrite(audioMetaPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(audioMetaPath)); err != nil {
+		return nil, err
 	}
 
 	return &ImportResult{

@@ -60,18 +60,20 @@ func (c *IPCClient) EnsureHelperRunning(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, swiftPath, "-socket", c.socketPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("could not start Swift helper: %w", err)
 	}
-	
+
 	c.proc = cmd
-	
+
 	waitCtx, cancel := context.WithTimeout(context.Background(), spawnTimeout)
 	defer cancel()
-	
+
 	if err := c.waitForSocket(waitCtx); err != nil {
 		c.proc.Kill()
+		c.proc = nil
+		os.Remove(c.socketPath)
 		return fmt.Errorf("Swift helper did not start in time: %w", err)
 	}
 	
@@ -134,15 +136,18 @@ func (c *IPCClient) findSwiftHelper() (string, error) {
 }
 
 func (c *IPCClient) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	
-	if c.conn != nil {
-		return nil
-	}
-	
+	// EnsureHelperRunning uses procMu, not mu. Call it outside mu lock to avoid
+	// deadlock: Connect holds mu -> EnsureHelperRunning locks procMu vs
+	// Close locks procMu -> waits for mu.
 	if err := c.EnsureHelperRunning(ctx); err != nil {
 		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn != nil {
+		return nil
 	}
 	
 	var conn net.Conn
@@ -196,8 +201,13 @@ func (c *IPCClient) Close() error {
 		if err := c.proc.Process.Kill(); err != nil {
 			errs = append(errs, err)
 		}
+		if c.proc.ProcessState == nil {
+			c.proc.Wait()
+		}
 		c.proc = nil
 	}
+
+	os.Remove(c.socketPath)
 	
 	if len(errs) > 0 {
 		return errs[0]
@@ -226,12 +236,12 @@ type jsonRPCError struct {
 }
 
 func (c *IPCClient) call(ctx context.Context, method string, params, result interface{}) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	
 	if err := c.Connect(ctx); err != nil {
 		return fmt.Errorf("could not connect: %w", err)
 	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	
 	reqID := int(time.Now().UnixNano())
 	
@@ -261,6 +271,8 @@ func (c *IPCClient) call(ctx context.Context, method string, params, result inte
 	}
 	
 	if _, err := c.conn.Write(append(reqData, '\n')); err != nil {
+		c.conn.Close()
+		c.conn = nil
 		return fmt.Errorf("could not write request: %w", err)
 	}
 	
@@ -271,15 +283,31 @@ func (c *IPCClient) call(ctx context.Context, method string, params, result inte
 	var respBuf bytes.Buffer
 	buf := make([]byte, 65536)
 	for {
+		select {
+		case <-ctx.Done():
+			c.conn.Close()
+			c.conn = nil
+			return fmt.Errorf("context cancelled: %w", ctx.Err())
+		default:
+		}
+
+		if err := c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+			c.conn.Close()
+			c.conn = nil
+			return fmt.Errorf("could not set read deadline: %w", err)
+		}
+
 		n, err := c.conn.Read(buf)
 		if err != nil && err != io.EOF {
+			c.conn.Close()
+			c.conn = nil
 			return fmt.Errorf("could not read response: %w", err)
 		}
 		respBuf.Write(buf[:n])
 		if err == io.EOF || n == 0 {
 			break
 		}
-		
+
 		if respBuf.Len() > 0 && respBuf.Bytes()[respBuf.Len()-1] == '\n' {
 			break
 		}

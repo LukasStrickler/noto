@@ -105,6 +105,10 @@ type TickMsg struct{}
 type AmbientMsg struct{}
 
 func (m AppModel) handleTick() (tea.Model, tea.Cmd) {
+	if m.App.Recorder.State == "recording" {
+		elapsed := now() - m.App.Recorder.StartTime
+		m.App.Recorder.Elapsed = elapsed
+	}
 	return m, nil
 }
 

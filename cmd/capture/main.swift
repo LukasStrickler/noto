@@ -199,7 +199,10 @@ class AudioCaptureEngine {
     private var pauseStartTime: Date?
     
     private var recordingQueue = DispatchQueue(label: "com.noto.recording", qos: .userInitiated)
+    private let stateQueue = DispatchQueue(label: "com.noto.state", attributes: .concurrent)
+    private let recordingGroup = DispatchGroup()
     private var socketFileHandle: FileHandle?
+    private var shouldExit = false
     
     init(config: CaptureConfig = CaptureConfig()) {
         self.config = config
@@ -239,27 +242,27 @@ class AudioCaptureEngine {
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
         
-        // We need to use AVAudioFile with a custom format for AAC
+        guard let url = outputURL else {
+            throw CaptureError.fileError("Output URL not set")
+        }
         guard let file = try? AVAudioFile(
-            forWriting: outputURL!,
-            settings: settings,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
+            forWriting: url,
+            settings: settings
         ) else {
             throw CaptureError.fileError("Could not create audio file")
         }
         audioFile = file
-        
+
         // Setup audio engine for capture
         try setupAudioEngine(sources: sources, format: format)
-        
-        state = .recording
+
+        stateQueue.async(flags: .barrier) { self.state = .recording }
         startTime = Date()
         pausedDuration = 0
-        
+
         return [
             "status": "recording",
-            "output_path": outputURL!.path,
+            "output_path": url.path,
             "sources": sources.map { src -> [String: Any] in
                 let source = AudioSource(rawValue: src) ?? .microphone
                 return [
@@ -283,14 +286,15 @@ class AudioCaptureEngine {
             duration = 0
         }
         
-        // Stop engine
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        recordingGroup.wait()
+        
         audioEngine?.stop()
         audioEngine = nil
         
-        // Close file
         audioFile = nil
         
-        state = .idle
+        stateQueue.async(flags: .barrier) { self.state = .idle }
         
         // Get file size
         var sizeBytes: Int64 = 0
@@ -327,19 +331,23 @@ class AudioCaptureEngine {
     }
     
     func pause() throws -> [String: Any] {
-        guard state == .recording else {
+        var currentState: RecordingState = .idle
+        stateQueue.sync { currentState = self.state }
+        guard currentState == .recording else {
             throw CaptureError.invalidState("Not recording")
         }
         
         audioEngine?.pause()
-        state = .paused
+        stateQueue.async(flags: .barrier) { self.state = .paused }
         pauseStartTime = Date()
         
         return ["status": "paused"]
     }
     
     func resume() throws -> [String: Any] {
-        guard state == .paused else {
+        var currentState: RecordingState = .idle
+        stateQueue.sync { currentState = self.state }
+        guard currentState == .paused else {
             throw CaptureError.invalidState("Not paused")
         }
         
@@ -349,7 +357,7 @@ class AudioCaptureEngine {
         pauseStartTime = nil
         
         try audioEngine?.start()
-        state = .recording
+        stateQueue.async(flags: .barrier) { self.state = .recording }
         
         return ["status": "recording"]
     }
@@ -397,14 +405,14 @@ class AudioCaptureEngine {
         }
         
         let inputNode = engine.inputNode
-        let mainMixer = engine.mainMixerNode
         
-        // Get the input format
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        
-        // Install tap for microphone capture
-        inputNode.installTap(onBus: 0, bufferSize: config.bufferSize, format: inputFormat) { [weak self] buffer, time in
-            self?.processMicrophoneBuffer(buffer, time: time)
+        inputNode.installTap(onBus: 0, bufferSize: config.bufferSize, format: nil) { [weak self] buffer, time in
+            guard let self = self else { return }
+            self.recordingGroup.enter()
+            self.recordingQueue.async {
+                self.processMicrophoneBuffer(buffer, time: time)
+                self.recordingGroup.leave()
+            }
         }
         
         // For system audio, we'd ideally use AudioUnit or ScreenCaptureKit
@@ -415,7 +423,9 @@ class AudioCaptureEngine {
     }
     
     private func processMicrophoneBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
-        guard state == .recording else { return }
+        var currentState: RecordingState = .idle
+        stateQueue.sync { currentState = self.state }
+        guard currentState == .recording else { return }
         
         // Write to file
         if let file = audioFile {
@@ -492,22 +502,24 @@ enum CaptureError: Error, LocalizedError {
 
 class SocketServer {
     private let socketPath: String
-    private var listener: NSocketListener?
+    private var listener: NWListenerSocket?
     private var engine: AudioCaptureEngine
     private var isRunning = false
     private var requestId = 1
+    private var shouldExit = false
     
     init(socketPath: String, engine: AudioCaptureEngine) {
         self.socketPath = socketPath
         self.engine = engine
     }
     
+    deinit {
+        listener?.cancel()
+        try? FileManager.default.removeItem(atPath: socketPath)
+    }
+    
     func start() throws {
-        // Remove existing socket file
         let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: socketPath) {
-            try fileManager.removeItem(atPath: socketPath)
-        }
         
         // Create socket directory if needed
         let socketDir = (socketPath as NSString).deletingLastPathComponent
@@ -515,26 +527,37 @@ class SocketServer {
             try fileManager.createDirectory(atPath: socketDir, withIntermediateDirectories: true)
         }
         
+        if fileManager.fileExists(atPath: socketPath) {
+            try fileManager.removeItem(atPath: socketPath)
+        }
+        
         // Create Unix socket listener
-        let socket = try NWListenerSocket(unixSocketPath: socketPath)
-        socket.acceptHandler = { [weak self] conn in
+        let newListener = try NWListenerSocket(unixSocketPath: socketPath)
+        newListener.acceptHandler = { [weak self] conn in
             self?.handleConnection(conn)
         }
-        socket.stateUpdateHandler = { [weak self] state in
+        newListener.stateUpdateHandler = { [weak self] state in
             if case .cancelled = state {
                 self?.isRunning = false
             }
         }
         
-        try socket.resume()
+        try newListener.resume()
+        
+        self.listener = newListener
         isRunning = true
         
-        // Handle SIGTERM for graceful shutdown
+        // Handle SIGTERM and SIGINT for graceful shutdown
+        let socketPathForSignal = socketPath
         signal(SIGTERM) { _ in
-            exit(0)
+            shouldExit = true
+            CFRunLoopStop(CFRunLoopGetMain())
+        }
+        signal(SIGINT) { _ in
+            shouldExit = true
+            CFRunLoopStop(CFRunLoopGetMain())
         }
         
-        // Run event loop
         RunLoop.current.run()
     }
     
@@ -668,6 +691,10 @@ class NWListenerSocket {
     
     func resume() throws {
         try listener?.resume()
+    }
+    
+    func cancel() {
+        listener?.cancel()
     }
 }
 

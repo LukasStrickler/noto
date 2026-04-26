@@ -213,9 +213,9 @@ func (a app) providers(ctx context.Context, args []string) error {
 	}
 	switch args[0] {
 	case "list":
-		return a.providersList(ctx)
+		return a.providersList(ctx, args[1:])
 	case "status":
-		return a.providersStatus(ctx)
+		return a.providersStatus(ctx, args[1:])
 	case "set-default":
 		if len(args) != 3 {
 			return notoerr.New("missing_argument", "Usage: noto providers set-default <transcription|summary> <provider-or-model>.", nil)
@@ -245,7 +245,10 @@ func (a app) providers(ctx context.Context, args []string) error {
 	}
 }
 
-func (a app) providersList(ctx context.Context) error {
+func (a app) providersList(ctx context.Context, args []string) error {
+	if !hasJSONFlag(args) {
+		return notoerr.New("missing_json_flag", "Use noto providers list --json for machine-readable output.", nil)
+	}
 	cfg, err := a.config.Load()
 	if err != nil {
 		return err
@@ -257,7 +260,10 @@ func (a app) providersList(ctx context.Context) error {
 	return writeJSON(a.out, response)
 }
 
-func (a app) providersStatus(ctx context.Context) error {
+func (a app) providersStatus(ctx context.Context, args []string) error {
+	if !hasJSONFlag(args) {
+		return notoerr.New("missing_json_flag", "Use noto providers status --json for machine-readable output.", nil)
+	}
 	cfg, err := a.config.Load()
 	if err != nil {
 		return err
@@ -359,7 +365,7 @@ func (a app) record(ctx context.Context, args []string) error {
 		SchemaVersion:    "manifest.v1",
 		MeetingID:        meetingID.String(),
 		CurrentVersionID: versionID,
-		Title:           title,
+		Metadata:        artifacts.ManifestMetadata{Title: title},
 		Versions: []artifacts.ManifestVersion{
 			{
 				VersionID: versionID,
@@ -429,62 +435,89 @@ func (a app) stop(ctx context.Context, args []string) error {
 
 	if stopResult != nil && len(audioData) > 0 {
 		refs, err := storage.ListMeetings(a.recordingsDir)
-		if err == nil && len(refs) > 0 {
-			lastMeeting := refs[0]
-			layout, err := storage.LayoutFor(a.recordingsDir, lastMeeting.MeetingID)
-			if err == nil {
-				audioPath := filepath.Join(layout.MeetingDir, "audio.m4a")
-				if err := os.WriteFile(audioPath, audioData, 0644); err == nil {
-					fmt.Fprintf(a.out, "Audio written to: %s\n", audioPath)
+		if err != nil {
+			return fmt.Errorf("failed to list meetings: %w", err)
+		}
+		if len(refs) == 0 {
+			return fmt.Errorf("no meetings found to associate audio with")
+		}
+		lastMeeting := refs[0]
+		layout, err := storage.LayoutFor(a.recordingsDir, lastMeeting.MeetingID)
+		if err != nil {
+			return err
+		}
+		audioPath := filepath.Join(layout.MeetingDir, "audio.m4a")
+		if err := os.WriteFile(audioPath, audioData, 0644); err != nil {
+			return fmt.Errorf("failed to write audio file: %w", err)
+		}
+		fmt.Fprintf(a.out, "Audio written to: %s\n", audioPath)
 
-					versionID := lastMeeting.CurrentVersionID
-					versionAudioDir := layout.VersionDir(versionID)
-					versionAudioPath := filepath.Join(versionAudioDir, "audio")
-					os.MkdirAll(versionAudioPath, 0755)
-					os.WriteFile(filepath.Join(versionAudioPath, "recording.m4a"), audioData, 0644)
+		versionID := lastMeeting.CurrentVersionID
+		versionAudioDir := layout.VersionDir(versionID)
+		versionAudioPath := filepath.Join(versionAudioDir, "audio")
+		os.MkdirAll(versionAudioPath, 0755)
+		os.WriteFile(filepath.Join(versionAudioPath, "recording.m4a"), audioData, 0644)
 
-					audioMeta := &artifacts.AudioMetadata{
-						SchemaVersion:   "audio-asset.v1",
-						MeetingID:       lastMeeting.MeetingID.String(),
-						AssetID:         fmt.Sprintf("aud_%s", uuid.New().String()[:12]),
-						Path:            "audio/recording.m4a",
-						Format:          stopResult.Format,
-						Codec:           stopResult.Codec,
-						DurationSeconds: durationSecs,
-						Channels:        stopResult.Channels,
-						SampleRateHz:    stopResult.SampleRateHz,
-						SizeBytes:       stopResult.SizeBytes,
-						Sources: []artifacts.AudioSource{
-							{ID: "src_mic", Role: "local_speaker", Label: "Microphone", Channel: 0},
-							{ID: "src_system", Role: "participants", Label: "System Audio", Channel: 1},
-						},
-					}
+		audioMeta := &artifacts.AudioMetadata{
+			SchemaVersion:   "audio-asset.v1",
+			MeetingID:       lastMeeting.MeetingID.String(),
+			AssetID:         fmt.Sprintf("aud_%s", uuid.New().String()[:12]),
+			Path:            "audio/recording.m4a",
+			Format:          stopResult.Format,
+			Codec:           stopResult.Codec,
+			DurationSeconds: durationSecs,
+			Channels:        stopResult.Channels,
+			SampleRateHz:    stopResult.SampleRateHz,
+			SizeBytes:       stopResult.SizeBytes,
+			Sources: []artifacts.AudioSource{
+				{ID: "src_mic", Role: "local_speaker", Label: "Microphone", Channel: 0},
+				{ID: "src_system", Role: "participants", Label: "System Audio", Channel: 1},
+			},
+		}
 
-					versionAudioMetaPath := filepath.Join(versionAudioDir, "audio.json")
-					audioMetaData, _ := json.MarshalIndent(audioMeta, "", "  ")
-					tmpPath := filepath.Join(layout.TmpDir, "audio_meta.tmp")
-					os.WriteFile(tmpPath, audioMetaData, 0644)
-					os.Rename(tmpPath, versionAudioMetaPath)
+		var stopErrs []error
 
-					fmt.Fprintf(a.out, "Audio metadata written.\n")
+		versionAudioMetaPath := filepath.Join(versionAudioDir, "audio.json")
+		audioMetaData, err := json.MarshalIndent(audioMeta, "", "  ")
+		if err != nil {
+			stopErrs = append(stopErrs, fmt.Errorf("failed to marshal audio metadata: %w", err))
+		} else {
+			tmpPath := filepath.Join(layout.TmpDir, "audio_meta.tmp")
+			if err := os.WriteFile(tmpPath, audioMetaData, 0644); err != nil {
+				stopErrs = append(stopErrs, fmt.Errorf("failed to write audio metadata temp file: %w", err))
+			} else if err := os.Rename(tmpPath, versionAudioMetaPath); err != nil {
+				stopErrs = append(stopErrs, fmt.Errorf("failed to rename audio metadata file: %w", err))
+			} else {
+				fmt.Fprintf(a.out, "Audio metadata written.\n")
+			}
+		}
 
-					if speechProvider != nil && durationSecs > 0 {
-						fmt.Fprintf(a.out, "Transcribing...\n")
-						transcript, err := a.runTranscription(ctx, speechProvider, audioData, lastMeeting.MeetingID.String())
-						if err == nil {
-							if err := storage.WriteTranscript(layout, transcript); err == nil {
-								fmt.Fprintf(a.out, "Transcript written.\n")
+		var transcriptionErr error
+		if speechProvider != nil && durationSecs > 0 {
+			fmt.Fprintf(a.out, "Transcribing...\n")
+			transcript, err := a.runTranscription(ctx, speechProvider, audioData, lastMeeting.MeetingID.String())
+			if err != nil {
+				transcriptionErr = err
+				fmt.Fprintf(a.errOut, "Transcription failed: %v\n", err)
+			} else if err := storage.WriteTranscript(layout, transcript); err != nil {
+				transcriptionErr = err
+				fmt.Fprintf(a.errOut, "Failed to write transcript: %v\n", err)
+			} else {
+				fmt.Fprintf(a.out, "Transcript written.\n")
 
-								if err := a.indexMeeting(lastMeeting.MeetingID.String(), lastMeeting.Title, transcript, nil); err == nil {
-									fmt.Fprintf(a.out, "Indexed for search.\n")
-								}
-							}
-						} else {
-							fmt.Fprintf(a.errOut, "Transcription failed: %v\n", err)
-						}
-					}
+				if err := a.indexMeeting(lastMeeting.MeetingID.String(), lastMeeting.Title, transcript, nil); err != nil {
+					fmt.Fprintf(a.errOut, "Failed to index meeting for search: %v\n", err)
+				} else {
+					fmt.Fprintf(a.out, "Indexed for search.\n")
 				}
 			}
+		}
+
+		if len(stopErrs) > 0 {
+			return stopErrs[0]
+		}
+		if transcriptionErr != nil {
+			return transcriptionErr
 		}
 	}
 
@@ -525,6 +558,7 @@ func (a app) importAudio(ctx context.Context, args []string) error {
 		SchemaVersion:    "manifest.v1",
 		MeetingID:        meetingID.String(),
 		CurrentVersionID: result.VersionID,
+		Metadata:        artifacts.ManifestMetadata{Title: title},
 		Versions: []artifacts.ManifestVersion{
 			{
 				VersionID: result.VersionID,
@@ -565,7 +599,7 @@ func (a app) importAudio(ctx context.Context, args []string) error {
 	if err != nil {
 		fmt.Fprintf(a.errOut, "Transcription failed: %v\n", err)
 		return writeJSON(a.out, map[string]any{
-			"ok":         true,
+			"ok":         false,
 			"meeting_id":  meetingID.String(),
 			"audio":      result.AudioMetadata,
 			"transcribed": false,
@@ -633,6 +667,7 @@ func (a app) importTranscript(ctx context.Context, args []string) error {
 		SchemaVersion:    "manifest.v1",
 		MeetingID:        meetingID.String(),
 		CurrentVersionID: versionID,
+		Metadata:        artifacts.ManifestMetadata{Title: title},
 		Versions: []artifacts.ManifestVersion{
 			{
 				VersionID: versionID,
@@ -653,7 +688,7 @@ func (a app) importTranscript(ctx context.Context, args []string) error {
 	return writeJSON(a.out, map[string]any{
 		"ok":         true,
 		"meeting_id": meetingID.String(),
-		"transcript": &transcript,
+		"transcript": transcript,
 	})
 }
 
@@ -778,7 +813,7 @@ func (a app) summarize(ctx context.Context, args []string) error {
 func (a app) search(ctx context.Context, args []string) error {
 	query := extractSearchQuery(args)
 	if query == "" {
-		return notoerr.New("missing_query", "Usage: noto search --json \"query\".", nil)
+		return notoerr.New("missing_query", "Usage: noto search --json \"<query>\".", nil)
 	}
 
 	isJSON := hasJSONFlag(args)
@@ -834,7 +869,9 @@ func (a app) index(ctx context.Context, args []string) error {
 		transcript, _ := storage.ReadTranscript(layout)
 		var summary *artifacts.Summary
 		if summaryData, err := os.ReadFile(layout.SummaryPath); err == nil {
-			json.Unmarshal(summaryData, &summary)
+			if err := json.Unmarshal(summaryData, &summary); err != nil {
+				fmt.Fprintf(a.errOut, "Warning: failed to parse summary for meeting %s: %v\n", ref.MeetingID, err)
+			}
 		}
 
 		segments := make([]search.TranscriptSegment, 0)
@@ -971,7 +1008,9 @@ func (a app) show(ctx context.Context, args []string) error {
 
 	var summary *artifacts.Summary
 	if len(summaryData) > 0 {
-		json.Unmarshal(summaryData, &summary)
+		if err := json.Unmarshal(summaryData, &summary); err != nil {
+			fmt.Fprintf(a.errOut, "Warning: failed to parse summary: %v\n", err)
+		}
 	}
 
 	return writeJSON(a.out, map[string]any{
@@ -1081,7 +1120,7 @@ func (a app) summary(ctx context.Context, args []string) error {
 	return writeJSON(a.out, map[string]any{
 		"ok":         true,
 		"meeting_id": meetingIDStr,
-		"summary":    &summary,
+		"summary":    summary,
 	})
 }
 
@@ -1148,12 +1187,17 @@ func (a app) files(ctx context.Context, args []string) error {
 		{"path": layout.SummaryPath, "type": "summary"},
 	}
 
-	versionDir := layout.VersionDir(manifest.CurrentVersionID)
-	files = append(files, map[string]string{
-		"path": layout.VersionManifestPath(manifest.CurrentVersionID),
-		"type": "version_manifest",
-	})
-	_ = versionDir
+	if manifest != nil {
+		files = append(files, map[string]string{
+			"path": layout.VersionManifestPath(manifest.CurrentVersionID),
+			"type": "version_manifest",
+		})
+	} else {
+		files = append(files, map[string]string{
+			"path": "",
+			"type": "version_manifest",
+		})
+	}
 
 	return writeJSON(a.out, map[string]any{
 		"ok":         true,
@@ -1328,7 +1372,7 @@ func (a app) benchmarkCompare(ctx context.Context, args []string) error {
 	}
 
 	for _, m1 := range result1.Results {
-		if _, ok := result2.Results == nil || !containsMetric(result2.Results, m1.Metric) {
+		if result2.Results == nil || !containsMetric(result2.Results, m1.Metric) {
 			fmt.Fprintf(a.out, "%-45s %12.4f %12s %12s %-8s\n", m1.Metric, m1.Value, "(none)", "N/A", "REMOVED")
 		}
 	}
@@ -1501,10 +1545,6 @@ func randomSuffix() string {
 		b[i] = byte(uuid.New().ID() % 256)
 	}
 	return fmt.Sprintf("%x", b)
-}
-
-func (a app) notImplemented(command string) error {
-	return notoerr.New("not_implemented", "This command is part of the documented V1 surface but is not implemented in this build yet.", map[string]any{"command": command})
 }
 
 func (a app) setSpeech(providerID string) error {

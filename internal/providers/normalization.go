@@ -122,8 +122,11 @@ func NormalizeSpeakerLabels(transcript *artifacts.Transcript) *artifacts.Transcr
 			speakerNum++
 		}
 
-		result.Segments[i] = seg
-		result.Segments[i].SpeakerID = newSpeakerID
+		copiedSeg := seg
+		copiedSeg.WordIDs = make([]string, len(seg.WordIDs))
+		copy(copiedSeg.WordIDs, seg.WordIDs)
+		copiedSeg.SpeakerID = newSpeakerID
+		result.Segments[i] = copiedSeg
 	}
 
 	return result
@@ -171,6 +174,9 @@ func contains(s, substr string) bool {
 }
 
 func containsHelper(s, substr string) bool {
+	if len(s) < len(substr) {
+		return false
+	}
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
 			return true
