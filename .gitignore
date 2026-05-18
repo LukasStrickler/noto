@@ -1,18 +1,103 @@
-# Build artifacts
-bin/
+# ============================================================
+# noto .gitignore
+# ============================================================
 
-# Local Go toolchain bootstrapped by scripts/go
+# --- Build artifacts ----------------------------------------
+bin/
+dist/
+*.exe
+*.test
+*.out
+*.prof
+coverage.*
+*.coverprofile
+
+# --- Local Go toolchain bootstrapped by scripts/go ----------
 .tools/
 
-# Local planning / scratch dirs
+# --- Local planning / scratch dirs --------------------------
 .omo/
+.scratch/
+tmp/
+.tmp/
 
-# Editor & OS
-.DS_Store
-*.swp
-
-# Local dev data
+# --- Local dev data (SQLite, audio, exports) ----------------
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.wal
+*.shm
+data/
+storage/local/
+recordings/
+exports/
+artifacts/local/
+
+# --- Logs ---------------------------------------------------
+*.log
+logs/
+
+# --- Audio / media test fixtures ---------------------------
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+
+# --- Editor / IDE -------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.cursor/
+.zed/
+.claude/
+.aider*
+.notepads/
+
+# --- macOS / Windows / Linux junk --------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Env / secrets ------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+.secrets/
+
+# --- Go tooling ---------------------------------------------
+vendor/
+go.work
+go.work.sum
+
+# --- Node / Python (in case Swift/host helpers grow) -------
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.python-version
+
+# --- Swift / Xcode (cmd/capture is a macOS helper) ---------
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# --- Misc agent state ---------------------------------------
+.sisyphus/runs/
+.sisyphus/cache/
