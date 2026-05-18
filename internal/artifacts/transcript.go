@@ -68,6 +68,10 @@ func (t *Transcript) Kind() ArtifactKind {
 	return KindTranscript
 }
 
+func (t *Transcript) Version() string {
+	return t.SchemaVersion
+}
+
 func (t *Transcript) Validate() *notoerr.Error {
 	if t.SchemaVersion != "transcript.v1" {
 		return notoerr.New(ErrCodeValidationFailed, "schema_version must be transcript.v1", map[string]any{"schema_version": t.SchemaVersion})

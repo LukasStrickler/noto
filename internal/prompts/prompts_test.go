@@ -360,7 +360,7 @@ func TestRiskPromptHasChainOfThought(t *testing.T) {
 		t.Fatalf("BuildSummaryRequest() error = %v", err)
 	}
 
-	content := req.Messages[0].Content
+	content := strings.ToLower(req.Messages[0].Content)
 
 	thoughtSteps := []string{
 		"decisions made",

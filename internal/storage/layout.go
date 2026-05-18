@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -134,16 +135,15 @@ func ParseVersionID(versionDir string) (string, error) {
 	return filepath.Base(versionDir), nil
 }
 
+// ExtractDateFromPath pulls the YYYY/MM segments out of a noto meeting
+// path. Accepts absolute or relative paths; finds the first "meetings"
+// segment and returns the two directory levels immediately after it.
 func ExtractDateFromPath(meetingPath string) (year, month string, err error) {
-	rel, err := filepath.Rel("meetings", meetingPath)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to extract date from path: %w", err)
+	parts := strings.Split(filepath.ToSlash(meetingPath), "/")
+	for i, p := range parts {
+		if p == "meetings" && i+2 < len(parts) {
+			return parts[i+1], parts[i+2], nil
+		}
 	}
-
-	parts := filepath.SplitList(rel)
-	if len(parts) < 3 {
-		return "", "", fmt.Errorf("path does not contain year/month: %s", meetingPath)
-	}
-
-	return parts[0], parts[1], nil
+	return "", "", fmt.Errorf("path does not contain meetings/YYYY/MM: %s", meetingPath)
 }

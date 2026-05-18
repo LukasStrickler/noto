@@ -55,10 +55,10 @@ const EnvPrefix = "NOTO"
 
 // Default values
 const (
-	DefaultRecordingsDir    = "recordings"
-	DefaultArtifactRootName = "Noto"
+	DefaultRecordingsDirName = "recordings"
+	DefaultArtifactRootName  = "Noto"
 	DefaultConfigDirName    = ".noto"
-	DefaultSTTProvider      = "mistral"
+	DefaultSTTProvider      = "assemblyai"
 	DefaultLLMProvider      = "openrouter"
 	DefaultLLMModel        = "openai/gpt-4.1-mini"
 	DefaultSummarizer      = "openrouter"
@@ -101,7 +101,7 @@ func DefaultArtifactRoot() string {
 
 // DefaultRecordingsDir returns the default recordings directory path.
 func DefaultRecordingsDir() string {
-	return filepath.Join(DefaultArtifactRoot(), DefaultRecordingsDir)
+	return filepath.Join(DefaultArtifactRoot(), DefaultRecordingsDirName)
 }
 
 // AppName returns the application name used by Viper.

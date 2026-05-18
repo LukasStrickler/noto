@@ -66,6 +66,21 @@ expected, and index freshness. It must return stable machine-readable failure
 codes for missing files, schema failures, checksum mismatches, invalid source
 roles, and stale indexes.
 
+## Playback
+
+```text
+noto play <meeting_id> [--speed <rate>]
+```
+
+Playback meeting audio using macOS `afplay`. Speed can be any positive number (e.g., 1, 1.25, 1.5, 1.75, 2). Default speed is 1x.
+
+The command auto-discovers the audio file from the meeting directory, supporting `.m4a`, `.wav`, `.mp3`, and `.aac` formats.
+
+```text
+noto play 550e8400-e29b-41d4-a716-446655440000 --speed 1.5
+noto play 550e8400-e29b-41d4-a716-446655440000 1.25
+```
+
 ## Search
 
 ```text
@@ -85,9 +100,27 @@ architecture reference to implementation work.
 
 ```text
 noto providers list --json
-noto providers set-default transcription <provider>
-noto providers set-default summary <provider>
+noto providers key-set <provider> --value <api-key>
+noto providers key-remove <provider>
+noto providers test <provider>
+noto providers active-speech <provider>
+noto providers active-llm <model-id>
 ```
+
+`providers list` reports each provider's id, kind (speech/llm/fake), whether a
+key is configured, and the storage source (`keychain`, `file`, or `env:<NAME>`).
+On macOS, keys live in the Login Keychain under service `noto`. On Linux and
+Windows they live in `~/.noto/credentials.json` with mode 0600. `env:*`
+variables (e.g. `ASSEMBLYAI_API_KEY`, `OPENROUTER_API_KEY`,
+`NOTO_LOCAL_STT_URL`) are read as fallback when no keychain entry is set.
+
+The same operations are available from the TUI on the **config** screen
+(`,` or `4`).
+
+The `local` provider lets you point at any OpenAI-compatible STT server —
+whisper.cpp's HTTP server, faster-whisper-server, vLLM, NVIDIA NIM Parakeet,
+etc. Set `NOTO_LOCAL_STT_URL` (and optionally `NOTO_LOCAL_STT_KEY`) and
+select `local` as the active speech provider.
 
 ## Benchmarks
 

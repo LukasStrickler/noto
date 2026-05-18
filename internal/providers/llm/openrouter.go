@@ -298,7 +298,7 @@ func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetin
 		},
 	}
 
-	if err := artifacts.ValidateSummary(summary, transcript); err != nil {
+	if err := artifacts.ValidateSummary(*summary, transcript); err != nil {
 		return nil, notoerr.Wrap("summary_invalid", "OpenRouter summary failed validation.", err)
 	}
 

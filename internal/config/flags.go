@@ -44,46 +44,74 @@ var FlagDescriptions = map[string]string{
 	FlagStorageS3Endpoint: "S3 endpoint URL (for R2)",
 }
 
-// BindFlags binds configuration keys to CLI flags using Viper.
+// BindFlags binds configuration keys to CLI flags using Viper. Idempotent
+// per (FlagSet, name): if the caller already registered a flag by the
+// same name we leave it alone so binding still works without a panic.
 func BindFlags(flagSet *pflag.FlagSet, v viperCfg) {
-	flagSet.String(FlagRecordingsDir, "", FlagDescriptions[FlagRecordingsDir])
-	flagSet.String(FlagArtifactRoot, "", FlagDescriptions[FlagArtifactRoot])
-	flagSet.String(FlagConfigDir, "", FlagDescriptions[FlagConfigDir])
-	flagSet.String(FlagSTTProvider, "", FlagDescriptions[FlagSTTProvider])
-	flagSet.String(FlagLLMProvider, "", FlagDescriptions[FlagLLMProvider])
-	flagSet.String(FlagLLMModel, "", FlagDescriptions[FlagLLMModel])
-	flagSet.String(FlagSummarizer, "", FlagDescriptions[FlagSummarizer])
-	flagSet.String(FlagUITheme, "", FlagDescriptions[FlagUITheme])
-	flagSet.Bool(FlagSyncEnabled, false, FlagDescriptions[FlagSyncEnabled])
-	flagSet.String(FlagSyncEndpoint, "", FlagDescriptions[FlagSyncEndpoint])
-	flagSet.String(FlagSyncBucket, "", FlagDescriptions[FlagSyncBucket])
-	flagSet.String(FlagStorageType, "", FlagDescriptions[FlagStorageType])
-	flagSet.String(FlagStorageLocalPath, "", FlagDescriptions[FlagStorageLocalPath])
-	flagSet.String(FlagStorageS3Bucket, "", FlagDescriptions[FlagStorageS3Bucket])
-	flagSet.String(FlagStorageS3Region, "", FlagDescriptions[FlagStorageS3Region])
-	flagSet.String(FlagStorageS3Endpoint, "", FlagDescriptions[FlagStorageS3Endpoint])
+	addStr := func(name string) {
+		if flagSet.Lookup(name) == nil {
+			flagSet.String(name, "", FlagDescriptions[name])
+		}
+	}
+	addBool := func(name string) {
+		if flagSet.Lookup(name) == nil {
+			flagSet.Bool(name, false, FlagDescriptions[name])
+		}
+	}
+	addStr(FlagRecordingsDir)
+	addStr(FlagArtifactRoot)
+	addStr(FlagConfigDir)
+	addStr(FlagSTTProvider)
+	addStr(FlagLLMProvider)
+	addStr(FlagLLMModel)
+	addStr(FlagSummarizer)
+	addStr(FlagUITheme)
+	addBool(FlagSyncEnabled)
+	addStr(FlagSyncEndpoint)
+	addStr(FlagSyncBucket)
+	addStr(FlagStorageType)
+	addStr(FlagStorageLocalPath)
+	addStr(FlagStorageS3Bucket)
+	addStr(FlagStorageS3Region)
+	addStr(FlagStorageS3Endpoint)
 
-	_ = v.BindPFlag(KeyRecordingsDir, flagSet.Lookup(FlagRecordingsDir))
-	_ = v.BindPFlag(KeyArtifactRoot, flagSet.Lookup(FlagArtifactRoot))
-	_ = v.BindPFlag(KeyConfigDir, flagSet.Lookup(FlagConfigDir))
-	_ = v.BindPFlag(KeySTTDefault, flagSet.Lookup(FlagSTTProvider))
-	_ = v.BindPFlag(KeyLLMDefault, flagSet.Lookup(FlagLLMProvider))
-	_ = v.BindPFlag(KeyRoutingLLMModel, flagSet.Lookup(FlagLLMModel))
-	_ = v.BindPFlag(KeySummarizer, flagSet.Lookup(FlagSummarizer))
-	_ = v.BindPFlag(KeyUITheme, flagSet.Lookup(FlagUITheme))
-	_ = v.BindPFlag(KeySyncEnabled, flagSet.Lookup(FlagSyncEnabled))
-	_ = v.BindPFlag(KeySyncEndpoint, flagSet.Lookup(FlagSyncEndpoint))
-	_ = v.BindPFlag(KeySyncBucket, flagSet.Lookup(FlagSyncBucket))
-	_ = v.BindPFlag(KeyStorageType, flagSet.Lookup(FlagStorageType))
-	_ = v.BindPFlag(KeyStorageLocalPath, flagSet.Lookup(FlagStorageLocalPath))
-	_ = v.BindPFlag(KeyStorageS3Bucket, flagSet.Lookup(FlagStorageS3Bucket))
-	_ = v.BindPFlag(KeyStorageS3Region, flagSet.Lookup(FlagStorageS3Region))
-	_ = v.BindPFlag(KeyStorageS3Endpoint, flagSet.Lookup(FlagStorageS3Endpoint))
+	bind := func(key, flagName string) {
+		f := flagSet.Lookup(flagName)
+		_ = v.BindPFlag(key, f)
+		// viper.BindPFlag only "wins" when the flag is .Changed. To make
+		// a non-empty default value also override the config-default we
+		// surface the flag default value as a viper default — config
+		// files and env vars still take precedence, which is what
+		// callers expect.
+		if f != nil {
+			if d := f.DefValue; d != "" && d != "false" {
+				v.SetDefault(key, d)
+			}
+		}
+	}
+	bind(KeyRecordingsDir, FlagRecordingsDir)
+	bind(KeyArtifactRoot, FlagArtifactRoot)
+	bind(KeyConfigDir, FlagConfigDir)
+	bind(KeySTTDefault, FlagSTTProvider)
+	bind(KeyLLMDefault, FlagLLMProvider)
+	bind(KeyRoutingLLMModel, FlagLLMModel)
+	bind(KeySummarizer, FlagSummarizer)
+	bind(KeyUITheme, FlagUITheme)
+	bind(KeySyncEnabled, FlagSyncEnabled)
+	bind(KeySyncEndpoint, FlagSyncEndpoint)
+	bind(KeySyncBucket, FlagSyncBucket)
+	bind(KeyStorageType, FlagStorageType)
+	bind(KeyStorageLocalPath, FlagStorageLocalPath)
+	bind(KeyStorageS3Bucket, FlagStorageS3Bucket)
+	bind(KeyStorageS3Region, FlagStorageS3Region)
+	bind(KeyStorageS3Endpoint, FlagStorageS3Endpoint)
 }
 
-// ViperConfig is the interface viper implements.
+// ViperConfig is the interface viper implements. Only the subset of
+// methods BindFlags needs.
 type viperCfg interface {
 	BindPFlag(key string, flag *pflag.Flag) error
+	SetDefault(key string, value any)
 }
 
 // NewFlagSet creates a new flag set with all noto CLI flags bound.

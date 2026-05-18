@@ -183,7 +183,7 @@ Before outputting the action items:
 4. Verify that each action item is clearly stated in the transcript
 `
 
-const risksPromptTemplate = `You are an expert meeting analyst. Your task is to identify potential risks from meeting transcripts.
+var risksPromptTemplate = `You are an expert meeting analyst. Your task is to identify potential risks from meeting transcripts.
 
 ## Your Task
 Analyze the meeting transcript and identify risks. A risk is:

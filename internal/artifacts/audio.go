@@ -40,6 +40,10 @@ func (a *AudioMetadata) Kind() ArtifactKind {
 	return KindAudio
 }
 
+func (a *AudioMetadata) Version() string {
+	return a.SchemaVersion
+}
+
 func (a *AudioMetadata) Validate() *notoerr.Error {
 	if a.SchemaVersion != "audio-asset.v1" {
 		return notoerr.New(ErrCodeValidationFailed, "schema_version must be audio-asset.v1", map[string]any{"schema_version": a.SchemaVersion})

@@ -98,7 +98,7 @@ func (n *DiarizationNormalizer) Normalize(transcript *artifacts.Transcript) (*ar
 
 	result := copyTranscript(transcript)
 	result.Segments = merged
-	return &result, nil
+	return result, nil
 }
 
 // TimestampNormalizer fixes overlapping timestamps and flags gaps > 30 seconds.
@@ -181,20 +181,11 @@ func (n *TimestampNormalizer) Normalize(transcript *artifacts.Transcript) (*arti
 	}
 
 	result.Segments = segments
-	return &result, nil
+	return result, nil
 }
 
 func formatGapDuration(seconds float64) string {
 	d := time.Duration(seconds * float64(time.Second))
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	s := int(d.Seconds()) % 60
-	if h > 0 {
-		return time.Duration(d).Round(time.Second).String()
-	}
-	if m > 0 {
-		return time.Duration(d).Round(time.Second).String()
-	}
 	return d.Round(time.Second).String()
 }
 
@@ -245,14 +236,33 @@ func (n *ConfidenceNormalizer) Normalize(transcript *artifacts.Transcript) (*art
 type FormatNormalizer struct{}
 
 var (
-	// Repeated word pattern: matches same word appearing twice in a row (case-insensitive)
-	repeatedWordRE = regexp.MustCompile(`\b(\w+)\s+\1\b`)
+	// Word splitter for tokenizing on whitespace. Repeated-word collapse
+	// happens in code because RE2 has no backreferences.
+	wordSplitRE = regexp.MustCompile(`\s+`)
 	// Partial word pattern: words ending with hyphen (incomplete)
 	partialWordRE = regexp.MustCompile(`\b\w+-\s*`)
 	// Filler words to remove: um, uh, like
 	fillerWords   = []string{"um", "uh", "like"}
 	fillerPattern = regexp.MustCompile(`(?i)\b(um|uh|like)\b`)
 )
+
+// collapseRepeats removes adjacent identical words ("the the" → "the"),
+// case-insensitive. Replaces the `\b(\w+)\s+\1\b` backreference pattern
+// that RE2 cannot compile.
+func collapseRepeats(text string) string {
+	tokens := wordSplitRE.Split(text, -1)
+	if len(tokens) < 2 {
+		return text
+	}
+	out := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		if len(out) > 0 && strings.EqualFold(out[len(out)-1], tok) && tok != "" {
+			continue
+		}
+		out = append(out, tok)
+	}
+	return strings.Join(out, " ")
+}
 
 // NewFormatNormalizer creates a FormatNormalizer.
 func NewFormatNormalizer() *FormatNormalizer {
@@ -274,13 +284,7 @@ func (f *FormatNormalizer) Normalize(transcript *artifacts.Transcript) (*artifac
 		text := seg.Text
 
 		for {
-			newText := repeatedWordRE.ReplaceAllStringFunc(text, func(match string) string {
-				parts := repeatedWordRE.FindStringSubmatch(match)
-				if len(parts) >= 2 {
-					return parts[1]
-				}
-				return match
-			})
+			newText := collapseRepeats(text)
 			if newText == text {
 				break
 			}

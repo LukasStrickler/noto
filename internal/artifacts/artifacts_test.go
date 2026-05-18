@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	"github.com/lukasstrickler/noto/internal/notoerr"
 )
 
 func TestValidateManifest(t *testing.T) {
@@ -620,12 +618,12 @@ func TestAudioMetadataKindAndVersion(t *testing.T) {
 	}
 }
 
-func TestPromptVersionKindAndVersion(t *testing.T) {
-	p := PromptVersion{SchemaVersion: "prompt.v1"}
+func TestPromptVersionKind(t *testing.T) {
+	p := PromptVersion{SchemaVersion: "prompt.v1", Version: "1.0.0"}
 	if p.Kind() != KindPrompt {
 		t.Errorf("expected KindPrompt, got %s", p.Kind())
 	}
-	if p.Version() != "prompt.v1" {
-		t.Errorf("expected prompt.v1, got %s", p.Version())
+	if p.SchemaVersion != "prompt.v1" {
+		t.Errorf("expected schema prompt.v1, got %s", p.SchemaVersion)
 	}
 }

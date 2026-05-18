@@ -42,6 +42,10 @@ func (m *MeetingManifest) Kind() ArtifactKind {
 	return KindMeeting
 }
 
+func (m *MeetingManifest) Version() string {
+	return m.SchemaVersion
+}
+
 func (m *MeetingManifest) Validate() *notoerr.Error {
 	if m.SchemaVersion != "manifest.v1" {
 		return notoerr.New(ErrCodeValidationFailed, "schema_version must be manifest.v1", map[string]any{"schema_version": m.SchemaVersion})

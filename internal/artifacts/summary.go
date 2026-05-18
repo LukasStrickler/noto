@@ -41,6 +41,10 @@ func (s *Summary) Kind() ArtifactKind {
 	return KindSummary
 }
 
+func (s *Summary) Version() string {
+	return s.SchemaVersion
+}
+
 func (s *Summary) Validate() *notoerr.Error {
 	if s.SchemaVersion != "summary.v1" {
 		return notoerr.New(ErrCodeValidationFailed, "schema_version must be summary.v1", map[string]any{"schema_version": s.SchemaVersion})

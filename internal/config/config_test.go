@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/spf13/pflag"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -34,7 +32,7 @@ func TestDefaultConfig(t *testing.T) {
 
 func TestStoreSavesYAMLConfig(t *testing.T) {
 	dir := t.TempDir()
-	store := NewStore(dir)
+	_ = NewStore(dir) // store side-effects: ensures dir layout; ignored for this test
 	cfg := DefaultConfig()
 
 	if err := Save(cfg, dir); err != nil {

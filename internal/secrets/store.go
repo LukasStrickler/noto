@@ -32,6 +32,7 @@ func DefaultEnvRefs() map[string]string {
 		"provider:assemblyai": "ASSEMBLYAI_API_KEY",
 		"provider:elevenlabs": "ELEVENLABS_API_KEY",
 		"provider:openrouter": "OPENROUTER_API_KEY",
+		"provider:local":      "NOTO_LOCAL_STT_KEY",
 	}
 }
 

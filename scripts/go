@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# scripts/go — locate or bootstrap a Go toolchain and exec it.
+# Used by the Makefile so `make dev` works on a fresh checkout without
+# requiring Go to be installed globally first.
+#
+# Search order:
+#   1. $NOTO_GO env override (absolute path to a `go` binary)
+#   2. `go` in PATH
+#   3. Common system install locations
+#   4. ./.tools/go/bin/go (downloaded by this script on first use)
+#
+# If none of the above work, downloads Go into ./.tools/go and uses it.
+
+set -euo pipefail
+
+REPO_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+GO_VERSION="${NOTO_GO_VERSION:-1.24.6}"
+LOCAL_GO="${REPO_ROOT}/.tools/go/bin/go"
+
+# 1. Explicit override.
+if [[ -n "${NOTO_GO:-}" && -x "${NOTO_GO}" ]]; then
+  exec "${NOTO_GO}" "$@"
+fi
+
+# 2. PATH.
+if command -v go >/dev/null 2>&1; then
+  exec go "$@"
+fi
+
+# 3. Known locations.
+for candidate in \
+  /usr/local/go/bin/go \
+  /opt/go/bin/go \
+  "${HOME}/go/bin/go" \
+  "${HOME}/.local/go/bin/go" \
+  "${HOME}/sdk/go/bin/go" \
+  /tmp/tailscale/tool/go \
+  "${LOCAL_GO}"; do
+  if [[ -x "${candidate}" ]]; then
+    exec "${candidate}" "$@"
+  fi
+done
+
+# 4. Bootstrap into ./.tools/go.
+echo "noto: no Go toolchain found — downloading ${GO_VERSION} into .tools/go" >&2
+mkdir -p "${REPO_ROOT}/.tools"
+
+os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+arch="$(uname -m)"
+case "${arch}" in
+  x86_64)  arch=amd64 ;;
+  aarch64) arch=arm64 ;;
+  arm64)   arch=arm64 ;;
+esac
+
+url="https://go.dev/dl/go${GO_VERSION}.${os}-${arch}.tar.gz"
+echo "noto: fetching ${url}" >&2
+
+tmp="$(mktemp -t noto-go-XXXXXX.tar.gz)"
+trap 'rm -f "${tmp}"' EXIT
+
+if ! curl -fsSL "${url}" -o "${tmp}"; then
+  echo "noto: failed to download Go from ${url}" >&2
+  echo "      install Go manually (https://go.dev/dl/) or set \$NOTO_GO" >&2
+  exit 1
+fi
+
+tar -xzf "${tmp}" -C "${REPO_ROOT}/.tools"
+echo "noto: Go installed at ${LOCAL_GO}" >&2
+
+exec "${LOCAL_GO}" "$@"

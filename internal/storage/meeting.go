@@ -84,7 +84,7 @@ func fsyncFile(path string) error {
 }
 
 func fsyncDir(path string) error {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_DIRECTORY, 0644)
+	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
@@ -609,11 +609,15 @@ func VerifyMeetingChecksums(layout DirectoryLayout) error {
 		return ErrChecksumMismatch(string(expectedManifestChecksum), artifacts.ComputeChecksum(manifestData), layout.ManifestPath)
 	}
 
+	// checksums.json is only present once WritePipeline has run a full
+	// multi-file commit. A manifest-only meeting (recording just made,
+	// not yet through ingest) doesn't have it — that's not an error.
 	checksumsFile := filepath.Join(layout.MeetingDir, "checksums.json")
 	checksumData, err := os.ReadFile(checksumsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("checksums file not found: %s", checksumsFile)
+			_ = manifest
+			return nil
 		}
 		return ErrReadFailed(checksumsFile, err)
 	}

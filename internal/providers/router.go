@@ -5,6 +5,18 @@ import (
 
 	"github.com/lukasstrickler/noto/internal/artifacts"
 	"github.com/lukasstrickler/noto/internal/notoerr"
+	"github.com/lukasstrickler/noto/internal/providers/llm"
+	"github.com/lukasstrickler/noto/internal/providers/stt"
+)
+
+// Type aliases re-export the provider interfaces and option structs at the
+// top-level `providers` package so callers (router, wrappers) can use them
+// without explicitly importing the leaf packages.
+type (
+	STTProvider       = stt.STTProvider
+	LLMProvider       = llm.LLMProvider
+	TranscribeOptions = stt.TranscribeOptions
+	SummarizeOptions  = llm.SummarizeOptions
 )
 
 type RoutingProfile string
@@ -58,8 +70,8 @@ func (r CapabilityRouter) Resolve(cap Capability) (ProviderSuite, error) {
 		return providerWithCapability(r.Registry, "openrouter", cap)
 	}
 
-	if r.Policy.SpeechProvider == RoutingProfileBenchmarkSelected.String() {
-		return ProviderSuite{}, notoerr.New("benchmark_selection_missing", "No benchmark-selected speech provider has been written to config yet.", nil)
+	if r.Policy.Profile == RoutingProfileBenchmarkSelected {
+		return ProviderSuite{}, notoerr.New("benchmark_selection_missing", "No benchmark-selected speech provider has been set in config.", nil)
 	}
 	return providerWithCapability(r.Registry, r.Policy.SpeechProvider, cap)
 }

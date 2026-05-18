@@ -199,7 +199,7 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 			segment_id,
 			result_type,
 			bm25(meetings_fts, `+fmt.Sprintf("%.1f, %.2f", BM25K1, BM25B)+`) as rank,
-			snippet(meetings_fts, 2, '**', '**', '...', 32) as snippet
+			snippet(meetings_fts, -1, '**', '**', '...', 16) as snippet
 		FROM meetings_fts
 		WHERE meetings_fts MATCH ?
 		ORDER BY rank ASC

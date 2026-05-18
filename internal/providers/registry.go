@@ -69,6 +69,22 @@ func DefaultRegistry() Registry {
 			}},
 		},
 		{
+			ID:                     "local",
+			DisplayName:            "Local (whisper.cpp / NVIDIA Parakeet)",
+			Kind:                   ProviderKindSpeech,
+			Capabilities:           []Capability{CapabilityTranscribe, CapabilityWordTimestamps},
+			CredentialRef:          "provider:local",
+			RequiresNetwork:        false,
+			SendsRawAudioOffDevice: false,
+			PricingHint:            "Free. Runs against any OpenAI-compatible STT server (whisper.cpp, faster-whisper, NVIDIA NIM Parakeet).",
+			Notes:                  "Point NOTO_LOCAL_STT_URL at e.g. http://127.0.0.1:8000/v1/audio/transcriptions. Parakeet-TDT v2 currently leads the open ASR leaderboard.",
+			Models: []Model{{
+				ID:           "auto",
+				DisplayName:  "Whatever the local server exposes",
+				Capabilities: []Capability{CapabilityTranscribe, CapabilityWordTimestamps},
+			}},
+		},
+		{
 			ID:                     "openrouter",
 			DisplayName:            "OpenRouter",
 			Kind:                   ProviderKindLLM,

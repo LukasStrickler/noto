@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/lukasstrickler/noto/internal/appsocket"
 )
 
 func main() {
@@ -111,7 +113,7 @@ func cmdStart(ctx context.Context, args []string) error {
 	
 	sourceList := parseSources(*sources)
 	
-	client, err := NewIPCClient()
+	client, err := appsocket.NewIPCClient()
 	if err != nil {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
@@ -128,7 +130,7 @@ func cmdStart(ctx context.Context, args []string) error {
 }
 
 func cmdStop(ctx context.Context) error {
-	client, err := NewIPCClient()
+	client, err := appsocket.NewIPCClient()
 	if err != nil {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
@@ -145,7 +147,7 @@ func cmdStop(ctx context.Context) error {
 }
 
 func cmdPause(ctx context.Context) error {
-	client, err := NewIPCClient()
+	client, err := appsocket.NewIPCClient()
 	if err != nil {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
@@ -160,7 +162,7 @@ func cmdPause(ctx context.Context) error {
 }
 
 func cmdResume(ctx context.Context) error {
-	client, err := NewIPCClient()
+	client, err := appsocket.NewIPCClient()
 	if err != nil {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
@@ -175,7 +177,7 @@ func cmdResume(ctx context.Context) error {
 }
 
 func cmdLevel(ctx context.Context) error {
-	client, err := NewIPCClient()
+	client, err := appsocket.NewIPCClient()
 	if err != nil {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
@@ -192,7 +194,7 @@ func cmdLevel(ctx context.Context) error {
 }
 
 func cmdStatus(ctx context.Context) error {
-	client, err := NewIPCClient()
+	client, err := appsocket.NewIPCClient()
 	if err != nil {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
@@ -215,7 +217,7 @@ func cmdStatus(ctx context.Context) error {
 }
 
 func cmdAudio(ctx context.Context) error {
-	client, err := NewIPCClient()
+	client, err := appsocket.NewIPCClient()
 	if err != nil {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}

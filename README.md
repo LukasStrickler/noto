@@ -10,10 +10,34 @@ them with SQLite FTS5, and lets you browse/search meetings from the TUI.
 
 ## Status
 
-Planning phase. V1 is local-first: TUI, macOS recording, ingestion,
-transcription, summaries, and search. Object-store sync, hosted APIs, hosted
-provider routing, and local transcription are later phases. The active
-documentation lives in [.docs](./.docs/README.md).
+Implementation alpha. V1 is local-first: a Bubble Tea TUI talking to an
+in-process HTTP server, macOS recording via a Swift helper, async ingest /
+transcribe / summarize / index jobs, and SQLite FTS5 search. Object-store
+sync and a hosted gateway remain later phases.
+
+## Quickstart
+
+```bash
+# from a checked-out repo
+make dev           # opens the TUI, auto-warms the capture helper
+```
+
+If Go isn't installed system-wide, `make dev` downloads a local toolchain into
+`./.tools/go/` on first run — see `scripts/go`. Active documentation lives in
+[.docs](./.docs/README.md).
+
+### Provider keys
+
+Open the TUI, press `,` (or `4`) to land on the **config** screen. The left
+pane shows what's active and where artifacts live. The right pane lists
+providers — pick one, press `e`, paste the key. Keys persist via macOS
+Keychain on darwin and `~/.noto/credentials.json` (0600) elsewhere. `a` on a
+highlighted speech provider makes it the active route.
+
+The V1 defaults are tuned for AssemblyAI (speaker labels on by default).
+A `local` provider entry talks to any OpenAI-compatible STT server — point
+`NOTO_LOCAL_STT_URL` at e.g. whisper.cpp's HTTP server or NVIDIA NIM
+Parakeet to keep transcription on-device.
 
 ## Scope
 
@@ -34,6 +58,7 @@ noto search --json "pricing decision"
 noto verify --json
 noto show <meeting_id>
 noto transcript --json <meeting_id>
+noto play <meeting_id> [--speed <rate>]
 ```
 
 ## Architecture
