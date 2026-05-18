@@ -781,9 +781,21 @@ func (s *Service) runIndex(ctx context.Context, job *notoapi.Job) error {
 	for _, r := range risks {
 		riskItems = append(riskItems, search.SummaryItem{Text: r})
 	}
+	// Pull the meeting's manifest-recorded creation time so the index's
+	// recency tiebreaker matches the disk-side list-by-recency order.
+	createdAt := time.Now().UTC()
+	if manifest, err := storage.ReadManifest(layout); err == nil {
+		for _, v := range manifest.Versions {
+			if v.VersionID == manifest.CurrentVersionID {
+				createdAt = v.CreatedAt
+				break
+			}
+		}
+	}
 	input := &search.IndexMeetingInput{
 		MeetingID:          mid.String(),
 		Title:              title,
+		CreatedAt:          createdAt,
 		TranscriptSegments: segs,
 		Decisions:          decItems,
 		ActionItems:        actItems,

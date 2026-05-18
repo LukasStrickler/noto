@@ -136,8 +136,9 @@ type SearchOpts struct {
 }
 
 type SearchResult struct {
-	Hits  []SearchHit `json:"hits"`
-	Total int         `json:"total"`
+	Hits     []SearchHit   `json:"hits"`
+	Meetings []MeetingHits `json:"meetings,omitempty"`
+	Total    int           `json:"total"`
 }
 
 type SearchHit struct {
@@ -149,6 +150,21 @@ type SearchHit struct {
 	Snippet      string  `json:"snippet"`
 	BM25Score    float64 `json:"bm25_score"`
 	ResultType   string  `json:"result_type"`
+}
+
+// MeetingHits is the per-meeting aggregation a UI needs to render
+// "5 transcript matches, 2 summary matches" badges and decide whether
+// to show a title-first row or a body-only row.
+type MeetingHits struct {
+	MeetingID       string      `json:"meeting_id"`
+	MeetingTitle    string      `json:"meeting_title"`
+	CreatedAt       time.Time   `json:"created_at"`
+	TitleMatch      bool        `json:"title_match"`
+	TranscriptCount int         `json:"transcript_count"`
+	SummaryCount    int         `json:"summary_count"`
+	Score           float64     `json:"score"`
+	Snippet         string      `json:"snippet"`
+	TopHits         []SearchHit `json:"top_hits,omitempty"`
 }
 
 // ---------- Recording ----------

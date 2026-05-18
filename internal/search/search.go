@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -27,16 +30,65 @@ type SearchResult struct {
 	SegmentID   string
 	Timestamp   float64
 	ResultType  ResultType
+	CreatedAt   time.Time
+}
+
+// MeetingHits aggregates per-meeting search counts for the UI: titles
+// first, then meetings with transcript/summary text matches, ordered by
+// best score and recency tiebreaker.
+type MeetingHits struct {
+	MeetingID       string
+	MeetingTitle    string
+	CreatedAt       time.Time
+	TitleMatch      bool
+	TranscriptCount int
+	SummaryCount    int
+	BestScore       float64
+	Snippet         string
+	Hits            []SearchResult
 }
 
 type ResultType string
 
 const (
+	ResultTypeTitle      ResultType = "title"
 	ResultTypeTranscript ResultType = "transcript"
-	ResultTypeDecision  ResultType = "decision"
-	ResultTypeAction    ResultType = "action"
-	ResultTypeRisk      ResultType = "risk"
+	ResultTypeDecision   ResultType = "decision"
+	ResultTypeAction     ResultType = "action"
+	ResultTypeRisk       ResultType = "risk"
 )
+
+// FTS5 column order for bm25() weights. KEEP IN SYNC with the
+// CREATE VIRTUAL TABLE statement in NewSearchIndex.
+const (
+	colContent     = 0
+	colMeetingID   = 1
+	colTitle       = 2
+	colSegmentText = 3
+	colSpeaker     = 4
+	colDecisions   = 5
+	colActions     = 6
+	colRisks       = 7
+	colSegmentID   = 8
+	colResultType  = 9
+	colCount       = 10
+)
+
+// Per-column BM25 weights. Title is heavily boosted so a title-match
+// always outranks a body-only match. ID/segment-id/result-type get
+// weight 0 — they're stored for filtering, not relevance.
+var columnWeights = [colCount]float64{
+	colContent:     1.0,
+	colMeetingID:   0.0,
+	colTitle:       5.0,
+	colSegmentText: 1.0,
+	colSpeaker:     0.5,
+	colDecisions:   2.0,
+	colActions:     2.0,
+	colRisks:       2.0,
+	colSegmentID:   0.0,
+	colResultType:  0.0,
+}
 
 func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 	s.mu.Lock()
@@ -91,6 +143,21 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 		}
 	}
 
+	// Sidecar metadata: title + created_at, used for recency tiebreaker
+	// and for surfacing a friendly title even when only a transcript
+	// segment matched the query.
+	createdAt := meeting.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO meetings_meta(meeting_id, title, created_at)
+		VALUES(?, ?, ?)
+		ON CONFLICT(meeting_id) DO UPDATE SET title=excluded.title, created_at=excluded.created_at
+	`, meeting.MeetingID, meeting.Title, createdAt.UnixNano()); err != nil {
+		return fmt.Errorf("upsert meta: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
@@ -137,74 +204,79 @@ func buildContent(title, segmentText, speaker, decisions, actions, risks string)
 	return strings.Join(parts, " ")
 }
 
-func validateFTS5Query(query string) (string, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return "", fmt.Errorf("empty query")
+// sanitizeFTS5Query strips characters FTS5 would interpret as operators
+// (`*`, `:`, `(`, `)`, `"`, `-`, `+`, `^`, `.`, etc.) and re-emits the
+// remaining words as quoted phrases. An empty result means the query
+// had no usable tokens and the caller should return zero results
+// instead of erroring.
+func sanitizeFTS5Query(query string) string {
+	var b strings.Builder
+	for _, r := range query {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			b.WriteRune(r)
+		case r == '_' || r == '-' || r == '\'':
+			// Keep hyphens/apostrophes inside words so "billing-bug" or
+			// "we're" survive tokenization. unicode61 splits on them
+			// anyway, but keeping them avoids glueing adjacent words.
+			b.WriteRune(' ')
+		default:
+			b.WriteRune(' ')
+		}
 	}
-
-	if strings.Count(query, "\"")%2 != 0 {
-		return "", fmt.Errorf("unbalanced quotes")
+	tokens := strings.Fields(b.String())
+	if len(tokens) == 0 {
+		return ""
 	}
-	if strings.Count(query, "(") != strings.Count(query, ")") {
-		return "", fmt.Errorf("unbalanced parentheses")
+	quoted := make([]string, len(tokens))
+	for i, t := range tokens {
+		quoted[i] = `"` + t + `"`
 	}
-
-	upperQuery := strings.ToUpper(query)
-	if strings.Contains(upperQuery, " AND ") || strings.HasSuffix(upperQuery, " AND") || strings.HasPrefix(upperQuery, "AND ") {
-		return "", fmt.Errorf("AND operator not allowed")
-	}
-	if strings.Contains(upperQuery, " OR ") || strings.HasSuffix(upperQuery, " OR") || strings.HasPrefix(upperQuery, "OR ") {
-		return "", fmt.Errorf("OR operator not allowed")
-	}
-	if strings.Contains(upperQuery, " NOT ") || strings.HasSuffix(upperQuery, " NOT") || strings.HasPrefix(upperQuery, "NOT ") {
-		return "", fmt.Errorf("NOT operator not allowed")
-	}
-	if strings.Contains(upperQuery, " NEAR ") || strings.HasPrefix(upperQuery, "NEAR") {
-		return "", fmt.Errorf("NEAR operator not allowed")
-	}
-	if strings.Contains(query, ":") {
-		return "", fmt.Errorf("column filters not allowed")
-	}
-	if strings.Contains(query, "*") {
-		return "", fmt.Errorf("wildcards not allowed")
-	}
-
-	return strings.ReplaceAll(strings.ReplaceAll(query, "\\", "\\\\"), "\"", "\"\""), nil
+	return strings.Join(quoted, " ")
 }
 
 func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
-	if query == "" {
+	raw := strings.TrimSpace(query)
+	if raw == "" {
 		return nil, fmt.Errorf("query required")
 	}
-
-	// Validate and sanitize FTS5 query
-	query, err := validateFTS5Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("invalid query: %w", err)
+	fts := sanitizeFTS5Query(raw)
+	if fts == "" {
+		// User typed only punctuation. Not an error — there's just
+		// nothing tokenizable to match.
+		return nil, nil
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`
+	weightArgs := make([]string, 0, colCount)
+	for _, w := range columnWeights {
+		weightArgs = append(weightArgs, fmt.Sprintf("%.2f", w))
+	}
+
+	sqlText := `
 		SELECT
-			meeting_id,
-			title,
-			segment_text,
-			speaker,
-			decisions,
-			actions,
-			risks,
-			segment_id,
-			result_type,
-			bm25(meetings_fts, `+fmt.Sprintf("%.1f, %.2f", BM25K1, BM25B)+`) as rank,
-			snippet(meetings_fts, -1, '**', '**', '...', 16) as snippet
-		FROM meetings_fts
+			f.meeting_id,
+			f.title,
+			f.segment_text,
+			f.speaker,
+			f.decisions,
+			f.actions,
+			f.risks,
+			f.segment_id,
+			f.result_type,
+			bm25(meetings_fts, ` + strings.Join(weightArgs, ", ") + `) AS rank,
+			snippet(meetings_fts, -1, '**', '**', '...', 16) AS snippet,
+			COALESCE(m.created_at, 0) AS created_ns
+		FROM meetings_fts f
+		LEFT JOIN meetings_meta m ON m.meeting_id = f.meeting_id
 		WHERE meetings_fts MATCH ?
-		ORDER BY rank ASC
-		LIMIT 100
-	`, query)
+		ORDER BY rank ASC, created_ns DESC
+		LIMIT 500
+	`
+
+	rows, err := s.db.Query(sqlText, fts)
 	if err != nil {
 		return nil, fmt.Errorf("search query: %w", err)
 	}
@@ -215,8 +287,9 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 		var r SearchResult
 		var title, segmentText, speaker, decisions, actions, risks, segmentID, resultType, snippet sql.NullString
 		var rank sql.NullFloat64
+		var createdNS sql.NullInt64
 
-		if err := rows.Scan(&r.MeetingID, &title, &segmentText, &speaker, &decisions, &actions, &risks, &segmentID, &resultType, &rank, &snippet); err != nil {
+		if err := rows.Scan(&r.MeetingID, &title, &segmentText, &speaker, &decisions, &actions, &risks, &segmentID, &resultType, &rank, &snippet, &createdNS); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 
@@ -228,6 +301,9 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 		r.ResultType = ResultType(resultType.String)
 		if rank.Valid {
 			r.BM25Score = rank.Float64
+		}
+		if createdNS.Valid && createdNS.Int64 != 0 {
+			r.CreatedAt = time.Unix(0, createdNS.Int64).UTC()
 		}
 
 		if r.Snippet == "" {
@@ -254,16 +330,93 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 	return results, nil
 }
 
+// SearchMeetings groups Search results by meeting and ranks groups so
+// that title matches outrank body matches and, among equally relevant
+// meetings, the most recent wins. Returns up to `limit` meetings; 0 or
+// negative means no cap.
+func (s *SearchIndex) SearchMeetings(query string, limit int) ([]MeetingHits, error) {
+	hits, err := s.Search(query)
+	if err != nil {
+		return nil, err
+	}
+	if len(hits) == 0 {
+		return nil, nil
+	}
+	groups := map[string]*MeetingHits{}
+	order := []string{}
+	for _, h := range hits {
+		g, ok := groups[h.MeetingID]
+		if !ok {
+			g = &MeetingHits{
+				MeetingID:    h.MeetingID,
+				MeetingTitle: h.Title,
+				CreatedAt:    h.CreatedAt,
+				BestScore:    h.BM25Score,
+			}
+			groups[h.MeetingID] = g
+			order = append(order, h.MeetingID)
+		}
+		if h.Title != "" && g.MeetingTitle == "" {
+			g.MeetingTitle = h.Title
+		}
+		if !h.CreatedAt.IsZero() && g.CreatedAt.IsZero() {
+			g.CreatedAt = h.CreatedAt
+		}
+		switch h.ResultType {
+		case ResultTypeTitle:
+			g.TitleMatch = true
+		case ResultTypeTranscript:
+			g.TranscriptCount++
+		case ResultTypeDecision, ResultTypeAction, ResultTypeRisk:
+			g.SummaryCount++
+		}
+		if h.BM25Score < g.BestScore {
+			g.BestScore = h.BM25Score
+		}
+		if g.Snippet == "" && h.Snippet != "" {
+			g.Snippet = h.Snippet
+		}
+		g.Hits = append(g.Hits, h)
+	}
+
+	out := make([]MeetingHits, 0, len(order))
+	for _, id := range order {
+		out = append(out, *groups[id])
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		// Title match always beats no title match.
+		if out[i].TitleMatch != out[j].TitleMatch {
+			return out[i].TitleMatch
+		}
+		// Lower BM25 = more relevant.
+		if out[i].BestScore != out[j].BestScore {
+			return out[i].BestScore < out[j].BestScore
+		}
+		// Tiebreaker: most recent first.
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (s *SearchIndex) DeleteFromIndex(meetingID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.Exec(`DELETE FROM meetings_fts WHERE meeting_id = ?`, meetingID)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM meetings_fts WHERE meeting_id = ?`, meetingID); err != nil {
 		return fmt.Errorf("delete from index: %w", err)
 	}
-
-	return nil
+	if _, err := tx.Exec(`DELETE FROM meetings_meta WHERE meeting_id = ?`, meetingID); err != nil {
+		return fmt.Errorf("delete meta: %w", err)
+	}
+	return tx.Commit()
 }
 
 func NewSearchIndex(path string) (*SearchIndex, error) {
@@ -297,11 +450,20 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 		return nil, fmt.Errorf("create FTS table: %w", err)
 	}
 
-	// Index on FTS5 virtual table not supported - commented out
-	// _, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_meeting_id ON meetings_fts(meeting_id)`)
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS meetings_meta(
+			meeting_id TEXT PRIMARY KEY,
+			title      TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL DEFAULT 0
+		)
+	`)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create meta table: %w", err)
+	}
 
 	return &SearchIndex{
-		db:  db,
+		db:   db,
 		path: path,
 	}, nil
 }
@@ -313,12 +475,13 @@ func (s *SearchIndex) Close() error {
 }
 
 type IndexMeetingInput struct {
-	MeetingID        string
-	Title           string
+	MeetingID          string
+	Title              string
+	CreatedAt          time.Time
 	TranscriptSegments []TranscriptSegment
-	Decisions       []SummaryItem
-	ActionItems     []ActionItem
-	Risks           []SummaryItem
+	Decisions          []SummaryItem
+	ActionItems        []ActionItem
+	Risks              []SummaryItem
 }
 
 type TranscriptSegment struct {
@@ -339,22 +502,24 @@ type ActionItem struct {
 }
 
 type Meeting struct {
-	MeetingID         string
-	Title            string
+	MeetingID          string
+	Title              string
+	CreatedAt          time.Time
 	TranscriptSegments []TranscriptSegment
-	Decisions        []SummaryItem
-	ActionItems      []ActionItem
-	Risks            []SummaryItem
+	Decisions          []SummaryItem
+	ActionItems        []ActionItem
+	Risks              []SummaryItem
 }
 
 func (s *SearchIndex) IndexMeetingFromInput(input *IndexMeetingInput) error {
 	meeting := &Meeting{
-		MeetingID:         input.MeetingID,
-		Title:            input.Title,
+		MeetingID:          input.MeetingID,
+		Title:              input.Title,
+		CreatedAt:          input.CreatedAt,
 		TranscriptSegments: input.TranscriptSegments,
-		Decisions:        input.Decisions,
-		ActionItems:      input.ActionItems,
-		Risks:            input.Risks,
+		Decisions:          input.Decisions,
+		ActionItems:        input.ActionItems,
+		Risks:              input.Risks,
 	}
 	return s.IndexMeeting(meeting)
 }

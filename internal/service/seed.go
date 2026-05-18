@@ -241,6 +241,7 @@ func seedSearchInput(meetingID string, fx seedFixture, t *artifacts.Transcript, 
 	return &search.IndexMeetingInput{
 		MeetingID:          meetingID,
 		Title:              fx.Title,
+		CreatedAt:          fx.CreatedAt,
 		TranscriptSegments: segs,
 		Decisions:          decs,
 		ActionItems:        acts,
