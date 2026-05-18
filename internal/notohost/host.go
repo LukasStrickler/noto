@@ -228,6 +228,15 @@ func (h *Host) Client() notoapi.Client {
 	return h.client
 }
 
+// SeedDev populates the local store with the bundled fixture meetings.
+// Dev-only: not exposed over the wire.
+func (h *Host) SeedDev(ctx context.Context) ([]service.SeededMeeting, error) {
+	if h.svc == nil {
+		return nil, errors.New("notohost: service not initialized")
+	}
+	return h.svc.SeedDev(ctx)
+}
+
 // Addr is the listener address (socket path or host:port).
 func (h *Host) Addr() string { return h.addr }
 

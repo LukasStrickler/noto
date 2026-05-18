@@ -54,6 +54,13 @@ tui:
 run-cli:
 	$(GO) run ./cmd/noto $(ARGS)
 
+# `make seed` — drop three fixture meetings into the local store so the
+# TUI/search have something to render in a fresh checkout. Idempotent:
+# fixtures use fixed UUIDs and overwrite themselves on re-run.
+.PHONY: seed
+seed:
+	$(GO) run ./cmd/noto seed
+
 .PHONY: test
 test:
 	$(GO) test -count=1 ./...
@@ -101,6 +108,7 @@ help:
 	@echo '  make test          # run all tests'
 	@echo '  make test-e2e      # only the end-to-end pipeline test'
 	@echo '  make run-cli ARGS="list --json"'
+	@echo '  make seed          # populate the local store with 3 fixture meetings'
 	@echo '  make which-go      # print the Go toolchain noto will use'
 	@echo '  make bootstrap-go  # download Go locally into ./.tools/go (no sudo)'
 	@echo ''

@@ -72,6 +72,8 @@ func Run(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 		return app.runJobs(args[1:])
 	case "ping":
 		return app.runPing(args[1:])
+	case "seed":
+		return app.runSeed(args[1:])
 	default:
 		fmt.Fprintf(errOut, "noto: unknown command %q. Run `noto help`.\n", args[0])
 		return 64
@@ -693,6 +695,36 @@ func (a *app) runPing(args []string) int {
 	return a.emitJSON(h)
 }
 
+// --- Seed (dev-only) ---
+
+// runSeed inserts the bundled fixture meetings into the local store and
+// search index. It always uses an in-process host so it works even when
+// the daemon isn't running. Refuses to act against a remote backend.
+func (a *app) runSeed(_ []string) int {
+	if os.Getenv("NOTO_API_URL") != "" {
+		fmt.Fprintln(a.errOut, "noto seed: refusing to seed against a remote NOTO_API_URL")
+		return 1
+	}
+	ctx, cancel := defaultCtx()
+	defer cancel()
+	host, err := notohost.Start(ctx, notohost.Options{Version: "seed"})
+	if err != nil {
+		fmt.Fprintf(a.errOut, "noto seed: %v\n", err)
+		return 1
+	}
+	defer host.Close()
+	seeded, err := host.SeedDev(ctx)
+	if err != nil {
+		fmt.Fprintf(a.errOut, "noto seed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(a.out, "seeded %d meetings:\n", len(seeded))
+	for _, m := range seeded {
+		fmt.Fprintf(a.out, "  • %s — %s\n      %s\n", m.ID, m.Title, m.Dir)
+	}
+	return 0
+}
+
 // --- helpers ---
 
 func defaultCtx() (context.Context, context.CancelFunc) {
@@ -808,6 +840,7 @@ Usage:
   noto import-audio <path> [--title "..."] [--wait] [--json]
   noto jobs [--json]
   noto ping
+  noto seed                Insert fixture meetings (dev-only, local backend)
   noto dev [serve]     Run from a checked-out repo (alias of TUI, prints debug paths)
 
 Local lifecycle:
