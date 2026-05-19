@@ -17,7 +17,6 @@ const (
 	sMeetings  screenID = "meetings"
 	sDetail    screenID = "detail"
 	sTranscript screenID = "transcript"
-	sSearch    screenID = "search"
 	sRecorder  screenID = "recorder"
 	sProviders screenID = "providers"
 	sStorage   screenID = "storage"

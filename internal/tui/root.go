@@ -168,7 +168,14 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, push(sSpeakers, id)
 			}
 		case !inputActive && key.Matches(msg, m.keys.Search):
-			return m, pushOrReplaceTo(sSearch, "")
+			// `/` is no longer a separate screen. Route to the meetings
+			// surface which owns both list + FTS filter; if we're
+			// already there, forward the key so the screen focuses its
+			// own input.
+			if m.top().id() == sMeetings {
+				break
+			}
+			return m, pushOrReplaceTo(sMeetings, "filter")
 		}
 
 	case eventStreamMsg:
@@ -372,7 +379,7 @@ func (m *rootModel) renderHelpOverlay(under string) string {
 		"",
 		s.PanelTitle.Render("Navigate"),
 		"  :   command menu (everywhere)",
-		"  /   search transcripts",
+		"  /   search meetings + transcripts",
 		"  1   dashboard",
 		"  2   meetings",
 		"  r   recorder",
@@ -482,8 +489,6 @@ func buildScreen(id screenID) screen {
 		return newDetailScreen()
 	case sTranscript:
 		return newTranscriptScreen()
-	case sSearch:
-		return newSearchScreen()
 	case sRecorder:
 		return newRecorderScreen()
 	case sProviders, sSettings, sConfig:
@@ -540,7 +545,7 @@ func (m *rootModel) paletteEntries() []paletteEntry {
 		{Label: "Dashboard", Action: "goto", Param: string(sDashboard), Hint: "1"},
 		{Label: "Meetings", Action: "goto", Param: string(sMeetings), Hint: "2"},
 		{Label: "Recorder", Action: "goto", Param: string(sRecorder), Hint: "r"},
-		{Label: "Search transcripts", Action: "goto", Param: string(sSearch), Hint: "/"},
+		{Label: "Search meetings", Action: "goto", Param: string(sMeetings), Hint: "/"},
 		{Label: "Config (active provider, paths, API keys)", Action: "goto", Param: string(sConfig), Hint: ",  or  4"},
 		{Label: "Storage health", Action: "goto", Param: string(sStorage), Hint: "5"},
 	}

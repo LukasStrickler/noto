@@ -86,6 +86,8 @@ type Styles struct {
 	MeterFilled     lipgloss.Style
 	MeterEmpty      lipgloss.Style
 	MeterClip       lipgloss.Style
+	Highlight       lipgloss.Style
+	HighlightActive lipgloss.Style
 }
 
 func NewStyles() Styles {
@@ -141,5 +143,10 @@ func NewStyles() Styles {
 		MeterFilled:    lipgloss.NewStyle().Foreground(t.Success),
 		MeterEmpty:     lipgloss.NewStyle().Foreground(t.Muted),
 		MeterClip:      lipgloss.NewStyle().Foreground(t.Danger).Bold(true),
+		// FTS hit highlight: yellow background, dark fg. The "active"
+		// variant marks the segment `n`/`N` is currently parked on so
+		// the user can tell where they jumped to.
+		Highlight:       lipgloss.NewStyle().Foreground(lipgloss.Color("#0b0f17")).Background(t.Warning).Bold(true),
+		HighlightActive: lipgloss.NewStyle().Foreground(lipgloss.Color("#0b0f17")).Background(t.Primary).Bold(true),
 	}
 }
