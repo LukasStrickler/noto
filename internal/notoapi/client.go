@@ -14,6 +14,7 @@ type Client interface {
 	GetAgentHandoff(ctx context.Context, id string) (AgentHandoff, error)
 	DeleteMeeting(ctx context.Context, id string) error
 	VerifyMeeting(ctx context.Context, id string) (Job, error)
+	UpdateSpeakerName(ctx context.Context, meetingID, speakerID, displayName string) error
 
 	// Search
 	Search(ctx context.Context, opts SearchOpts) (SearchResult, error)
@@ -57,4 +58,20 @@ type Client interface {
 	// Lifecycle / health
 	Health(ctx context.Context) (Health, error)
 	Close() error
+
+	// Speaker profiles
+	ListSpeakerProfiles(ctx context.Context) ([]SpeakerProfile, error)
+	GetSpeakerProfile(ctx context.Context, id string) (SpeakerProfile, error)
+	CreateSpeakerProfile(ctx context.Context, req CreateSpeakerProfileRequest) (SpeakerProfile, error)
+	PatchSpeakerProfile(ctx context.Context, id string, patch SpeakerProfilePatch) (SpeakerProfile, error)
+	DeleteSpeakerProfile(ctx context.Context, id string) error
+	MergeSpeakerProfiles(ctx context.Context, targetID, sourceID string) (SpeakerProfile, error)
+
+	// Meeting speaker mappings
+	GetMeetingSpeakerMappings(ctx context.Context, meetingID string) (MeetingSpeakerMappings, error)
+	PatchMeetingSpeakerMappings(ctx context.Context, meetingID string, patch MeetingSpeakerMappingsPatch) (MeetingSpeakerMappings, error)
+
+	// Agent API — optimised for AI agent consumption
+	AgentListMeetings(ctx context.Context, opts AgentListOpts) (AgentListResult, error)
+	AgentGetMeeting(ctx context.Context, id string) (AgentMeetingContext, error)
 }

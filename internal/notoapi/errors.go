@@ -51,19 +51,20 @@ func (e *ErrorEnvelope) Err() error {
 
 // Common error codes mirroring docs/architecture.md.
 const (
-	CodeNotFound              = "not_found"
-	CodeInvalidRequest        = "invalid_request"
-	CodeConflict              = "conflict"
-	CodePermissionDenied      = "permission_denied"
-	CodeRecordingActive       = "recording_active"
-	CodeRecordingInactive     = "recording_inactive"
-	CodeJobNotFound           = "job_not_found"
-	CodeProviderFailed        = "provider_failed"
+	CodeNotFound               = "not_found"
+	CodeInvalidRequest         = "invalid_request"
+	CodeConflict               = "conflict"
+	CodeUnauthorized           = "unauthorized"
+	CodePermissionDenied       = "permission_denied"
+	CodeRecordingActive        = "recording_active"
+	CodeRecordingInactive      = "recording_inactive"
+	CodeJobNotFound            = "job_not_found"
+	CodeProviderFailed         = "provider_failed"
 	CodeSchemaValidationFailed = "schema_validation_failed"
-	CodeArtifactConflict      = "artifact_conflict"
-	CodeUnsupportedCapability = "unsupported_capability"
-	CodeRetryableRemoteError  = "retryable_remote_error"
-	CodeInternal              = "internal"
+	CodeArtifactConflict       = "artifact_conflict"
+	CodeUnsupportedCapability  = "unsupported_capability"
+	CodeRetryableRemoteError   = "retryable_remote_error"
+	CodeInternal               = "internal"
 )
 
 // Errorf is a convenience constructor.

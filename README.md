@@ -2,24 +2,30 @@
 
 Terminal-first meeting recorder, transcriber, summarizer, and searchable memory.
 
-Noto's main interface is the `noto` TUI you open in the terminal. V1 records
-meetings through a small native macOS capture helper behind the CLI, keeps
-microphone and system/app audio as distinct sources, ingests recordings into
-portable local artifacts, transcribes them, writes JSON and Markdown, indexes
-them with SQLite FTS5, and lets you browse/search meetings from the TUI.
+Noto's main interface is the `noto` TUI you open in the terminal. It connects to a
+remote `noto serve` backend that owns data storage, transcription via AssemblyAI,
+LLM summarization, and a search index. The TUI is a local client; all meeting data
+lives on the remote backend.
 
 ## Status
 
-Implementation alpha. V1 is local-first: a Bubble Tea TUI talking to an
-in-process HTTP server, macOS recording via a Swift helper, async ingest /
-transcribe / summarize / index jobs, and SQLite FTS5 search. Object-store
-sync and a hosted gateway remain later phases.
+Implementation alpha. The architecture is:
+
+```
+Local TUI/CLI  ←→  Remote noto serve  ←→  AssemblyAI (transcription + diarization)
+                       ↑
+                       └── SQLite + filesystem artifacts (backend storage)
+```
+
+`noto serve` can run as a local daemon (same machine as TUI) or a remote server.
+`noto record` captures audio via a macOS native helper; `noto serve` orchestrates
+transcription, summarization, and indexing.
 
 ## Quickstart
 
 ```bash
 # from a checked-out repo
-make dev           # opens the TUI, auto-warms the capture helper
+make dev           # opens the TUI against local noto serve
 ```
 
 If Go isn't installed system-wide, `make dev` downloads a local toolchain into
@@ -34,26 +40,16 @@ providers — pick one, press `e`, paste the key. Keys persist via macOS
 Keychain on darwin and `~/.noto/credentials.json` (0600) elsewhere. `a` on a
 highlighted speech provider makes it the active route.
 
-The V1 defaults are tuned for AssemblyAI (speaker labels on by default).
-A `local` provider entry talks to any OpenAI-compatible STT server — point
-`NOTO_LOCAL_STT_URL` at e.g. whisper.cpp's HTTP server or NVIDIA NIM
-Parakeet to keep transcription on-device.
-
-## Scope
-
-| Release | Focus | Storage |
-| --- | --- | --- |
-| V1 | Terminal TUI/CLI, macOS recording helper, ingest, transcription, summaries, search | `~/Noto` |
-| Later | Object-store sync, hosted/self-hosted gateway, local transcription | Filesystem, R2/S3, or Noto API |
+The default STT provider is AssemblyAI with speaker diarization enabled.
 
 ## Command Shape
 
 ```text
-noto
+noto tui                  # open the TUI
+noto serve                # start the backend daemon (local or remote)
 noto record --title "Roadmap sync"
 noto stop
 noto import-audio ./roadmap-sync.m4a --title "Roadmap sync"
-noto import-transcript ./roadmap-sync.json --title "Roadmap sync"
 noto search --json "pricing decision"
 noto verify --json
 noto show <meeting_id>
@@ -65,48 +61,62 @@ noto play <meeting_id> [--speed <rate>]
 
 ```mermaid
 flowchart TD
-    classDef appNode fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#111827;
-    classDef coreNode fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#111827;
-    classDef storageNode fill:#ffffff,stroke:#4b5563,stroke-width:1px,color:#111827;
+    classDef tuiNode fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#111827
+    classDef serverNode fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#111827
+    classDef storageNode fill:#ffffff,stroke:#4b5563,stroke-width:1px,color:#111827
 
-    subgraph Local["Local V1"]
-        CLI["noto TUI/CLI<br/>main interface"]:::appNode
-        APP["native capture helper<br/>macOS split capture"]:::appNode
-        PROC["Processor registry<br/>swappable modules"]:::coreNode
-        ART[(Standard Noto artifacts<br/>JSON + Markdown)]:::storageNode
-        FTS[(SQLite FTS5<br/>local search)]:::storageNode
+    subgraph Local["Local client"]
+        TUI["noto TUI/CLI"]:::tuiNode
     end
 
-    subgraph Later["Later phases"]
-        SYNC["object-store / remote sync"]:::coreNode
+    subgraph Remote["Remote backend (noto serve)"]
+        API["HTTP API server"]:::serverNode
+        JOBS["Job orchestrator"]:::serverNode
+        DB[(SQLite + artifacts)]:::storageNode
     end
 
-    CLI -->|Start/stop/status| APP
-    APP -->|Completed recording| ART
-    CLI -->|Run jobs| PROC
-    PROC -->|Normalize results| ART
-    ART -->|Rebuild| FTS
-    CLI -->|Browse/search| FTS
-    ART -.->|future sync| SYNC
+    subgraph Providers["External providers"]
+        ASSEMBLY["AssemblyAI"]:::serverNode
+    end
 
-    linkStyle 0 stroke:#7c3aed,stroke-width:2px;
-    linkStyle 1 stroke:#7c3aed,stroke-width:2px;
-    linkStyle 2 stroke:#0284c7,stroke-width:2px;
-    linkStyle 3 stroke:#4b5563,stroke-width:2px;
-    linkStyle 4 stroke:#4b5563,stroke-width:2px;
-    linkStyle 5 stroke:#0284c7,stroke-width:2px,stroke-dasharray:5 5;
-    linkStyle 6 stroke:#0284c7,stroke-width:2px,stroke-dasharray:5 5;
+    TUI -->|HTTP/SSE| API
+    API --> JOBS
+    JOBS -->|transcribe| ASSEMBLY
+    ASSEMBLY -->|transcript| JOBS
+    JOBS --> DB
+    API -->|browse/search| DB
+
+    linkStyle 0 stroke:#7c3aed,stroke-width:2px
+    linkStyle 1 stroke:#0284c7,stroke-width:2px
+    linkStyle 2 stroke:#0284c7,stroke-width:2px
+    linkStyle 3 stroke:#0284c7,stroke-width:2px
+    linkStyle 4 stroke:#0284c7,stroke-width:2px
+    linkStyle 5 stroke:#4b5563,stroke-width:2px
+    linkStyle 6 stroke:#7c3aed,stroke-width:2px
 ```
+
+The backend owns storage and API. The TUI is a thin local client that consumes
+the remote API. Speaker profiles are a first-class feature: AssemblyAI provides
+per-meeting diarization labels; persistent cross-meeting identity requires the
+backend speaker profiles + embedding/matching pipeline.
+
+## Scope
+
+| Focus | Notes |
+| --- | --- |
+| Local TUI/CLI | Main interface, local process |
+| Remote backend | Data source of truth, API server |
+| AssemblyAI STT | Transcription + diarization |
+| Speaker profiles | Cross-meeting identity via backend pipeline |
+| SQLite + filesystem | Artifact storage (backend) |
+| Future storage seam | Interface exists; Postgres/object storage is a later swap |
 
 ## Documentation
 
 - [Documentation index](./.docs/README.md)
-- [Product reference](./.docs/reference/product.md)
-- [Feature alignment](./.docs/reference/features.md)
-- [Design sketches](./.docs/design.md)
-- [User stories](./.docs/reference/user-stories.md)
-- [Benchmarks](./.docs/reference/benchmarks.md)
-- [TDD and validation](./.docs/reference/testing.md)
+- [Cloud architecture](./.docs/architecture/cloud-architecture.md)
+- [API and agent access](./.docs/reference/agent-interface.md)
+- [TUI reference](./.docs/reference/tui.md)
 - [Build plan](./.docs/guides/build-plan.md)
 
 ## License

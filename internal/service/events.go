@@ -65,12 +65,6 @@ func (h *eventHub) publish(e notoapi.Event) {
 	}
 }
 
-func (h *eventHub) subscriberCount() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.subs)
-}
-
 // Subscribe returns a fresh channel that receives every published event
 // plus a cleanup func the caller MUST invoke when done.
 func (s *Service) Subscribe() (<-chan notoapi.Event, func()) {

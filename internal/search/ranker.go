@@ -2,7 +2,7 @@ package search
 
 const (
 	BM25K1 = 1.2
-	BM25B   = 0.75
+	BM25B  = 0.75
 )
 
 type BM25Config struct {

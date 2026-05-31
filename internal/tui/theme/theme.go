@@ -36,9 +36,13 @@ func Dark() Theme {
 		Warning:    lipgloss.Color("#fbbf24"),
 		Success:    lipgloss.Color("#34d399"),
 		Info:       lipgloss.Color("#60a5fa"),
-		SpeakerA:   lipgloss.Color("#22d3ee"),
-		SpeakerB:   lipgloss.Color("#34d399"),
-		SpeakerC:   lipgloss.Color("#fbbf24"),
+		// Speaker palette is intentionally distinct from
+		// decisions/actions/risks/questions accents so a name in a
+		// summary line can't be confused with a category chip.
+		// Picks: purple, teal, pink — vivid identity hues.
+		SpeakerA: lipgloss.Color("#c084fc"), // purple-400
+		SpeakerB: lipgloss.Color("#2dd4bf"), // teal-400
+		SpeakerC: lipgloss.Color("#f472b6"), // pink-400
 	}
 }
 
@@ -92,9 +96,9 @@ type Styles struct {
 
 func NewStyles() Styles {
 	t := Dark()
-	bodyFG := lipgloss.Color("#e2e8f0")  // slate-200
-	dimFG := lipgloss.Color("#94a3b8")   // slate-400
-	border := lipgloss.Color("#1e293b")  // slate-800
+	bodyFG := lipgloss.Color("#e2e8f0") // slate-200
+	dimFG := lipgloss.Color("#94a3b8")  // slate-400
+	border := lipgloss.Color("#1e293b") // slate-800
 	return Styles{
 		T:              t,
 		Header:         lipgloss.NewStyle().Foreground(t.Primary).Bold(true),
@@ -131,18 +135,18 @@ func NewStyles() Styles {
 			BorderForeground(t.Primary).
 			Background(t.Surface).
 			Padding(1, 2),
-		OverlayTitle:   lipgloss.NewStyle().Foreground(t.Primary).Bold(true),
-		Decision:       lipgloss.NewStyle().Foreground(t.Success),
-		Action:         lipgloss.NewStyle().Foreground(t.Info),
-		Risk:           lipgloss.NewStyle().Foreground(t.Warning),
-		Question:       lipgloss.NewStyle().Foreground(t.Secondary),
-		SpeakerA:       lipgloss.NewStyle().Foreground(t.SpeakerA).Bold(true),
-		SpeakerB:       lipgloss.NewStyle().Foreground(t.SpeakerB).Bold(true),
-		SpeakerC:       lipgloss.NewStyle().Foreground(t.SpeakerC).Bold(true),
-		Citation:       lipgloss.NewStyle().Foreground(t.Secondary),
-		MeterFilled:    lipgloss.NewStyle().Foreground(t.Success),
-		MeterEmpty:     lipgloss.NewStyle().Foreground(t.Muted),
-		MeterClip:      lipgloss.NewStyle().Foreground(t.Danger).Bold(true),
+		OverlayTitle: lipgloss.NewStyle().Foreground(t.Primary).Bold(true),
+		Decision:     lipgloss.NewStyle().Foreground(t.Success),
+		Action:       lipgloss.NewStyle().Foreground(t.Info),
+		Risk:         lipgloss.NewStyle().Foreground(t.Warning),
+		Question:     lipgloss.NewStyle().Foreground(t.Secondary),
+		SpeakerA:     lipgloss.NewStyle().Foreground(t.SpeakerA).Bold(true),
+		SpeakerB:     lipgloss.NewStyle().Foreground(t.SpeakerB).Bold(true),
+		SpeakerC:     lipgloss.NewStyle().Foreground(t.SpeakerC).Bold(true),
+		Citation:     lipgloss.NewStyle().Foreground(t.Secondary),
+		MeterFilled:  lipgloss.NewStyle().Foreground(t.Success),
+		MeterEmpty:   lipgloss.NewStyle().Foreground(t.Muted),
+		MeterClip:    lipgloss.NewStyle().Foreground(t.Danger).Bold(true),
 		// FTS hit highlight: yellow background, dark fg. The "active"
 		// variant marks the segment `n`/`N` is currently parked on so
 		// the user can tell where they jumped to.

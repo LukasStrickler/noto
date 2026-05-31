@@ -6,7 +6,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/lukasstrickler/noto/internal/notoapi"
-	"github.com/lukasstrickler/noto/internal/tui/keys"
 	"github.com/lukasstrickler/noto/internal/tui/layout"
 )
 
@@ -21,11 +20,10 @@ type agentScreen struct {
 
 func newAgentScreen() screen { return &agentScreen{loading: true} }
 
-func (a *agentScreen) id() screenID    { return sAgent }
-func (a *agentScreen) title() string   { return "agent" }
-func (a *agentScreen) helpKeys() []keys.Map { return nil }
-func (a *agentScreen) inputActive() bool    { return false }
-func (a *agentScreen) meetingID() string    { return a.id_ }
+func (a *agentScreen) id() screenID      { return sAgent }
+func (a *agentScreen) title() string     { return "agent" }
+func (a *agentScreen) inputActive() bool { return false }
+func (a *agentScreen) meetingID() string { return a.id_ }
 
 func (a *agentScreen) enter(ctx screenCtx, param string) tea.Cmd {
 	a.id_ = param
@@ -76,5 +74,7 @@ func nilIfEmpty(s any, v string) string {
 	if v == "" {
 		return styleAny(s, "muted", "(not yet generated)")
 	}
-	return v
+	// Make the artifact path a clickable file:// link for terminals that
+	// support OSC 8 — the path text still renders everywhere else.
+	return fileLink(v)
 }

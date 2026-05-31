@@ -13,37 +13,55 @@ import (
 // recording. On non-mac platforms or when the IPC client is nil it
 // returns a CodeUnsupportedCapability error.
 func (s *Service) StartRecording(ctx context.Context, opts notoapi.StartRecordingOpts) (notoapi.StartRecordingResult, error) {
+	// Claim the slot atomically. recPending blocks concurrent callers
+	// while we do the blocking IPC handshake below.
 	s.recMu.Lock()
-	if s.recording.Active {
+	if s.recording.Active || s.recPending {
 		active := s.recording
 		s.recMu.Unlock()
 		return notoapi.StartRecordingResult{},
 			notoapi.NewError(notoapi.CodeRecordingActive, "a recording is already active", map[string]any{"meeting_id": active.MeetingID})
 	}
+	s.recPending = true
 	s.recMu.Unlock()
 
+	// Release the pending flag on any exit path that didn't commit a recording.
+	committed := false
+	defer func() {
+		if !committed {
+			s.recMu.Lock()
+			s.recPending = false
+			s.recMu.Unlock()
+		}
+	}()
+
 	if s.ipc == nil {
-		return s.startDryRunRecording(opts), nil
+		res := s.startDryRunRecording(opts)
+		committed = true
+		return res, nil
 	}
 
 	if err := s.ipc.Connect(ctx); err != nil {
-		// Helper unreachable (no Swift toolchain or non-mac platform):
-		// drop into dry-run so the TUI flow still works for development
-		// and so Linux servers can exercise the pipeline against
-		// imported audio.
-		return s.startDryRunRecording(opts), nil
+		// Helper unreachable — fall through to dry-run so development
+		// and Linux import flows still work.
+		res := s.startDryRunRecording(opts)
+		committed = true
+		return res, nil
 	}
 	sources := opts.Sources
 	if len(sources) == 0 {
 		sources = []string{"microphone", "system_audio"}
 	}
 	if _, err := s.ipc.Start(ctx, sources, 48000); err != nil {
-		return s.startDryRunRecording(opts), nil
+		res := s.startDryRunRecording(opts)
+		committed = true
+		return res, nil
 	}
 
 	meetingID := uuid.New().String()
 	now := time.Now()
 	s.recMu.Lock()
+	s.recPending = false
 	s.recording = notoapi.RecordingState{
 		Active:    true,
 		MeetingID: meetingID,
@@ -55,6 +73,7 @@ func (s *Service) StartRecording(ctx context.Context, opts notoapi.StartRecordin
 	stop := make(chan struct{})
 	s.recStopMeters = stop
 	s.recMu.Unlock()
+	committed = true
 
 	go s.meterLoop(stop)
 	s.publishRecorder()
@@ -65,6 +84,9 @@ func (s *Service) StartRecording(ctx context.Context, opts notoapi.StartRecordin
 	}, nil
 }
 
+// startDryRunRecording starts a synthetic recording when no capture helper
+// is available. Must only be called while recPending==true (caller holds
+// the slot); it commits the recording under the lock.
 func (s *Service) startDryRunRecording(opts notoapi.StartRecordingOpts) notoapi.StartRecordingResult {
 	meetingID := uuid.New().String()
 	now := time.Now()
@@ -73,6 +95,13 @@ func (s *Service) startDryRunRecording(opts notoapi.StartRecordingOpts) notoapi.
 		sources = []string{"microphone"}
 	}
 	s.recMu.Lock()
+	// Close any leaked stop channel from a previous dry-run that didn't
+	// get cleaned up (defensive — should not happen under normal flow).
+	if s.recStopMeters != nil && !s.recording.Active {
+		close(s.recStopMeters)
+		s.recStopMeters = nil
+	}
+	s.recPending = false
 	s.recording = notoapi.RecordingState{
 		Active:    true,
 		MeetingID: meetingID,
@@ -123,14 +152,15 @@ func (s *Service) StopRecording(ctx context.Context, opts notoapi.StopRecordingO
 	}
 
 	// Enqueue the pipeline so the recording becomes a searchable meeting.
+	jobOpts := map[string]any{
+		"title":       state.Title,
+		"output_path": out.OutputPath,
+		"notes_md":    opts.NotesMD,
+	}
 	job, jerr := s.CreateJob(ctx, notoapi.CreateJobOpts{
 		Kind:      notoapi.JobPipeline,
 		MeetingID: state.MeetingID,
-		Options: map[string]any{
-			"title":       state.Title,
-			"output_path": out.OutputPath,
-			"notes_md":    opts.NotesMD,
-		},
+		Options:   jobOpts,
 	})
 	if jerr == nil {
 		out.JobsKicked = append(out.JobsKicked, job.ID)

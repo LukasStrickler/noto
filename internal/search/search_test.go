@@ -118,9 +118,9 @@ func TestSearchReturnsRankedResults(t *testing.T) {
 				Timestamp: 0.0,
 			},
 		},
-		Decisions:  []SummaryItem{},
+		Decisions:   []SummaryItem{},
 		ActionItems: []ActionItem{},
-		Risks:      []SummaryItem{},
+		Risks:       []SummaryItem{},
 	}
 
 	meeting2 := &Meeting{
@@ -134,9 +134,9 @@ func TestSearchReturnsRankedResults(t *testing.T) {
 				Timestamp: 0.0,
 			},
 		},
-		Decisions:  []SummaryItem{},
+		Decisions:   []SummaryItem{},
 		ActionItems: []ActionItem{},
-		Risks:      []SummaryItem{},
+		Risks:       []SummaryItem{},
 	}
 
 	if err := index.IndexMeeting(meeting1); err != nil {
@@ -181,9 +181,9 @@ func TestDeleteFromIndex(t *testing.T) {
 				Timestamp: 0.0,
 			},
 		},
-		Decisions:  []SummaryItem{},
+		Decisions:   []SummaryItem{},
 		ActionItems: []ActionItem{},
-		Risks:      []SummaryItem{},
+		Risks:       []SummaryItem{},
 	}
 
 	if err := index.IndexMeeting(meeting); err != nil {
@@ -387,7 +387,7 @@ func TestIndexMeetingFromInput(t *testing.T) {
 
 	input := &IndexMeetingInput{
 		MeetingID: "meeting-input-test",
-		Title:    "Test meeting from input",
+		Title:     "Test meeting from input",
 		TranscriptSegments: []TranscriptSegment{
 			{
 				SegmentID: "seg_001",
@@ -463,5 +463,167 @@ func TestClose(t *testing.T) {
 
 	if err := index.Close(); err != nil {
 		t.Fatalf("Second Close should not fail: %v", err)
+	}
+}
+
+func TestPrefixMatchFindsLongerToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	index, err := NewSearchIndex(filepath.Join(tmpDir, "test_index.db"))
+	if err != nil {
+		t.Fatalf("NewSearchIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	m := &Meeting{
+		MeetingID: "m-mobile",
+		Title:     "Mobile beta kickoff",
+		TranscriptSegments: []TranscriptSegment{
+			{SegmentID: "s1", Speaker: "A", Text: "we shipped the mobile rollout", Timestamp: 0},
+		},
+	}
+	if err := index.IndexMeeting(m); err != nil {
+		t.Fatalf("IndexMeeting: %v", err)
+	}
+
+	// `mob` should prefix-match `mobile`.
+	hits, err := index.Search("mob")
+	if err != nil {
+		t.Fatalf("Search('mob') failed: %v", err)
+	}
+	if len(hits) == 0 {
+		t.Fatalf("expected prefix `mob` to match `mobile`, got 0 hits")
+	}
+}
+
+func TestExactRanksAbovePrefixOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	index, err := NewSearchIndex(filepath.Join(tmpDir, "test_index.db"))
+	if err != nil {
+		t.Fatalf("NewSearchIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	exact := &Meeting{
+		MeetingID: "m-exact",
+		Title:     "Generic standup",
+		TranscriptSegments: []TranscriptSegment{
+			{SegmentID: "s1", Speaker: "A", Text: "we hit mob today", Timestamp: 0},
+		},
+	}
+	prefixOnly := &Meeting{
+		MeetingID: "m-prefix",
+		Title:     "Generic standup",
+		TranscriptSegments: []TranscriptSegment{
+			{SegmentID: "s1", Speaker: "A", Text: "we shipped a mobile rollout", Timestamp: 0},
+		},
+	}
+	if err := index.IndexMeeting(exact); err != nil {
+		t.Fatalf("IndexMeeting exact: %v", err)
+	}
+	if err := index.IndexMeeting(prefixOnly); err != nil {
+		t.Fatalf("IndexMeeting prefix: %v", err)
+	}
+
+	groups, err := index.SearchMeetings("mob", 0)
+	if err != nil {
+		t.Fatalf("SearchMeetings: %v", err)
+	}
+	if len(groups) < 2 {
+		t.Fatalf("expected 2 hits (exact + prefix), got %d", len(groups))
+	}
+	if groups[0].MeetingID != "m-exact" {
+		t.Errorf("expected exact-token meeting first; got %q before %q", groups[0].MeetingID, groups[1].MeetingID)
+	}
+}
+
+func TestSummaryBodyMatchOutranksTranscriptOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	index, err := NewSearchIndex(filepath.Join(tmpDir, "test_index.db"))
+	if err != nil {
+		t.Fatalf("NewSearchIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	transcriptOnly := &Meeting{
+		MeetingID: "m-transcript",
+		Title:     "Standup A",
+		TranscriptSegments: []TranscriptSegment{
+			{SegmentID: "s1", Speaker: "A", Text: "we should talk about kubernetes routing", Timestamp: 0},
+		},
+	}
+	summaryAndTranscript := &Meeting{
+		MeetingID:    "m-summary",
+		Title:        "Standup B",
+		ShortSummary: "We finalized kubernetes routing and signed off on staging.",
+		TranscriptSegments: []TranscriptSegment{
+			{SegmentID: "s1", Speaker: "A", Text: "we discussed kubernetes routing options briefly", Timestamp: 0},
+		},
+	}
+	if err := index.IndexMeeting(transcriptOnly); err != nil {
+		t.Fatalf("IndexMeeting transcriptOnly: %v", err)
+	}
+	if err := index.IndexMeeting(summaryAndTranscript); err != nil {
+		t.Fatalf("IndexMeeting summaryAndTranscript: %v", err)
+	}
+
+	groups, err := index.SearchMeetings("kubernetes", 0)
+	if err != nil {
+		t.Fatalf("SearchMeetings: %v", err)
+	}
+	if len(groups) < 2 {
+		t.Fatalf("expected 2 meeting groups, got %d", len(groups))
+	}
+	if groups[0].MeetingID != "m-summary" {
+		t.Errorf("expected summary-match meeting first; got %q (SummaryMatch=%v)", groups[0].MeetingID, groups[0].SummaryMatch)
+	}
+	if !groups[0].SummaryMatch {
+		t.Errorf("expected SummaryMatch=true on top result")
+	}
+}
+
+func TestQuestionsIndexedAndCounted(t *testing.T) {
+	tmpDir := t.TempDir()
+	index, err := NewSearchIndex(filepath.Join(tmpDir, "test_index.db"))
+	if err != nil {
+		t.Fatalf("NewSearchIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	m := &Meeting{
+		MeetingID: "m-q",
+		Title:     "Roadmap",
+		OpenQuestions: []SummaryItem{
+			{Text: "Should we hire a contractor for the mobile rewrite?"},
+		},
+	}
+	if err := index.IndexMeeting(m); err != nil {
+		t.Fatalf("IndexMeeting: %v", err)
+	}
+
+	groups, err := index.SearchMeetings("contractor", 0)
+	if err != nil {
+		t.Fatalf("SearchMeetings: %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 hit, got %d", len(groups))
+	}
+	if groups[0].QuestionCount != 1 {
+		t.Errorf("expected QuestionCount=1, got %d", groups[0].QuestionCount)
+	}
+}
+
+func TestPunctuationStillSanitized(t *testing.T) {
+	tmpDir := t.TempDir()
+	index, err := NewSearchIndex(filepath.Join(tmpDir, "test_index.db"))
+	if err != nil {
+		t.Fatalf("NewSearchIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	// Punctuation-only queries must remain harmless.
+	for _, q := range []string{"/", "?", "(", ")", "*", ":"} {
+		if _, err := index.Search(q); err != nil {
+			t.Errorf("Search(%q) errored: %v", q, err)
+		}
 	}
 }

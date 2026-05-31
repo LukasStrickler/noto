@@ -17,7 +17,7 @@ func TestLLMCapabilitiesRouteOnlyToOpenRouter(t *testing.T) {
 		router := CapabilityRouter{
 			Registry: reg,
 			Policy: RoutingPolicy{
-				SpeechProvider: "elevenlabs",
+				SpeechProvider: "assemblyai",
 				LLMProvider:    "openrouter",
 				LLMModel:       "anthropic/claude-3.5-sonnet",
 				Profile:        RoutingProfileManual,
@@ -37,9 +37,9 @@ func TestLLMCapabilitiesRejectNonOpenRouterPolicy(t *testing.T) {
 	router := CapabilityRouter{
 		Registry: DefaultRegistry(),
 		Policy: RoutingPolicy{
-			SpeechProvider: "mistral",
-			LLMProvider:    "mistral",
-			LLMModel:       "mistral-large-latest",
+			SpeechProvider: "assemblyai",
+			LLMProvider:    "not-openrouter",
+			LLMModel:       "not-openrouter-model",
 			Profile:        RoutingProfileManual,
 		},
 	}

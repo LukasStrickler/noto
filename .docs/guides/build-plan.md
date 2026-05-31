@@ -2,135 +2,85 @@
 
 ## Strategy
 
-Build around local artifacts first, then add the terminal TUI and native capture
-helper. V1 is local-only and terminal-first: macOS split-source recording,
-ingest/import, cloud transcription provider adapters, JSON/Markdown artifacts,
-SQLite FTS5 search, summaries, a keyboard-first Bubble Tea interface, and
-JSON/file-path access for agents.
+Backend first, then TUI. The backend owns storage, AssemblyAI transcription,
+LLM summarization, search indexing, and speaker profile matching.
+The TUI is a thin consumer of the remote API.
 
-V1 ships after Phase 5. Sync, hosted APIs, hosted provider routing, and local
-transcription are post-V1 phases.
+Every phase is test-first: write the fixture, failing test, or schema check before
+implementing the behavior.
 
-Every phase is test-first. Add the fixture, schema check, golden output, or
-agentic validation command before implementing the behavior. The acceptance
-gates live in [testing.md](../reference/testing.md).
+## Status
 
-## V1 Phases
+### ✅ Phase 1: Backend Core — DONE
 
-0. Validation spike:
-Build the benchmark harness, `benchmark-result.v1`, dataset access notes,
-three public samples, one consented split-source private sample, two STT runs,
-and one normalized transcript. Gate: benchmark fixtures capture quality,
-source attribution, latency, cost, RSS, idle CPU, and provider versions.
+`noto serve` backend fully operational:
 
-1. Artifact core:
-Build IDs, local layout, JSON schemas, version commits, checksums, Markdown
-renderers, import/list/show/transcript/summary commands, and fixtures. Gate:
-`noto verify --json` passes valid fixtures, fails invalid fixtures, and invalid
-processor output cannot commit.
+- HTTP API server with all planned REST endpoints
+- SSE endpoint for job progress and recorder events
+- `ArtifactRepository` interface (`internal/repo`) with `LocalArtifactRepository` implementation
+- SQLite-backed job queue with workers, cancellation, restart recovery
+- Full pipeline: ingest → transcribe → summarize → index
+- AssemblyAI STT adapter (with deterministic dry-run fallback)
+- OpenRouter LLM adapter (with deterministic fallback when no key)
+- `runVerify` implemented — actual checksum verification via `repo.VerifyIntegrity()`
+- Bulk `runIndex` implemented — walks all meetings via `repo.ListMeetings()`
+- Speaker profile store + matching pipeline (external embedding service)
+- SQLite FTS5 search index (sanitized input, title weighting, recency tiebreaker)
+- Import audio (`noto import-audio`) wired through `repo.PrepareAudio()`
+- Recording: start/stop/pause/resume/marker/preflight/live meters
+- Config CRUD via API
 
-2. Search and agent access:
-Build the SQLite FTS5 schema, rebuild command, `noto search --json`, and
-generated `~/Noto/SKILL.md`. Gate: search returns cited segments with source
-roles, and agent workflow tests answer with segment citations.
+### ✅ Phase 2: TUI Client — DONE
 
-3. Providers and summaries:
-Build the processor registry, capability matching, STT provider interface, one
-baseline STT adapter, one comparison STT adapter, summary provider, and
-`prompts/summary.v1.md`. Gate: both STT providers pass the same `transcript.v1`
-contract tests, and summaries cite transcript evidence.
+`noto` TUI fully operational:
 
-4. TUI and agent CLI:
-Build the Bubble Tea dashboard, meetings/search/detail/transcript/settings
-screens, JSON commands, artifact-path responses, 1,000-meeting fixture, and
-2-hour transcript fixture. Gate: model tests, snapshot tests, idle tick tests,
-and CLI JSON golden tests pass.
+- Bubble Tea dashboard: meetings list + FTS search, 1/3+2/3 split, embedded detail pane
+- Detail pane: Summary / Transcript / Speakers tabs, inline speaker renaming
+- Match jumping (n/N) across search hits
+- Recorder screen: idle/active, live waveform, title input, markers
+- Config screen: active routes, API keys, storage, paths
+- Agent screen: handoff view with copyable CLI commands
+- Root: screen stack, SSE subscription, command palette (`:`), help overlay, status bar
+- All CLI commands: `list`, `search`, `show`, `transcript`, `summary`, `files`,
+  `agent`, `status`, `providers`, `verify`, `record`, `stop`, `import-audio`,
+  `jobs`, `ping`, `seed`, `dev`, `serve`
 
-5. macOS capture helper:
-Build the minimal native helper, permission onboarding,
-ScreenCaptureKit/AVFoundation split mic/system capture, temp writer, Unix socket
-protocol, and recovery. Gate: capture lifecycle tests prove record/stop, TUI
-exit recovery, split-source ingest, source roles, and raw-audio retention.
+### ✅ Testing Infrastructure — DONE
 
-## Post-V1 Phases
+- `internal/repo` — 7 atomic tests for `LocalArtifactRepository` (no host, no HTTP)
+- `internal/service/meetings_unit_test.go` — 9 atomic unit tests using `testutil.FakeRepo`
+- `internal/testutil.FakeRepo` — in-memory `ArtifactRepository` for fast unit tests
+- E2E tests: `notohost/host_test.go` (record/pipeline/search/agent), `service/import_test.go`
+- Service tests: speaker profiles, embedder pipeline, matching
 
-- Sync gateway: add `SyncGateway`, local filesystem sync, owner-credential
-  object storage, and conflict detection.
-- Remote gateway client: add the remote adapter and local/object-store/remote
-  parity tests.
-- Remote API spike: validate device trust, policy, signed object access,
-  manifest metadata, and audit events.
-- Hosted provider routing: add provider policy, key ownership modes, async
-  workers, cost counters, and retry states.
-- Local transcription: evaluate local model runtime, RAM, WER/DER, and install
-  size before choosing beta scope.
+### ❌ Phase 3: Capture Integration — NOT STARTED
 
-## V1 Job Lifecycle
+- Native macOS capture helper (Swift binary) is separate from this repo
+- `cmd/capture/main.go` is an IPC relay tool for scripting/dev — not the actual capture binary
+- Without the Swift helper, recording runs in dry-run mode
+- Estimated scope: Swift binary + macOS audio API + IPC protocol (already defined in `internal/appsocket`)
 
-- The native capture helper owns active split mic/system recording and minimal
-  recording state.
-- Recording survives TUI exit without making a GUI the main product.
-- The CLI/TUI talks to the capture helper over a local socket for record, stop,
-  and status.
-- CLI commands run foreground work and exit when complete.
-- The TUI may start foreground child tasks for import, transcription, summary,
-  render, and index rebuild.
-- Active tasks report progress in the Jobs pane and must be cancelled or
-  allowed to finish explicitly before TUI exit.
-- Mutating jobs write only after schema and checksum validation.
-- Partial outputs stay in `.tmp/` and are never promoted to the current version.
-- Long-running processing can resume with explicit CLI commands:
-  `noto transcribe`, `noto summarize`, and `noto index rebuild`.
-- V1 has no detached transcription worker, idle HTTP server, sync daemon, or
-  LaunchAgent.
-- If later processing must survive TUI exit, add a separate helper with an
-  explicit lifecycle.
+## Remaining Gaps
 
-## First Tasks
+### Testing (needed for done criteria)
 
-1. Define the fixture layout and validation commands from
-   [testing.md](../reference/testing.md).
-2. Create JSON schemas for `manifest.v1`, `meeting.v1`, `audio-asset.v1`,
-   `transcript.v1`, `summary.v1`, and `checksums.v1`.
-3. Add schema fixtures for overlap, missing word timestamps, split mic/system
-   source roles, retained audio, deleted audio, conflicts, and invalid
-   artifacts.
-4. Write failing schema/checksum tests and `noto verify --json` golden
-   responses.
-5. Implement artifact writer, version commits, checksum validation, and
-   Markdown renderers.
-6. Implement import/list/show/transcript/summary commands with CLI JSON golden
-   tests.
-7. Implement benchmark fixture loader, scoring settings, and
-   `benchmark-result.v1`.
-8. Implement WER/DER/JER scoring wrappers.
-9. Implement FTS rebuild and search with search fixture tests.
-10. Implement processor registry, capability matching, and output validation.
-11. Implement AssemblyAI plus one second STT adapter.
-12. Implement summary provider and evidence validation.
-13. Build TUI fixture set and polish dashboard/search/detail workflows with
-    model/snapshot tests.
-14. Implement agent JSON/file-path commands and agent workflow tests.
-15. Implement native capture helper, local socket control, split mic/system
-    capture, recovery, and recording ingest.
+- No CLI golden tests for `--json` output shapes
+- No fixture testdata set (`empty-root`, `one-meeting-transcript`, `invalid-artifact`)
+- TUI snapshot test coverage is partial
+- Agentic validation test suite (`noto verify --json` checking success/failure) not automated
 
-## Risks
+### Features
 
-| Risk | Mitigation |
-| --- | --- |
-| TUI overbuild slows V1 | Keep V1 to local artifacts, recording, ingest, search, summaries, and browsing. |
-| macOS system audio is brittle | Native app, permission onboarding, mic-only fallback. |
-| diarization quality is weak | Use mic/system source roles as the first speaker hint, provider benchmark, speaker rename, retain audio until transcript validates. |
-| Remote API becomes required | Keep sync and remote adapters post-V1; local artifacts remain source of truth. |
-| API handles large audio inefficiently | Signed object access and async workers. |
-| Self-hosted stack grows too heavy | Small `noto-server`; external Postgres and S3-compatible storage. |
-| Agent writes corrupt artifacts | Schema validation and new versions for writes. |
-| Raw audio privacy issue | V1 local retention policy only; hosted upload requires later explicit workspace policy. |
-| Processor swap breaks downstream behavior | Contract tests for every processor output schema. |
+- Speaker embedding service requires external `NOTO_SPEAKER_EMBEDDING_URL` — no bundled service
+- Live STT during recording (`providers/live/speech.go` exists but not wired to recording pipeline)
 
-## Related
+## Out of Scope for Active Build Plan
 
-- [Product reference](../reference/product.md)
-- [Feature alignment](../reference/features.md)
-- [Testing and validation](../reference/testing.md)
-- [Artifact reference](../reference/artifacts.md)
+- Local/offline STT engines
+- Local model management commands
+- Multi-worker broker deployments
+- Distributed job queue systems
+- Object storage sync (R2/S3)
+- Postgres replacement for SQLite
+
+These are preserved as interface seams (via `ArtifactRepository`), not active deliverables.

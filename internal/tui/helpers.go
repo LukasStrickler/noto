@@ -170,18 +170,6 @@ func testProviderCmd(ctx screenCtx, id string) tea.Cmd {
 	}
 }
 
-func verifyStorageCmd(ctx screenCtx) tea.Cmd {
-	return func() tea.Msg {
-		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
-		defer cancel()
-		_, err := ctx.client.VerifyStorage(c)
-		if err != nil {
-			return bannerMsg{Kind: "error", Text: err.Error()}
-		}
-		return bannerMsg{Kind: "info", Text: "verify job queued"}
-	}
-}
-
 // --- rendering helpers ---
 
 // fit truncates s to width, padding short ones to width with spaces.
@@ -234,25 +222,20 @@ func ternary(cond bool, a, b string) string {
 	return b
 }
 
-// --- empty state helper -----------------------------------------
-
-type emptyAction struct {
-	Key   string
-	Label string
+// oscLink wraps label in an OSC 8 terminal hyperlink to url. Terminals
+// that don't understand OSC 8 ignore the escapes and show label verbatim,
+// so this is safe to emit unconditionally (and ansi.Strip removes it).
+func oscLink(url, label string) string {
+	return "\x1b]8;;" + url + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }
 
-func renderEmptyState(s theme.Styles, headline string, actions []emptyAction) string {
-	rows := []string{
-		s.HeaderEm.Render("◌ " + headline),
-		"",
+// fileLink renders a local filesystem path as a clickable file:// link,
+// so agents and humans can open artifacts straight from the handoff view.
+func fileLink(path string) string {
+	if path == "" {
+		return ""
 	}
-	for _, a := range actions {
-		rows = append(rows, "  "+s.ChipKey.Render(a.Key)+"   "+s.Muted.Render(a.Label))
-	}
-	if len(actions) == 0 {
-		rows = append(rows, s.Muted.Render("Nothing to show yet."))
-	}
-	return strings.Join(rows, "\n")
+	return oscLink("file://"+path, path)
 }
 
 // --- badge helpers used by screens ---
@@ -262,6 +245,48 @@ func badgeWarn(stylesAny any, text string) string   { return styleAny(stylesAny,
 func badgeDanger(stylesAny any, text string) string { return styleAny(stylesAny, "danger", text) }
 func badgeInfo(stylesAny any, text string) string   { return styleAny(stylesAny, "info", text) }
 func badgeMuted(stylesAny any, text string) string  { return styleAny(stylesAny, "muted", text) }
+
+// statusBadge renders a meeting status as a colored chip.
+func statusBadge(s any, status notoapi.MeetingStatus) string {
+	switch status {
+	case notoapi.StatusSummarized:
+		return badgeOK(s, "✓ done")
+	case notoapi.StatusTranscribed:
+		return badgeInfo(s, "transcribed")
+	case notoapi.StatusRecording:
+		return badgeDanger(s, "● rec")
+	case notoapi.StatusFailed:
+		return badgeDanger(s, "✗ failed")
+	default:
+		return badgeMuted(s, string(status))
+	}
+}
+
+// jobBar renders a horizontal progress bar (0.0..1.0) with the given
+// total width using ▰ / ▱ glyphs.
+func jobBar(progress float64, width int) string {
+	filled := int(progress * float64(width))
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", width-filled)
+}
+
+// jobKindStyled returns a fixed-width label for a job kind so columns
+// stay aligned when many jobs render in a list.
+func jobKindStyled(_ any, kind notoapi.JobKind) string {
+	return fmt.Sprintf("%-10s", kind)
+}
+
+// formatSec turns a fractional second value into a timestamp label for
+// transcript segment headers. It defers to formatDuration so a clip longer
+// than an hour reads as h:mm:ss rather than an overflowing minute count.
+func formatSec(s float64) string {
+	return formatDuration(int(s))
+}
 
 func styleAny(stylesAny any, kind, text string) string {
 	st, ok := stylesAny.(theme.Styles)

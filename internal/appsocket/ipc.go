@@ -1,3 +1,5 @@
+// Package appsocket speaks the IPC protocol to the native macOS capture
+// helper over a Unix domain socket.
 package appsocket
 
 import (
@@ -78,7 +80,7 @@ func (c *IPCClient) EnsureHelperRunning(ctx context.Context) error {
 		}
 		c.proc = nil
 		os.Remove(c.socketPath)
-		return fmt.Errorf("Swift helper did not start in time: %w", err)
+		return fmt.Errorf("swift helper did not start in time: %w", err)
 	}
 	cancel()
 

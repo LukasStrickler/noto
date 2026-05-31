@@ -29,6 +29,9 @@ type HTTPOptions struct {
 	Timeout time.Duration
 }
 
+// Compile-time proof that httpClient satisfies the full Client contract.
+var _ notoapi.Client = (*httpClient)(nil)
+
 // NewHTTP returns a notoapi.Client that talks HTTP/JSON+SSE.
 func NewHTTP(opts HTTPOptions) notoapi.Client {
 	timeout := opts.Timeout
@@ -54,18 +57,20 @@ func NewHTTP(opts HTTPOptions) notoapi.Client {
 	stream := &http.Client{Transport: transport}
 
 	return &httpClient{
-		base:   strings.TrimRight(opts.BaseURL, "/"),
-		token:  opts.Token,
-		client: hc,
-		stream: stream,
+		base:             strings.TrimRight(opts.BaseURL, "/"),
+		token:            opts.Token,
+		client:           hc,
+		stream:           stream,
+		heartbeatTimeout: defaultHeartbeatTimeout,
 	}
 }
 
 type httpClient struct {
-	base   string
-	token  string
-	client *http.Client
-	stream *http.Client
+	base             string
+	token            string
+	client           *http.Client
+	stream           *http.Client
+	heartbeatTimeout time.Duration
 }
 
 // do issues a JSON request and unmarshals the response into out.
@@ -164,6 +169,13 @@ func (c *httpClient) VerifyMeeting(ctx context.Context, id string) (notoapi.Job,
 	var out notoapi.Job
 	err := c.do(ctx, http.MethodPost, "/v1/meetings/"+id+"/verify", nil, &out)
 	return out, err
+}
+
+func (c *httpClient) UpdateSpeakerName(ctx context.Context, meetingID, speakerID, displayName string) error {
+	body := struct {
+		DisplayName string `json:"display_name"`
+	}{DisplayName: displayName}
+	return c.do(ctx, http.MethodPost, "/v1/meetings/"+meetingID+"/speakers/"+speakerID, body, nil)
 }
 
 // ---- Search ----
@@ -302,6 +314,11 @@ func (c *httpClient) SetActiveSpeech(ctx context.Context, providerID string) err
 	return c.do(ctx, http.MethodPut, "/v1/providers/"+providerID+"/active-speech", nil, nil)
 }
 func (c *httpClient) SetActiveLLMModel(ctx context.Context, modelID string) error {
+	// Match the direct client: reject an empty model id up front rather than
+	// PATCHing config, where a blank LLMModel is silently dropped as a no-op.
+	if strings.TrimSpace(modelID) == "" {
+		return notoapi.NewError(notoapi.CodeInvalidRequest, "model id is empty", nil)
+	}
 	patch := notoapi.ConfigPatch{Routing: &notoapi.ConfigRouting{LLMProvider: "openrouter", LLMModel: modelID}}
 	return c.do(ctx, http.MethodPatch, "/v1/config", patch, nil)
 }
@@ -323,6 +340,7 @@ func (c *httpClient) GetPaths(ctx context.Context) (notoapi.Paths, error) {
 	err := c.do(ctx, http.MethodGet, "/v1/config/paths", nil, &out)
 	return out, err
 }
+
 func (c *httpClient) GetStorage(ctx context.Context) (notoapi.Storage, error) {
 	var out notoapi.Storage
 	err := c.do(ctx, http.MethodGet, "/v1/storage", nil, &out)
@@ -345,3 +363,86 @@ func (c *httpClient) Health(ctx context.Context) (notoapi.Health, error) {
 }
 
 func (c *httpClient) Close() error { return nil }
+
+// ---- Speaker Profiles ----
+
+func (c *httpClient) ListSpeakerProfiles(ctx context.Context) ([]notoapi.SpeakerProfile, error) {
+	var out notoapi.ListSpeakerProfilesResult
+	err := c.do(ctx, http.MethodGet, "/v1/speaker-profiles", nil, &out)
+	return out.Profiles, err
+}
+
+func (c *httpClient) GetSpeakerProfile(ctx context.Context, id string) (notoapi.SpeakerProfile, error) {
+	var out notoapi.SpeakerProfile
+	err := c.do(ctx, http.MethodGet, "/v1/speaker-profiles/"+id, nil, &out)
+	return out, err
+}
+
+func (c *httpClient) CreateSpeakerProfile(ctx context.Context, req notoapi.CreateSpeakerProfileRequest) (notoapi.SpeakerProfile, error) {
+	var out notoapi.SpeakerProfile
+	err := c.do(ctx, http.MethodPost, "/v1/speaker-profiles", req, &out)
+	return out, err
+}
+
+func (c *httpClient) PatchSpeakerProfile(ctx context.Context, id string, patch notoapi.SpeakerProfilePatch) (notoapi.SpeakerProfile, error) {
+	var out notoapi.SpeakerProfile
+	err := c.do(ctx, http.MethodPatch, "/v1/speaker-profiles/"+id, patch, &out)
+	return out, err
+}
+
+func (c *httpClient) DeleteSpeakerProfile(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/speaker-profiles/"+id, nil, nil)
+}
+
+func (c *httpClient) MergeSpeakerProfiles(ctx context.Context, targetID, sourceID string) (notoapi.SpeakerProfile, error) {
+	var out notoapi.SpeakerProfile
+	req := notoapi.MergeSpeakerProfilesRequest{TargetProfileID: targetID, SourceProfileID: sourceID}
+	err := c.do(ctx, http.MethodPost, "/v1/speaker-profiles/"+targetID+"/merge", req, &out)
+	return out, err
+}
+
+// ---- Meeting Speaker Mappings ----
+
+func (c *httpClient) GetMeetingSpeakerMappings(ctx context.Context, meetingID string) (notoapi.MeetingSpeakerMappings, error) {
+	var out notoapi.MeetingSpeakerMappings
+	err := c.do(ctx, http.MethodGet, "/v1/meetings/"+meetingID+"/speaker-mappings", nil, &out)
+	return out, err
+}
+
+func (c *httpClient) PatchMeetingSpeakerMappings(ctx context.Context, meetingID string, patch notoapi.MeetingSpeakerMappingsPatch) (notoapi.MeetingSpeakerMappings, error) {
+	var out notoapi.MeetingSpeakerMappings
+	err := c.do(ctx, http.MethodPatch, "/v1/meetings/"+meetingID+"/speaker-mappings", patch, &out)
+	return out, err
+}
+
+// ---- Agent API ----
+
+func (c *httpClient) AgentListMeetings(ctx context.Context, opts notoapi.AgentListOpts) (notoapi.AgentListResult, error) {
+	var out notoapi.AgentListResult
+	path := "/v1/agent/meetings"
+	if opts.Limit > 0 {
+		path += "?limit=" + strconv.Itoa(opts.Limit)
+	}
+	if !opts.After.IsZero() {
+		sep := "?"
+		if opts.Limit > 0 {
+			sep = "&"
+		}
+		path += sep + "after=" + opts.After.UTC().Format(time.RFC3339Nano)
+	}
+	if !opts.Before.IsZero() {
+		sep := "?"
+		if opts.Limit > 0 || !opts.After.IsZero() {
+			sep = "&"
+		}
+		path += sep + "before=" + opts.Before.UTC().Format(time.RFC3339Nano)
+	}
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+func (c *httpClient) AgentGetMeeting(ctx context.Context, id string) (notoapi.AgentMeetingContext, error) {
+	var out notoapi.AgentMeetingContext
+	err := c.do(ctx, http.MethodGet, "/v1/agent/meetings/"+id, nil, &out)
+	return out, err
+}

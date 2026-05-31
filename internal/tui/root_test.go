@@ -1,0 +1,94 @@
+package tui
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/lukasstrickler/noto/internal/tui/keys"
+	"github.com/lukasstrickler/noto/internal/tui/theme"
+)
+
+func testRootModel() *rootModel {
+	return &rootModel{
+		keys:   keys.New(),
+		styles: theme.NewStyles(),
+		width:  100,
+		height: 30,
+		stack:  []screen{newDashboardScreen()},
+	}
+}
+
+func TestHelpOverlayEscapeCloses(t *testing.T) {
+	m := testRootModel()
+	m.helpOpen = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(*rootModel)
+
+	if got.helpOpen {
+		t.Fatal("helpOpen = true; want Escape to close help overlay")
+	}
+}
+
+func TestPaletteEscapeCloses(t *testing.T) {
+	m := testRootModel()
+	m.palette = newPalette(nil, []paletteEntry{{Label: "Dashboard", Action: "goto", Param: string(sDashboard)}})
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(*rootModel)
+
+	if got.palette != nil {
+		t.Fatal("palette is still open; want Escape to close command menu")
+	}
+}
+
+// Top-level screens must be numbered 1..N with no gap. The gap (1/3/4)
+// appeared after search folded into the dashboard and is exactly the bug
+// the auto-numbering registry guards against: every screen responds to
+// its 1-based position in topScreens, and the router maps that key back
+// to the same screen.
+func TestScreenNavNumberingIsContiguous(t *testing.T) {
+	press := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+	for i, sc := range topScreens {
+		num := strconv.Itoa(i + 1)
+		b := sc.navBinding(i)
+		if !key.Matches(press(num), b) {
+			t.Errorf("screen %q does not respond to its number %q", sc.id, num)
+		}
+		if !strings.HasPrefix(b.Help().Key, num) {
+			t.Errorf("screen %q help key %q does not start with its number %q", sc.id, b.Help().Key, num)
+		}
+		if got := screenNavTarget(press(num)); got != sc.id {
+			t.Errorf("number %q routed to %q; want %q", num, got, sc.id)
+		}
+	}
+}
+
+// The help overlay must be rendered FROM the bindings, so changing a key
+// in keys.New() updates the displayed label automatically. We assert
+// every action key's literal appears in the rendered overlay and that no
+// stale hand-written numbering survives.
+func TestHelpOverlayDerivesKeysFromBindings(t *testing.T) {
+	m := testRootModel()
+	m.helpOpen = true
+	help := ansi.Strip(m.View())
+
+	bindings := append(screenNavBindings(),
+		m.keys.Record, m.keys.Stop, m.keys.Marker, m.keys.EditTitle,
+		m.keys.OpenAgent, m.keys.Delete, m.keys.ClearSearch,
+		m.keys.Transcript, m.keys.Speakers, m.keys.NextMatch, m.keys.PrevMatch,
+		m.keys.Test, m.keys.Remove,
+	)
+	for _, b := range bindings {
+		if !strings.Contains(help, b.Help().Key) {
+			t.Errorf("help overlay missing key %q (%q) — UI not derived from bindings", b.Help().Key, b.Help().Desc)
+		}
+	}
+	if strings.Contains(help, "3/r") || strings.Contains(help, "4/,") || strings.Contains(help, "4 ") {
+		t.Errorf("help overlay shows stale numbering:\n%s", help)
+	}
+}

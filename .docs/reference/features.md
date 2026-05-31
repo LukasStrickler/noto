@@ -2,87 +2,55 @@
 
 ## Purpose
 
-Keep V1 focused on the two real users:
+Keep implementation aligned around two users:
 
-- Humans use `noto` as a terminal TUI.
-- Agents use `noto --json` and local artifact paths.
+- Humans use the `noto` terminal TUI.
+- Agents use JSON commands and HTTP/API contracts.
 
 The native macOS component is a capture helper only. It is not the product UI.
 
-## Human V1 Features
+## Human Features
 
 | Feature | Human outcome | Interface |
 | --- | --- | --- |
-| Open meeting memory | See recent meetings, recording state, jobs, and index health immediately. | `noto` TUI dashboard |
-| Record a meeting | Start, monitor, stop, and ingest local split-source recording. | TUI recorder pane, `noto record`, `noto stop` |
-| Import audio | Bring existing recordings into the same artifact flow. | TUI import action, `noto import-audio` |
-| Import transcript | Load fixture/manual transcripts without provider access. | TUI import action, `noto import-transcript` |
-| Transcribe | Turn recorded/imported audio into normalized diarized JSON. | TUI jobs pane, `noto transcribe` |
-| Summarize | Produce cited summaries, decisions, actions, risks, and open questions. | Meeting detail, `noto summarize` |
+| Open meeting memory | See recent meetings, recording state, jobs, and index health. | TUI dashboard |
+| Record a meeting | Start, monitor, stop, and process recording. | TUI recorder pane, `noto record`, `noto stop` |
+| Import audio | Bring existing recordings into the backend processing flow. | `noto import-audio <path>` |
+| Transcribe | Turn recorded/imported audio into normalized diarized JSON. | Backend job via TUI/CLI/API |
+| Summarize | Produce cited summaries, decisions, actions, risks, and open questions. | Meeting detail, CLI/API |
 | Review transcript | Scroll long transcripts with stable speaker labels, timestamps, and segment IDs. | Transcript view |
-| Identify speaker source | See likely mic/local or system/participant origin before manual rename. | Transcript view, search results |
-| Rename speakers | Replace generic labels with display names without losing source labels. | Transcript/detail command |
-| Search | Find segments and jump to the source context. | Search pane, `noto search` |
-| Verify local data | Check schemas, checksums, source roles, retention, and index state. | Storage pane, `noto verify --json` |
+| Manage speaker profiles | Name, merge, confirm, and reuse speakers across meetings. | Detail/config flows |
+| Search | Find segments and jump to source context. | Search pane, `noto search` |
 
-## Agent V1 Features
+## Agent Features
 
 | Feature | Agent outcome | Interface |
 | --- | --- | --- |
-| List meetings | Discover available meeting IDs and current versions. | `noto list --json` |
-| Search meetings | Retrieve relevant cited transcript segments. | `noto search --json <query>` |
-| Fetch transcript | Read normalized source evidence. | `noto transcript --json <meeting_id>` |
-| Fetch summary | Use summary as orientation, not ground truth. | `noto summary --json <meeting_id>` |
-| Fetch actions | Extract action items with evidence segment IDs. | `noto actions --json <meeting_id>` |
-| Locate files | Read local artifacts directly when useful. | `noto files --json <meeting_id>` |
-| Check state | See active recording/job/index state without parsing UI text. | `noto status --json` |
-| Verify data | Detect schema, checksum, source-role, path, retention, and stale-index failures. | `noto verify --json` |
+| List meetings | Discover meeting IDs and status. | `noto list --json` / API |
+| Search meetings | Retrieve cited transcript segments. | `noto search --json <query>` / API |
+| Fetch transcript | Read normalized source evidence. | `noto transcript --json <meeting_id>` / API |
+| Fetch summary | Use summary as orientation, not ground truth. | `noto summary --json <meeting_id>` / API |
+| Check state | See active recording/job/index state. | `noto status --json` / API |
+| Verify data | Detect checksum and schema failures. | `noto verify` / `POST /v1/storage/verify` |
 
 ## Agent Response Contract
 
 Agent-facing JSON should be boring and stable:
 
-- Stable IDs: `meeting_id`, `version_id`, `segment_id`, `speaker_id`.
-- Human citation fields: meeting title, speaker display label, source role, timestamp, segment ID.
-- Local paths when available: `manifest_path`, `version_path`, `transcript_json_path`, `transcript_markdown_path`, `summary_json_path`, `summary_markdown_path`.
+- Stable IDs: `meeting_id`, `segment_id`, `speaker_id`, `speaker_profile_id`.
+- Human citation fields: meeting title, speaker display label, timestamp, segment ID.
 - Status fields: `recording_state`, `job_state`, `index_state`, `schema_valid`, `checksum_valid`.
-- Speaker/source fields: `source_role`, `audio_source`, `channel`, and `speaker_origin` when known.
+- Speaker fields: provider label, profile ID, display name, and match status when available.
 - Error shape from [cli.md](./cli.md), with machine-readable error codes.
-
-Agents should never need the TUI, a local HTTP server, or remote storage for V1.
-
-## Validation Alignment
-
-Every human feature should have an agent-readable validation path:
-
-| Feature group | Human confidence signal | Agentic validation |
-| --- | --- | --- |
-| Recording | Recorder pane shows elapsed time, source meters, retention, and ingest result. | Status, verify, and files JSON commands |
-| Transcript | Transcript view shows speaker/source labels and segment timestamps. | `noto transcript --json <meeting_id>` plus schema validation. |
-| Summary | Summary claims show evidence context. | `noto summary --json <meeting_id>` and evidence segment existence checks. |
-| Search | Search pane opens cited transcript segments. | `noto search --json <query>` golden tests over fixtures. |
-| Agent handoff | TUI shows local paths and copyable commands. | `noto files --json <meeting_id>` returns existing readable paths. |
-
-Acceptance gates are defined in [testing.md](./testing.md).
 
 ## Product Boundaries
 
-| In V1 | Not in V1 |
+| In scope | Out of scope |
 | --- | --- |
 | Terminal TUI as primary UI | GUI-first app |
-| Native capture helper behind CLI/TUI with mic/system source separation | Full macOS app workflow |
-| Cloud STT provider adapters | Local transcription default |
-| Local JSON/Markdown artifacts | Required hosted backend |
-| CLI JSON and file paths for agents | Required local HTTP server |
-| SQLite FTS5 local search | Server-side search |
-| Explicit foreground processing jobs | Detached transcription worker |
+| Remote-capable backend source of truth | Local/offline transcription engines |
+| AssemblyAI production transcription | Provider-shopping architecture |
+| Backend search and storage | Client-side data source of truth |
+| Persistent speaker profiles | Treating per-meeting labels as people |
 
-## Design Implications
-
-- The TUI must make recording state obvious without becoming a recorder-only screen.
-- The TUI must show mic/system source health because source separation is the primary local-vs-remote speaker hint.
-- Every TUI action that matters should have a CLI equivalent or JSON-readable result.
-- Every summary claim should be traceable to transcript segment IDs.
-- The TUI can be expressive, but the agent contract must be deterministic.
-- Artifact paths are a first-class product feature, not an implementation leak.
-- Recording animation and audio meters must follow [design.md](../design.md) so recording state is obvious without requiring a GUI.
+Acceptance gates are defined in [testing.md](./testing.md).

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/lukasstrickler/noto/internal/artifacts"
 )
@@ -59,8 +60,8 @@ func (n *DiarizationNormalizer) Normalize(transcript *artifacts.Transcript) (*ar
 
 	for _, seg := range transcript.Segments {
 		if current == nil {
-			current = new(artifacts.Segment)
-			*current = copySegment(seg)
+			first := copySegment(seg)
+			current = &first
 			continue
 		}
 
@@ -241,7 +242,9 @@ var (
 	wordSplitRE = regexp.MustCompile(`\s+`)
 	// Partial word pattern: words ending with hyphen (incomplete)
 	partialWordRE = regexp.MustCompile(`\b\w+-\s*`)
-	// Filler words to remove: um, uh, like
+	// Filler words wrapped in parentheses rather than deleted, so the
+	// hedging is visible but de-emphasized. fillerWords is the source list
+	// the test reuses; fillerPattern is what Normalize actually applies.
 	fillerWords   = []string{"um", "uh", "like"}
 	fillerPattern = regexp.MustCompile(`(?i)\b(um|uh|like)\b`)
 )
@@ -308,11 +311,9 @@ func (f *FormatNormalizer) Normalize(transcript *artifacts.Transcript) (*artifac
 // after sentence boundaries.
 type PunctuationNormalizer struct{}
 
-var (
-	// Sentence ending patterns (low confidence indicators)
-	sentenceEndings   = []string{".", "!", "?", ":", ";"}
-	capitalizeAfterRE = regexp.MustCompile(`([.!?])\s+(\w)`)
-)
+// capitalizeAfterRE matches the first word character after a sentence
+// boundary so PunctuationNormalizer can upper-case it.
+var capitalizeAfterRE = regexp.MustCompile(`([.!?])\s+(\w)`)
 
 // NewPunctuationNormalizer creates a PunctuationNormalizer.
 func NewPunctuationNormalizer() *PunctuationNormalizer {
@@ -331,27 +332,31 @@ func (p *PunctuationNormalizer) Normalize(transcript *artifacts.Transcript) (*ar
 	result := copyTranscript(transcript)
 	for i := range result.Segments {
 		seg := &result.Segments[i]
-		text := seg.Text
-
-		// Skip if already ends with punctuation
-		if len(text) > 0 {
-			trimmed := strings.TrimSpace(text)
-			lastChar := rune(trimmed[len(trimmed)-1])
-			if !unicode.IsPunct(lastChar) {
-				if len(trimmed) > 3 {
-					seg.Text = trimmed + "."
-				}
-			}
-
-			// Capitalize after sentence boundaries
-			seg.Text = capitalizeAfterRE.ReplaceAllStringFunc(seg.Text, func(match string) string {
-				parts := capitalizeAfterRE.FindStringSubmatch(match)
-				if len(parts) >= 3 {
-					return parts[1] + " " + strings.ToUpper(parts[2])
-				}
-				return match
-			})
+		trimmed := strings.TrimSpace(seg.Text)
+		// Whitespace-only (or empty) text has no last rune; leave it
+		// untouched rather than index past the start of the string.
+		if trimmed == "" {
+			continue
 		}
+
+		// Add a trailing period when the segment doesn't already end in
+		// punctuation. Decode the final rune (not byte) so multibyte text
+		// is classified correctly instead of inspecting a UTF-8 tail byte.
+		lastChar, _ := utf8.DecodeLastRuneInString(trimmed)
+		if !unicode.IsPunct(lastChar) && len(trimmed) > 3 {
+			seg.Text = trimmed + "."
+		} else {
+			seg.Text = trimmed
+		}
+
+		// Capitalize the first letter after a sentence boundary.
+		seg.Text = capitalizeAfterRE.ReplaceAllStringFunc(seg.Text, func(match string) string {
+			parts := capitalizeAfterRE.FindStringSubmatch(match)
+			if len(parts) >= 3 {
+				return parts[1] + " " + strings.ToUpper(parts[2])
+			}
+			return match
+		})
 	}
 	return result, nil
 }
@@ -392,21 +397,11 @@ func (s *SpeakerLabelNormalizer) Normalize(transcript *artifacts.Transcript) (*a
 
 	result := copyTranscript(transcript)
 
-	// Build speaker mapping
-	speakerMap := make(map[string]string)
-	for _, speaker := range transcript.Speakers {
-		canonicalLabel := s.canonicalLabel(speaker.ProviderLabel)
-		if canonicalLabel == "" {
-			if strings.HasPrefix(speaker.ID, "spk_") {
-				canonicalLabel = "speaker_" + speaker.ID[len("spk_"):]
-			} else {
-				canonicalLabel = speaker.ID
-			}
-		}
-		speakerMap[speaker.ID] = canonicalLabel
-	}
-
-	// Update speaker labels in result
+	// Normalize only the human-readable Label. Speaker.ID is the stable
+	// identity that segments reference, so it (and Segment.SpeakerID) must
+	// not change here — rewriting segment references to labels while
+	// leaving Speaker.ID untouched would make ValidateTranscript reject the
+	// transcript ("segment references unknown speaker").
 	for i := range result.Speakers {
 		canonical := s.canonicalLabel(result.Speakers[i].ProviderLabel)
 		if canonical == "" {
@@ -417,13 +412,6 @@ func (s *SpeakerLabelNormalizer) Normalize(transcript *artifacts.Transcript) (*a
 			}
 		}
 		result.Speakers[i].Label = canonical
-	}
-
-	// Update segment speaker references
-	for i := range result.Segments {
-		if newLabel, ok := speakerMap[result.Segments[i].SpeakerID]; ok {
-			result.Segments[i].SpeakerID = newLabel
-		}
 	}
 
 	return result, nil

@@ -5,12 +5,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lukasstrickler/noto/internal/config"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/providers"
 )
 
 // ListProviders returns the full provider suite with status info merged.
 func (s *Service) ListProviders(ctx context.Context) ([]notoapi.ProviderInfo, error) {
+	cfg := s.currentCfg()
 	suites := s.registry.List()
 	out := make([]notoapi.ProviderInfo, 0, len(suites))
 	for _, suite := range suites {
@@ -40,12 +42,12 @@ func (s *Service) ListProviders(ctx context.Context) ([]notoapi.ProviderInfo, er
 			info.HasKey = status.Configured
 			info.KeySource = status.Source
 		}
-		if suite.Kind == providers.ProviderKindSpeech && s.cfg.Routing.SpeechProvider == suite.ID {
+		if suite.Kind == providers.ProviderKindSpeech && cfg.Routing.SpeechProvider == suite.ID {
 			info.IsActiveSpeech = true
 		}
-		if suite.Kind == providers.ProviderKindLLM && s.cfg.Routing.LLMProvider == suite.ID {
+		if suite.Kind == providers.ProviderKindLLM && cfg.Routing.LLMProvider == suite.ID {
 			info.IsActiveLLM = true
-			info.ActiveModel = s.cfg.Routing.LLMModel
+			info.ActiveModel = cfg.Routing.LLMModel
 		}
 		out = append(out, info)
 	}
@@ -84,10 +86,9 @@ func (s *Service) DeleteProviderKey(ctx context.Context, providerID string) erro
 	return nil
 }
 
-// TestProvider pings the provider with whatever cheapest verification
-// path it supports. V1: just check the credential exists and is shaped
-// roughly right; a real test is provider-specific (and out of scope for
-// the burn-down).
+// TestProvider reports whether the provider is usable. V1 only checks that
+// the required credential is configured; a real round-trip test is
+// provider-specific and not yet implemented.
 func (s *Service) TestProvider(ctx context.Context, providerID string) (notoapi.TestProviderResult, error) {
 	start := time.Now()
 	suite, ok := s.registry.Get(providerID)
@@ -119,12 +120,11 @@ func (s *Service) SetActiveSpeech(ctx context.Context, providerID string) error 
 	if suite.Kind != providers.ProviderKindSpeech && suite.Kind != providers.ProviderKindFake {
 		return notoapi.NewError(notoapi.CodeInvalidRequest, "provider is not a speech provider", map[string]any{"kind": suite.Kind})
 	}
-	cfg := s.cfg
-	cfg.Routing.SpeechProvider = providerID
-	if err := s.cfgStore.Save(cfg); err != nil {
+	if err := s.updateCfg(func(cfg *config.Config) {
+		cfg.Routing.SpeechProvider = providerID
+	}); err != nil {
 		return notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
 	}
-	s.cfg = cfg
 	return nil
 }
 
@@ -135,12 +135,11 @@ func (s *Service) SetActiveLLMModel(ctx context.Context, modelID string) error {
 	if strings.TrimSpace(modelID) == "" {
 		return notoapi.NewError(notoapi.CodeInvalidRequest, "model id is empty", nil)
 	}
-	cfg := s.cfg
-	cfg.Routing.LLMProvider = "openrouter"
-	cfg.Routing.LLMModel = modelID
-	if err := s.cfgStore.Save(cfg); err != nil {
+	if err := s.updateCfg(func(cfg *config.Config) {
+		cfg.Routing.LLMProvider = "openrouter"
+		cfg.Routing.LLMModel = modelID
+	}); err != nil {
 		return notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
 	}
-	s.cfg = cfg
 	return nil
 }

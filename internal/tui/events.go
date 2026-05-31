@@ -12,8 +12,8 @@ import (
 // recvEventCmd command consumes one event at a time so the model can
 // re-issue it.
 var (
-	streamMu     sync.Mutex
-	streamCh     <-chan notoapi.Event
+	streamMu sync.Mutex
+	streamCh <-chan notoapi.Event
 )
 
 // subscribeEvents opens an event subscription on client and stores the

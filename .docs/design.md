@@ -7,7 +7,7 @@ This file is the product design workbench. It uses ASCII sketches so we can iter
 Noto should feel like a terminal-native meeting memory workbench:
 
 - The human interface is the `noto` TUI.
-- The agent interface is `noto --json` plus local artifact paths.
+- The agent interface is `noto --json` plus HTTP/API responses.
 - The native macOS helper is invisible unless permissions or active capture need attention.
 - The UI is evidence-first: summaries are useful, but transcript segments are the source of truth.
 
@@ -125,7 +125,7 @@ Source labels:
 
 ## Source-Aware Attribution
 
-Split-source capture is a V1 product invariant. The UI, artifacts, provider
+Split-source capture is a product invariant. The UI, artifacts, provider
 adapters, and agent commands should keep the source role visible until a human
 intentionally renames a speaker.
 
@@ -237,7 +237,7 @@ Post-stop pipeline:
 
 ## Default Layout: Command Center
 
-This is the default V1 candidate. It must work as the main daily interface.
+This is the default candidate. It must work as the main daily interface.
 
 ```text
 + Noto ------------------- rec idle  idx clean  jobs 1  1204 mtg +
@@ -298,7 +298,7 @@ Meeting detail should keep summaries accountable to transcript evidence.
 | tabs summary | transcript | actions | files | versions         |
 + Summary -----------------------+ Evidence ---------------------+
 | Short                          | seg_000210 Maya 00:14:02     |
-| Terminal-first V1 with native  | "The terminal should be the   |
+| Terminal-first design with     | "The terminal should be the   |
 | capture helper and JSON agent  | main interface..."            |
 | access.                        |                              |
 |                                | seg_000245 Lukas 00:16:44    |
@@ -477,7 +477,7 @@ Avoid:
 - Animation that runs while idle.
 - Blinking as the only signal.
 
-## V1 Design Decision
+## Design Decision
 
 Build these first:
 

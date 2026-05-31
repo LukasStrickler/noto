@@ -32,7 +32,6 @@ func TestDefaultConfig(t *testing.T) {
 
 func TestStoreSavesYAMLConfig(t *testing.T) {
 	dir := t.TempDir()
-	_ = NewStore(dir) // store side-effects: ensures dir layout; ignored for this test
 	cfg := DefaultConfig()
 
 	if err := Save(cfg, dir); err != nil {
@@ -49,7 +48,7 @@ func TestStoreSavesYAMLConfig(t *testing.T) {
 	if text == "" {
 		t.Fatal("config file is empty")
 	}
-	if !contains(text, "schema_version") {
+	if !strings.Contains(text, "schema_version") {
 		t.Fatalf("config missing schema_version")
 	}
 }
@@ -225,7 +224,7 @@ func TestLoadWithFlags(t *testing.T) {
 func TestSaveAtomicWrite(t *testing.T) {
 	dir := t.TempDir()
 	cfg := DefaultConfig()
-	cfg.Providers.STT.Default = "elevenlabs"
+	cfg.Providers.STT.Default = "assemblyai"
 
 	if err := Save(cfg, dir); err != nil {
 		t.Fatalf("Save returned error: %v", err)
@@ -236,8 +235,8 @@ func TestSaveAtomicWrite(t *testing.T) {
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if loaded.Providers.STT.Default != "elevenlabs" {
-		t.Errorf("Providers.STT.Default = %q, want elevenlabs", loaded.Providers.STT.Default)
+	if loaded.Providers.STT.Default != "assemblyai" {
+		t.Errorf("Providers.STT.Default = %q, want assemblyai", loaded.Providers.STT.Default)
 	}
 
 	tmpPath := filepath.Join(dir, "config.yaml.tmp")
@@ -246,6 +245,46 @@ func TestSaveAtomicWrite(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
+// TestLoadWithFlagsSyncStorage guards the unmarshalNoto re-pull: sync and
+// storage keys are pflag-bound, so a changed flag never surfaces via
+// AllSettings/Unmarshal and must be pulled back in explicitly or it is
+// silently dropped.
+func TestLoadWithFlagsSyncStorage(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFlagSet()
+	fs.Bool(FlagSyncEnabled, false, "")
+	fs.String(FlagSyncEndpoint, "", "")
+	fs.String(FlagSyncBucket, "", "")
+	fs.String(FlagStorageLocalPath, "", "")
+	fs.String(FlagStorageS3Bucket, "", "")
+	if err := fs.Parse([]string{
+		"--sync-enabled",
+		"--sync-endpoint=https://sync.example.com",
+		"--sync-bucket=meetings",
+		"--storage-local-path=/custom/data",
+		"--storage-s3-bucket=my-bucket",
+	}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	cfg, err := LoadWithFlags(dir, fs)
+	if err != nil {
+		t.Fatalf("LoadWithFlags returned error: %v", err)
+	}
+
+	if !cfg.Sync.Enabled {
+		t.Error("Sync.Enabled should be true from --sync-enabled flag")
+	}
+	if cfg.Sync.Endpoint != "https://sync.example.com" {
+		t.Errorf("Sync.Endpoint = %q, want the flag value", cfg.Sync.Endpoint)
+	}
+	if cfg.Sync.Bucket != "meetings" {
+		t.Errorf("Sync.Bucket = %q, want meetings", cfg.Sync.Bucket)
+	}
+	if cfg.Storage.Local.Path != "/custom/data" {
+		t.Errorf("Storage.Local.Path = %q, want /custom/data", cfg.Storage.Local.Path)
+	}
+	if cfg.Storage.S3.Bucket != "my-bucket" {
+		t.Errorf("Storage.S3.Bucket = %q, want my-bucket", cfg.Storage.S3.Bucket)
+	}
 }

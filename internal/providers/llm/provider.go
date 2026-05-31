@@ -19,7 +19,7 @@ type SummarizeOptions struct {
 // LLMProvider is the interface for LLM-based summary providers.
 // Implementations must be safe for concurrent use.
 type LLMProvider interface {
-	// ProviderID returns the provider's canonical ID (e.g., "openrouter", "mistral").
+	// ProviderID returns the provider's canonical ID (currently "openrouter").
 	ProviderID() string
 	// Summarize generates a summary from a transcript.
 	Summarize(ctx context.Context, transcript artifacts.Transcript, opts SummarizeOptions) (*artifacts.Summary, error)

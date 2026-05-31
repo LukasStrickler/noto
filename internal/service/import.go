@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lukasstrickler/noto/internal/notoapi"
-	"github.com/lukasstrickler/noto/internal/storage"
+	"github.com/lukasstrickler/noto/internal/repo"
 )
 
 // ImportAudio brings an existing audio file under noto's storage layout
@@ -33,29 +33,31 @@ func (s *Service) ImportAudio(ctx context.Context, srcPath, title string) (notoa
 	}
 
 	mid := uuid.New()
-	layout, err := storage.LayoutFor(s.recordingsDir, mid)
-	if err != nil {
-		return notoapi.Meeting{}, notoapi.Job{}, err
-	}
-	if err := storage.EnsureDirs(layout); err != nil {
-		return notoapi.Meeting{}, notoapi.Job{}, err
-	}
-
-	// Copy the audio to the meeting dir so subsequent jobs find it at
-	// a stable path even if the caller deletes the source.
-	dst := layout.AudioPath
-	if ext := filepath.Ext(abs); ext != "" {
-		// Replace the extension on the layout-provided default if the
-		// source uses something else (.wav, .mp3, .flac).
-		dst = strings.TrimSuffix(dst, filepath.Ext(dst)) + ext
-	}
-	if err := copyFile(abs, dst); err != nil {
-		return notoapi.Meeting{}, notoapi.Job{},
-			notoapi.NewError(notoapi.CodeInternal, "copy audio: "+err.Error(), nil)
-	}
 
 	if strings.TrimSpace(title) == "" {
 		title = strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
+	}
+
+	// Create the meeting manifest before touching the filesystem so that
+	// if anything below fails the meeting is still visible (and deletable)
+	// rather than leaving an orphaned audio file with no manifest.
+	if err := s.repo.CreateMeeting(ctx, mid, repo.CreateMeetingOpts{
+		Title:  title,
+		Reason: "audio_imported",
+	}); err != nil {
+		return notoapi.Meeting{}, notoapi.Job{}, err
+	}
+
+	ext := filepath.Ext(abs)
+	dst, err := s.repo.PrepareAudio(ctx, mid, ext)
+	if err != nil {
+		_ = s.repo.DeleteMeeting(ctx, mid)
+		return notoapi.Meeting{}, notoapi.Job{}, err
+	}
+	if err := copyFile(abs, dst); err != nil {
+		_ = s.repo.DeleteMeeting(ctx, mid)
+		return notoapi.Meeting{}, notoapi.Job{},
+			notoapi.NewError(notoapi.CodeInternal, "copy audio: "+err.Error(), nil)
 	}
 
 	job, err := s.CreateJob(ctx, notoapi.CreateJobOpts{

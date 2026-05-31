@@ -84,11 +84,19 @@ type app struct {
 	in     io.Reader
 	out    io.Writer
 	errOut io.Writer
+
+	// connectFn, when set, overrides how commands obtain a client. Tests
+	// inject an in-memory client here so the full command path (flag parse
+	// → client call → JSON/text render) runs without a real backend.
+	connectFn func(ctx context.Context) (notoapi.Client, func(), int)
 }
 
 // connect wires up either an in-process backend or a remote one.
 // Callers MUST call the returned closer.
 func (a *app) connect(ctx context.Context) (notoapi.Client, func(), int) {
+	if a.connectFn != nil {
+		return a.connectFn(ctx)
+	}
 	client, closer, err := notohost.Connect(ctx, notohost.Options{Version: "0.1.0"})
 	if err != nil {
 		fmt.Fprintf(a.errOut, "noto: %v\n", err)
@@ -197,7 +205,6 @@ func parseListen(s string) (string, string, error) {
 // --- list ---
 
 func (a *app) runList(args []string) int {
-	asJSON := hasFlag(args, "--json")
 	ctx, cancel := defaultCtx()
 	defer cancel()
 	client, closer, code := a.connect(ctx)
@@ -209,28 +216,25 @@ func (a *app) runList(args []string) int {
 	if err != nil {
 		return a.errExit(err)
 	}
-	if asJSON {
-		return a.emitJSON(res)
-	}
-	if len(res.Meetings) == 0 {
-		fmt.Fprintln(a.out, "No meetings yet. Try `noto tui` and press r to record.")
-		return 0
-	}
-	fmt.Fprintf(a.out, "%-36s  %-30s  %s\n", "ID", "TITLE", "STATUS")
-	for _, m := range res.Meetings {
-		title := m.Title
-		if len(title) > 30 {
-			title = title[:27] + "…"
+	return a.emitOrText(args, res, func() {
+		if len(res.Meetings) == 0 {
+			fmt.Fprintln(a.out, "No meetings yet. Try `noto tui` and press r to record.")
+			return
 		}
-		fmt.Fprintf(a.out, "%-36s  %-30s  %s\n", m.ID, title, m.Status)
-	}
-	return 0
+		fmt.Fprintf(a.out, "%-36s  %-30s  %s\n", "ID", "TITLE", "STATUS")
+		for _, m := range res.Meetings {
+			title := m.Title
+			if len(title) > 30 {
+				title = title[:27] + "…"
+			}
+			fmt.Fprintf(a.out, "%-36s  %-30s  %s\n", m.ID, title, m.Status)
+		}
+	})
 }
 
 // --- search ---
 
 func (a *app) runSearch(args []string) int {
-	asJSON := hasFlag(args, "--json")
 	q := stripFlags(args)
 	if q == "" {
 		fmt.Fprintln(a.errOut, "noto search: query required")
@@ -247,23 +251,20 @@ func (a *app) runSearch(args []string) int {
 	if err != nil {
 		return a.errExit(err)
 	}
-	if asJSON {
-		return a.emitJSON(res)
-	}
-	if len(res.Hits) == 0 {
-		fmt.Fprintf(a.out, "no matches for %q\n", q)
-		return 0
-	}
-	for _, h := range res.Hits {
-		fmt.Fprintf(a.out, "%s  [%.0fs] %s — %s\n", h.MeetingID, h.Timestamp, h.Speaker, trim(h.Snippet, 80))
-	}
-	return 0
+	return a.emitOrText(args, res, func() {
+		if len(res.Hits) == 0 {
+			fmt.Fprintf(a.out, "no matches for %q\n", q)
+			return
+		}
+		for _, h := range res.Hits {
+			fmt.Fprintf(a.out, "%s  [%.0fs] %s — %s\n", h.MeetingID, h.Timestamp, h.Speaker, trim(h.Snippet, 80))
+		}
+	})
 }
 
 // --- show / transcript / summary / files / agent ---
 
 func (a *app) runShow(args []string) int {
-	asJSON := hasFlag(args, "--json")
 	id := stripFlags(args)
 	if id == "" {
 		fmt.Fprintln(a.errOut, "noto show: meeting id required")
@@ -280,20 +281,18 @@ func (a *app) runShow(args []string) int {
 	if err != nil {
 		return a.errExit(err)
 	}
-	if asJSON {
-		return a.emitJSON(m)
-	}
-	fmt.Fprintf(a.out, "%s\n", m.Title)
-	fmt.Fprintf(a.out, "  id            %s\n", m.ID)
-	fmt.Fprintf(a.out, "  status        %s\n", m.Status)
-	fmt.Fprintf(a.out, "  duration_sec  %d\n", m.DurationSeconds)
-	fmt.Fprintf(a.out, "  decisions     %d\n", m.DecisionCount)
-	fmt.Fprintf(a.out, "  action items  %d\n", m.ActionCount)
-	fmt.Fprintf(a.out, "  risks         %d\n", m.RiskCount)
-	if m.ShortSummary != "" {
-		fmt.Fprintf(a.out, "\n%s\n", m.ShortSummary)
-	}
-	return 0
+	return a.emitOrText(args, m, func() {
+		fmt.Fprintf(a.out, "%s\n", m.Title)
+		fmt.Fprintf(a.out, "  id            %s\n", m.ID)
+		fmt.Fprintf(a.out, "  status        %s\n", m.Status)
+		fmt.Fprintf(a.out, "  duration_sec  %d\n", m.DurationSeconds)
+		fmt.Fprintf(a.out, "  decisions     %d\n", m.DecisionCount)
+		fmt.Fprintf(a.out, "  action items  %d\n", m.ActionCount)
+		fmt.Fprintf(a.out, "  risks         %d\n", m.RiskCount)
+		if m.ShortSummary != "" {
+			fmt.Fprintf(a.out, "\n%s\n", m.ShortSummary)
+		}
+	})
 }
 
 func (a *app) runTranscript(args []string) int {
@@ -313,13 +312,11 @@ func (a *app) runTranscript(args []string) int {
 	if err != nil {
 		return a.errExit(err)
 	}
-	if hasFlag(args, "--json") {
-		return a.emitJSON(t)
-	}
-	for _, seg := range t.Segments {
-		fmt.Fprintf(a.out, "[%6.1fs] %s [%s]: %s\n", seg.StartSec, seg.Speaker, seg.Role, seg.Text)
-	}
-	return 0
+	return a.emitOrText(args, t, func() {
+		for _, seg := range t.Segments {
+			fmt.Fprintf(a.out, "[%6.1fs] %s [%s]: %s\n", seg.StartSec, seg.Speaker, seg.Role, seg.Text)
+		}
+	})
 }
 
 func (a *app) runSummary(args []string) int {
@@ -339,15 +336,13 @@ func (a *app) runSummary(args []string) int {
 	if err != nil {
 		return a.errExit(err)
 	}
-	if hasFlag(args, "--json") {
-		return a.emitJSON(s)
-	}
-	if s.Markdown != "" {
-		fmt.Fprintln(a.out, s.Markdown)
-		return 0
-	}
-	fmt.Fprintf(a.out, "%s\n", s.ShortSummary)
-	return 0
+	return a.emitOrText(args, s, func() {
+		if s.Markdown != "" {
+			fmt.Fprintln(a.out, s.Markdown)
+			return
+		}
+		fmt.Fprintf(a.out, "%s\n", s.ShortSummary)
+	})
 }
 
 func (a *app) runFiles(args []string) int {
@@ -527,8 +522,8 @@ func (a *app) runRecord(args []string) int {
 	}
 	defer closer()
 	res, err := client.StartRecording(ctx, notoapi.StartRecordingOpts{
-		Title:   *title,
-		Sources: []string{"microphone", "system_audio"},
+		Title:     *title,
+		Sources:   []string{"microphone", "system_audio"},
 		AfterStop: notoapi.AfterStop{Ingest: true, Transcribe: true, Summarize: true, Index: true},
 	})
 	if err != nil {
@@ -749,6 +744,17 @@ func (a *app) emitJSON(v any) int {
 		fmt.Fprintf(a.errOut, "noto: emit: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+// emitOrText centralizes the "--json prints the envelope, otherwise render
+// human text" decision so a command can't accidentally ship without --json
+// support. text runs only in the non-JSON path.
+func (a *app) emitOrText(args []string, v any, text func()) int {
+	if hasFlag(args, "--json") {
+		return a.emitJSON(v)
+	}
+	text()
 	return 0
 }
 

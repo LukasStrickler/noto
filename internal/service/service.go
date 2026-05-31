@@ -7,96 +7,149 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/lukasstrickler/noto/internal/appsocket"
 	"github.com/lukasstrickler/noto/internal/config"
+	"github.com/lukasstrickler/noto/internal/data"
 	"github.com/lukasstrickler/noto/internal/db"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/providers"
+	"github.com/lukasstrickler/noto/internal/providers/stt"
+	"github.com/lukasstrickler/noto/internal/repo"
 	"github.com/lukasstrickler/noto/internal/search"
 	"github.com/lukasstrickler/noto/internal/secrets"
 )
 
-// Service is the core. It is safe for concurrent use by HTTP handlers and
-// the in-process direct client.
 type Service struct {
+	// cfgMu guards cfg. Config values are always replaced wholesale (the
+	// setters assign fresh scalar fields, never mutate slices/maps in
+	// place), so a plain RWMutex around the field is sufficient. Read with
+	// currentCfg(); mutate+persist with updateCfg().
+	cfgMu         sync.RWMutex
 	cfg           config.Config
 	cfgStore      config.Store
 	recordingsDir string
 	sqlitePath    string
 	jobsDBPath    string
 
+	repo     repo.ArtifactRepository
 	secrets  secrets.Store
 	registry providers.Registry
 	search   *search.SearchIndex
 	jobsDB   *db.DB
 
+	speakerProfiles   data.SpeakerProfileRepository
+	meetingMappings   data.MeetingSpeakerMappingRepository
+	speakerEmbedder   SpeakerEmbedder
+	sttAdapterFactory func(providerID string) (stt.STTProvider, error)
+
 	ipc *appsocket.IPCClient
 
 	events *eventHub
 
-	// recorder state
-	recMu     sync.RWMutex
-	recording notoapi.RecordingState
+	recMu         sync.RWMutex
+	recording     notoapi.RecordingState
+	recPending    bool // held while IPC Start is in progress; prevents concurrent starts
 	recStopMeters chan struct{}
 
-	// jobs runtime
 	jobsMu     sync.Mutex
 	jobCancels map[string]context.CancelFunc
+	workerWake chan struct{}
 
 	started time.Time
 	version string
 }
 
-// Deps is what callers must supply to build a Service.
 type Deps struct {
-	Config        config.Config
-	ConfigStore   config.Store
-	Secrets       secrets.Store
-	Registry      providers.Registry
-	Search        *search.SearchIndex
-	JobsDB        *db.DB
-	IPC           *appsocket.IPCClient
-	Version       string
+	Config            config.Config
+	ConfigStore       config.Store
+	Secrets           secrets.Store
+	Registry          providers.Registry
+	Search            *search.SearchIndex
+	JobsDB            *db.DB
+	IPC               *appsocket.IPCClient
+	Version           string
+	SpeakerProfiles   data.SpeakerProfileRepository
+	MeetingMappings   data.MeetingSpeakerMappingRepository
+	SpeakerEmbedder   SpeakerEmbedder
+	STTAdapterFactory func(providerID string) (stt.STTProvider, error)
+	// Repo is the artifact storage backend. If nil, a LocalArtifactRepository
+	// backed by Config.GetRecordingsDir() is created automatically.
+	Repo repo.ArtifactRepository
 }
 
-// New wires a Service from the given deps. None may be nil except IPC
-// (which is platform-specific; nil means recording is unavailable).
 func New(d Deps) *Service {
+	recordingsDir := d.Config.GetRecordingsDir()
+	artifactRepo := d.Repo
+	if artifactRepo == nil {
+		artifactRepo = repo.NewLocal(recordingsDir)
+	}
 	s := &Service{
-		cfg:           d.Config,
-		cfgStore:      d.ConfigStore,
-		recordingsDir: d.Config.GetRecordingsDir(),
-		sqlitePath:    filepath.Join(d.Config.ConfigDir, "noto.sqlite"),
-		jobsDBPath:    filepath.Join(d.Config.ConfigDir, "noto-jobs.sqlite"),
-		secrets:       d.Secrets,
-		registry:      d.Registry,
-		search:        d.Search,
-		jobsDB:        d.JobsDB,
-		ipc:           d.IPC,
-		events:        newEventHub(),
-		jobCancels:    map[string]context.CancelFunc{},
-		started:       time.Now(),
-		version:       d.Version,
+		cfg:               d.Config,
+		cfgStore:          d.ConfigStore,
+		recordingsDir:     recordingsDir,
+		sqlitePath:        filepath.Join(d.Config.ConfigDir, "noto.sqlite"),
+		jobsDBPath:        filepath.Join(d.Config.ConfigDir, "noto-jobs.sqlite"),
+		repo:              artifactRepo,
+		secrets:           d.Secrets,
+		registry:          d.Registry,
+		search:            d.Search,
+		jobsDB:            d.JobsDB,
+		ipc:               d.IPC,
+		events:            newEventHub(),
+		jobCancels:        map[string]context.CancelFunc{},
+		workerWake:        make(chan struct{}, 1),
+		started:           time.Now(),
+		version:           d.Version,
+		speakerProfiles:   d.SpeakerProfiles,
+		meetingMappings:   d.MeetingMappings,
+		speakerEmbedder:   d.SpeakerEmbedder,
+		sttAdapterFactory: d.STTAdapterFactory,
+	}
+	if s.speakerEmbedder == nil {
+		if endpoint := os.Getenv("NOTO_SPEAKER_EMBEDDING_URL"); endpoint != "" {
+			s.speakerEmbedder = NewHTTPSpeakerEmbedder(endpoint)
+		}
 	}
 	if s.version == "" {
 		s.version = "0.0.0-dev"
 	}
+
 	return s
 }
 
-// Start kicks off background workers (job loop, status-bar broadcast).
-// It is safe to call once; subsequent calls are no-ops. ctx controls the
-// lifetime of background goroutines: cancel it to stop them cleanly.
+// currentCfg returns a snapshot copy of the live config under read lock.
+// Callers may read the returned value freely; the setters never mutate the
+// underlying config in place, so the snapshot stays consistent.
+func (s *Service) currentCfg() config.Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg
+}
+
+// updateCfg applies mutate to a copy of the live config, persists it, and
+// swaps it in only on a successful Save. If Save fails the in-memory config
+// is left untouched, so a failed write never leaves the two out of sync.
+func (s *Service) updateCfg(mutate func(*config.Config)) error {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	next := s.cfg
+	mutate(&next)
+	if err := s.cfgStore.Save(next); err != nil {
+		return err
+	}
+	s.cfg = next
+	return nil
+}
+
 func (s *Service) Start(ctx context.Context) error {
 	if s.jobsDB == nil {
 		return fmt.Errorf("service: JobsDB is required")
 	}
-	// Mark any in-flight jobs from a previous run as interrupted so the
-	// user can retry deliberately rather than silently restarting STT.
 	if err := s.markInterruptedJobs(ctx); err != nil {
 		return fmt.Errorf("service: recover jobs: %w", err)
 	}
@@ -105,8 +158,6 @@ func (s *Service) Start(ctx context.Context) error {
 	return nil
 }
 
-// Close shuts down the service: closes the events hub, the search index,
-// and any IPC connection. The shared *sql.DBs are closed by the caller.
 func (s *Service) Close() error {
 	s.events.close()
 	s.recMu.Lock()
@@ -121,13 +172,10 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// Events returns the in-process event hub for HTTP/SSE handlers and the
-// direct client to subscribe to.
 func (s *Service) Events() *eventHub {
 	return s.events
 }
 
-// Health returns the standard health payload.
 func (s *Service) Health(_ context.Context) (notoapi.Health, error) {
 	return notoapi.Health{
 		OK:              true,
@@ -143,4 +191,17 @@ func (s *Service) recordingActive() bool {
 	s.recMu.RLock()
 	defer s.recMu.RUnlock()
 	return s.recording.Active
+}
+
+func (s *Service) newSTTAdapter(providerID string) (stt.STTProvider, error) {
+	if s.sttAdapterFactory != nil {
+		return s.sttAdapterFactory(providerID)
+	}
+	switch providerID {
+	case "assemblyai":
+		key, _ := s.secrets.Get(context.Background(), "provider:assemblyai")
+		return &stt.AssemblyAIAdapter{APIKey: key}, nil
+	default:
+		return nil, fmt.Errorf("unknown STT provider: %s (production STT is AssemblyAI-only)", providerID)
+	}
 }

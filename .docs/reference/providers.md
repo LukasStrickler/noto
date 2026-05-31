@@ -1,105 +1,169 @@
-# Processor And Provider Reference
+# Provider Reference
 
 ## Strategy
 
-Use swappable processors behind stable Noto schemas. Benchmark public datasets
-and real consented meeting audio before choosing the default STT provider. V1
-should preserve mic/system source roles so transcription can distinguish the
-local speaker from meeting participants.
+AssemblyAI is the production STT provider. OpenRouter provides LLM summarization.
+Provider adapters can change — artifact formats cannot.
 
-Adapters can change. Artifact formats cannot.
+Both providers fall back to deterministic synthetic output when no API key is
+configured, so the full pipeline (ingest → transcribe → summarize → index) works
+in development and on Linux without any keys.
 
-## Processor Shape
+## STT Provider — AssemblyAI
 
-| Processor | Swappable examples | Required output |
+| Capability | Supported |
+| --- | --- |
+| Transcription | Yes |
+| Word timestamps | Yes |
+| Speaker diarization | Yes |
+| Context biasing | Yes |
+| Multi-channel | Yes |
+
+**Configure:** TUI Config screen → API Keys → `assemblyai`, or:
+
+```bash
+noto providers key-set assemblyai <your-key>
+# or set env var (read-only fallback, not stored):
+export NOTO_ASSEMBLYAI_KEY=<your-key>
+```
+
+When no key is set, the pipeline synthesizes a short placeholder transcript.
+
+## LLM Provider — OpenRouter
+
+The summarizer is an OpenRouter-compatible adapter. It accepts any model accessible
+via OpenRouter and returns a structured summary with evidence segment IDs.
+
+**Configure:** TUI Config screen → API Keys → `openrouter`, or:
+
+```bash
+noto providers key-set openrouter <your-key>
+noto providers active-llm google/gemma-3-27b-it   # set active model
+# or env var:
+export NOTO_OPENROUTER_KEY=<your-key>
+```
+
+When no key is set, the pipeline synthesizes a deterministic placeholder summary.
+
+## Speaker Embedding Provider (optional)
+
+AssemblyAI diarization returns per-meeting labels (`speaker_0`, `speaker_1`, ...) —
+not stable voice identities. For persistent cross-meeting speaker profiles, point
+the backend at an embedding service:
+
+```bash
+export NOTO_SPEAKER_EMBEDDING_URL=http://embedding-host:8080
+```
+
+### Embedding service contract
+
+```
+POST {NOTO_SPEAKER_EMBEDDING_URL}/v1/speaker-embeddings
+```
+
+Request:
+```json
+{
+  "meeting_id": "uuid",
+  "audio_base64": "...",
+  "speakers": [
+    { "id": "spk_0", "provider_label": "A", "display_name": "Speaker A" }
+  ],
+  "segments": [
+    { "id": "seg_000001", "speaker_id": "spk_0", "start_seconds": 0.0, "end_seconds": 4.2 }
+  ]
+}
+```
+
+Response:
+```json
+{
+  "model": "titanet-large",
+  "embeddings": { "A": [0.01, 0.02, 0.03] }
+}
+```
+
+If unconfigured or unreachable, transcription still completes — speaker mappings
+remain `"unmatched"` in the database until an embedding service is available.
+
+## Artifact Formats
+
+All providers normalize output to standard Noto schemas.
+
+### Transcript artifact (`transcript.json`)
+
+```json
+{
+  "schema_version": "transcript.v1",
+  "meeting_id": "uuid",
+  "provider": { "id": "assemblyai", "job_id": "aai_xyz" },
+  "speakers": [
+    { "id": "spk_0", "display_name": "Alice", "origin": "local_speaker", "label": "me" },
+    { "id": "spk_1", "display_name": "Bob",   "origin": "participants",  "label": "participants" }
+  ],
+  "segments": [
+    {
+      "id": "seg_000000",
+      "speaker_id": "spk_0",
+      "source_role": "local_speaker",
+      "start_seconds": 0.0,
+      "end_seconds": 5.2,
+      "text": "Let's start with the roadmap review.",
+      "confidence": 0.97
+    }
+  ]
+}
+```
+
+### Summary artifact (`summary.json`)
+
+```json
+{
+  "schema_version": "summary.v1",
+  "meeting_id": "uuid",
+  "short_summary": "Three decisions on the roadmap. Timeline risk flagged.",
+  "decisions": [
+    {
+      "text": "Ship v1 by end of Q2",
+      "speaker_ids": ["spk_0"],
+      "evidence": [{ "segment_id": "seg_000140", "quote": "ship v1 by end of quarter" }]
+    }
+  ],
+  "action_items": [
+    {
+      "text": "Circulate updated timeline by Friday",
+      "owner": "spk_1",
+      "evidence": [{ "segment_id": "seg_000210", "quote": "timeline by Friday" }]
+    }
+  ],
+  "risks": [
+    { "text": "Q2 timeline may be aggressive", "evidence": [...] }
+  ],
+  "open_questions": [
+    { "text": "Which open questions are highest priority?", "evidence": [...] }
+  ],
+  "model": { "provider": "openrouter", "model_id": "google/gemma-3-27b-it", "prompt_version": "summary.v1" }
+}
+```
+
+## Provider Configuration Summary
+
+| Provider | CLI command | Env var (fallback) |
 | --- | --- | --- |
-| Audio preparation | native encoder, ffmpeg-style converter, silence trimming | provider-ready audio asset metadata |
-| Transcription | AssemblyAI, ElevenLabs, Soniox, OpenAI, local model | `transcript.diarized.json` with source-role hints when available |
-| Summary | OpenAI-compatible model, hosted gateway, local model | `summary.json` |
-| Rendering | built-in Markdown renderer, export renderer | `.md` artifacts |
-| Indexing | SQLite FTS5, future search backend | standard search rows/results |
+| AssemblyAI STT | `noto providers key-set assemblyai <key>` | `NOTO_ASSEMBLYAI_KEY` |
+| OpenRouter LLM | `noto providers key-set openrouter <key>` | `NOTO_OPENROUTER_KEY` |
+| Active LLM model | `noto providers active-llm <model>` | `NOTO_LLM_MODEL` |
+| Speaker embeddings | — | `NOTO_SPEAKER_EMBEDDING_URL` |
 
-Processor metadata must declare ID, inputs/outputs, capabilities, config keys,
-cost/latency hints when known, and whether audio or transcript text leaves the
-device.
+## Adding a Provider
 
-## Source-Aware Transcription
+**STT:**
+1. Implement `stt.STTProvider` in `internal/providers/stt/`
+2. Register in `internal/providers/registry.go`
+3. Add schema tests for the transcript output
+4. Confirm downstream processors (search, summary) work unchanged
 
-The audio processor should prefer a capture layout that keeps microphone and
-system/app audio distinguishable. Provider adapters should use that source
-information when possible:
-
-- Preserve `src_mic` as `local_speaker` and `src_system` as `participants`.
-- Prefer provider modes that accept stereo/channel-separated audio or
-  speaker/channel metadata.
-- If a provider collapses channels, keep source roles in `audio.json` and mark
-  transcript speaker origins as `unknown` or `mixed`.
-- Never overwrite source-derived local/participant hints with weak provider
-  labels unless confidence is high.
-- Speaker rename changes display names only; it must preserve source origin metadata.
-
-## STT Candidates
-
-- AssemblyAI Universal-2: baseline cloud candidate. Test names, domain terms,
-  diarization, and source preservation.
-- AssemblyAI Universal-3 Pro: quality candidate. Test whether cost, latency, and
-  source-aware attribution justify using it.
-- ElevenLabs Scribe v2: word timestamps, diarization, keyterm prompting, and
-  high speaker-count claims make it worth benchmarking.
-- Soniox async: async diarization and token speaker labels need workflow and
-  source-role validation.
-- OpenAI diarized STT: `diarized_json` and known-speaker references need
-  chunking and source-role validation.
-- Local model: privacy/offline path; post-V1 unless benchmarks justify earlier
-  work.
-
-## Summary Providers
-
-Use a separate summary provider interface. Prefer OpenAI-compatible summary
-adapters so hosted models, local endpoints, and LLM gateways can share one
-request shape. Do not force STT through an LLM gateway; STT APIs differ in
-upload, polling, diarization, timestamps, and normalization.
-
-## Provider Modes
-
-| Mode | Key owner | Raw audio path |
-| --- | --- | --- |
-| Local keys | User/customer | Client calls provider. |
-| Hosted managed | Noto | Worker calls provider from Noto storage. |
-| Customer-managed hosted | Customer | Worker uses customer key from vault. |
-| Local model | User/customer | Audio stays local. |
-
-## Normalization Rules
-
-- Provider output is normalized immediately after the provider job completes.
-- Downstream processors consume only Noto artifacts, not provider payloads.
-- Unknown provider fields stay in debug output or metadata, not in core schemas.
-- Source-derived `local_speaker` and `participants` hints are normalized into Noto artifacts before downstream use.
-- Adding a provider requires a normalizer and schema validation tests.
-- Adding a processor requires parity tests proving the same standard output contract.
-
-## Add A Provider Or Processor
-
-1. Implement the relevant processor interface.
-2. Declare ID, capabilities, input type, output type, and configuration keys.
-3. Transform provider/native output into the required Noto artifact.
-4. Add schema validation tests for the output artifact.
-5. Add a parity fixture proving downstream processors work without changes.
-6. Document whether data leaves the device and which credentials are required.
-
-Do not add provider-specific fields to core artifacts for one adapter. Use debug metadata instead.
-
-Provider work is not done until the contract tests and agentic validation gates in [testing.md](./testing.md) pass for that provider.
-
-## Benchmark Criteria
-
-Provider selection is benchmark-gated. See [benchmarks.md](./benchmarks.md) for datasets, scoring tools, metrics, and acceptance gates.
-
-## References
-
-- [AssemblyAI diarization](https://www.assemblyai.com/docs/speech-to-text/speaker-diarization)
-- [ElevenLabs speech-to-text](https://elevenlabs.io/docs/capabilities/speech-to-text/)
-- [Soniox diarization](https://soniox.com/docs/speech-to-text/core-concepts/speaker-diarization)
-- [OpenAI speech-to-text](https://platform.openai.com/docs/guides/speech-to-text)
-- [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)
-- [LiteLLM](https://github.com/BerriAI/litellm)
+**LLM:**
+1. Implement `llm.SummaryProvider` in `internal/providers/llm/`
+2. Register in the registry
+3. Add schema tests for the summary output

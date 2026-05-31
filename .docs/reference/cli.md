@@ -1,141 +1,142 @@
 # CLI Reference
 
-## JSON Contract
+## How the CLI connects
 
-Commands with `--json` write machine-readable JSON to stdout and human-readable errors to stderr. Error responses should use this shape:
+Every `noto` command uses the same `notoapi.Client` interface, so all commands
+work identically against an in-process server, a local daemon, or a remote backend.
+
+**Discovery order** (checked on every command):
+
+1. If `NOTO_API_URL` is set → HTTP to that URL (add `NOTO_API_TOKEN` for auth)
+2. If the local UDS socket exists and responds → HTTP over UDS to local daemon
+3. Otherwise → start an in-process server, run the command, shut it down
+
+```bash
+# In-process (default — no server needed)
+noto list
+
+# Point at a remote backend
+export NOTO_API_URL=http://192.168.1.10:8731
+export NOTO_API_TOKEN=abc123
+noto list
+
+# Or keep a local daemon alive for faster repeated commands
+noto serve &
+noto list        # auto-connects to the daemon
+noto search "roadmap"
+```
+
+## Error shape
+
+Commands with `--json` write JSON to stdout. Errors go to stderr in this shape:
 
 ```json
 {
   "error": {
     "code": "not_found",
-    "message": "Meeting not found.",
-    "details": {}
+    "message": "meeting not found",
+    "details": { "id": "abc-123" }
   }
 }
 ```
 
-All JSON commands used by agents must be covered by golden tests or schema tests. See [testing.md](./testing.md) for the validation gates.
+## Command Reference
 
-## TUI
+### TUI and server
 
-```text
-noto
-noto status --json
+```
+noto                             Open TUI (in-process server if needed)
+noto tui                         Same as noto
+noto serve                       Run backend daemon on default UDS
+noto serve --listen tcp:0.0.0.0:8731 --token-file /tmp/tok
+                                 Remote-accessible TCP listener
+noto dev                         TUI with debug paths printed, pre-warms capture helper
+noto dev serve                   Backend-only dev mode (no TUI)
 ```
 
-## Recording
+### Meeting browsing
 
-```text
-noto record --title "Roadmap sync"
+```
+noto list [--json] [--limit N]
+noto show <meeting_id> [--json]
+noto transcript <meeting_id> [--json]
+noto summary <meeting_id> [--json]
+noto files <meeting_id>                  On-disk artifact paths (JSON)
+noto agent <meeting_id>                  Agent handoff: paths + CLI commands (JSON)
+noto search <query> [--json]
+```
+
+### Recording and import
+
+```
+noto record [--title "Roadmap sync"]
 noto stop
-noto status --json
+noto import-audio <path> [--title "..."] [--wait] [--json]
 ```
 
-## Artifacts
+`--wait` blocks until the pipeline (ingest → transcribe → summarize → index) finishes.
+Without `--wait` the command returns immediately with the job ID.
 
-```text
-noto import-audio ./sample.m4a --title "Sample"
-noto import-transcript ./sample.transcript.json --title "Sample"
-noto transcribe <meeting_id> --provider <provider_id>
-noto summarize <meeting_id>
-noto index rebuild --json
-noto list --json --limit 20
-noto show <meeting_id>
-noto transcript --json <meeting_id>
-noto summary --json <meeting_id>
-noto actions --json <meeting_id>
-noto files --json <meeting_id>
+### Provider management
+
 ```
-
-Commands that return meeting JSON should include local artifact paths when
-available so scripts and agents can inspect files directly.
-
-## Validation
-
-```text
-noto verify --json
-noto verify --json <meeting_id>
-noto status --json
-noto files --json <meeting_id>
-noto index rebuild --json
-```
-
-`noto verify --json` is the primary agentic health check. It validates schemas,
-checksums, artifact paths, raw-audio retention state, source-role presence when
-expected, and index freshness. It must return stable machine-readable failure
-codes for missing files, schema failures, checksum mismatches, invalid source
-roles, and stale indexes.
-
-## Playback
-
-```text
-noto play <meeting_id> [--speed <rate>]
-```
-
-Playback meeting audio using macOS `afplay`. Speed can be any positive number (e.g., 1, 1.25, 1.5, 1.75, 2). Default speed is 1x.
-
-The command auto-discovers the audio file from the meeting directory, supporting `.m4a`, `.wav`, `.mp3`, and `.aac` formats.
-
-```text
-noto play 550e8400-e29b-41d4-a716-446655440000 --speed 1.5
-noto play 550e8400-e29b-41d4-a716-446655440000 1.25
-```
-
-## Search
-
-```text
-noto search --json "pricing decision"
-```
-
-Search results include meeting ID, segment ID, speaker, timestamp, text, source
-role when known, and score.
-
-## Post-V1 Storage And Workspace
-
-Storage sync and remote workspaces are reserved for later phases. Their command
-shape should be defined when [storage-sync.md](./storage-sync.md) moves from
-architecture reference to implementation work.
-
-## Providers
-
-```text
-noto providers list --json
-noto providers key-set <provider> --value <api-key>
+noto providers list [--json]
+noto providers key-set <provider> <value>
 noto providers key-remove <provider>
 noto providers test <provider>
 noto providers active-speech <provider>
 noto providers active-llm <model-id>
 ```
 
-`providers list` reports each provider's id, kind (speech/llm/fake), whether a
-key is configured, and the storage source (`keychain`, `file`, or `env:<NAME>`).
-On macOS, keys live in the Login Keychain under service `noto`. On Linux and
-Windows they live in `~/.noto/credentials.json` with mode 0600. `env:*`
-variables (e.g. `ASSEMBLYAI_API_KEY`, `OPENROUTER_API_KEY`,
-`NOTO_LOCAL_STT_URL`) are read as fallback when no keychain entry is set.
+Known provider IDs: `assemblyai`, `openrouter`.
 
-The same operations are available from the TUI on the **config** screen
-(`,` or `4`).
+### Jobs and diagnostics
 
-The `local` provider lets you point at any OpenAI-compatible STT server —
-whisper.cpp's HTTP server, faster-whisper-server, vLLM, NVIDIA NIM Parakeet,
-etc. Set `NOTO_LOCAL_STT_URL` (and optionally `NOTO_LOCAL_STT_KEY`) and
-select `local` as the active speech provider.
-
-## Benchmarks
-
-```text
-noto benchmark run --dataset ami --sample ES2004a \
-  --provider assemblyai:universal-3-pro --json
-noto benchmark compare --run-a <run_id> --run-b <run_id> --json
-noto benchmark report <run_id>
+```
+noto jobs [--json]
+noto status                       Health + active recording + recent jobs (JSON)
+noto ping                         Health check (JSON)
+noto verify                       Enqueue a checksum-verify job for all meetings
 ```
 
-Benchmark JSON writes `benchmark-result.v1` and should include metrics,
-processor metadata, schema validation state, and cost when known.
+### Dev / seed
+
+```
+noto seed                         Insert fixture meetings into local storage (dev only)
+```
+
+Refuses to run against a remote `NOTO_API_URL`.
+
+## Environment Variables
+
+| Variable | Purpose |
+| --- | --- |
+| `NOTO_API_URL` | Connect to this backend instead of starting in-process |
+| `NOTO_API_TOKEN` | Bearer token for `NOTO_API_URL` (TCP mode) |
+| `NOTO_CONFIG_DIR` | Override default config directory |
+| `NOTO_ARTIFACT_ROOT` | Override default recordings root |
+| `NOTO_ASSEMBLYAI_KEY` | AssemblyAI API key (fallback if not in keychain) |
+| `NOTO_OPENROUTER_KEY` | OpenRouter API key (fallback if not in keychain) |
+| `NOTO_SPEAKER_EMBEDDING_URL` | Speaker embedding service URL (optional) |
+
+## Remote backend setup
+
+```bash
+# On the server
+noto serve --listen tcp:0.0.0.0:8731 --token-file /etc/noto/token
+
+# On the client
+ssh -L 8731:localhost:8731 yourserver   # port-forward (recommended)
+export NOTO_API_URL=http://localhost:8731
+export NOTO_API_TOKEN=$(cat /etc/noto/token)
+noto tui
+```
+
+The TUI works identically against a remote backend. All processing (transcription,
+summarization, search) runs on the server. The TUI only renders and sends commands.
 
 ## Related
 
-- [Agent interface](./agent-interface.md)
-- [Artifact reference](./artifacts.md)
-- [Testing and validation](./testing.md)
+- [Architecture](../architecture/cloud-architecture.md) — connection modes, deployment
+- [Agent interface](./agent-interface.md) — JSON command contracts for agents
+- [Providers](./providers.md) — configuring AssemblyAI and OpenRouter

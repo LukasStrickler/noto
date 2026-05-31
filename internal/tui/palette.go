@@ -119,10 +119,6 @@ func (p *palette) view(width, height int, s theme.Styles, under string) string {
 	return overlayCenter(under, box, width, height)
 }
 
-func spacePad(hint string, w int) string {
-	return strings.Repeat(" ", max(0, w-12-len(hint)))
-}
-
 func fuzzyMatch(haystack, needle string) bool {
 	// substring is fine for V1; bubbles/list does proper fuzzy but
 	// we want our own for the action palette to mix in meeting titles

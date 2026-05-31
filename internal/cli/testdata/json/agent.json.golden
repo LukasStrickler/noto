@@ -1,0 +1,12 @@
+{
+  "meeting_id": "mtg-1",
+  "version_id": "ver-1",
+  "files": {
+    "meeting_id": "mtg-1",
+    "transcript": "/n/transcript.json",
+    "summary_md": "/n/summary.md"
+  },
+  "commands": [
+    "noto transcript --json mtg-1"
+  ]
+}

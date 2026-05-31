@@ -2,94 +2,128 @@
 
 ## Goal
 
-`noto` should be the primary user interface: keyboard-first, local-only for V1,
-clear about recording state, and fast for meeting browsing. The native macOS
-component is only a capture helper.
+`noto` is the primary human interface: keyboard-first, remote-backend-aware,
+clear about recording state, and fast for meeting browsing.
 
 ## Screens
 
-| Screen | Purpose |
-| --- | --- |
-| Dashboard | Recording state, recent meetings, foreground jobs, index state, provider state. |
-| Recorder | Elapsed time, separate me/mic and participant/system meters, capture mode, retention state. |
-| Meetings | Searchable meeting list grouped by date/status. |
-| Meeting detail | Summary, transcript, actions, files, versions. |
-| Transcript | Timestamped speaker turns with segment IDs. |
-| Providers | Provider status, benchmark notes, active defaults. |
-| Storage | Local artifact health, checksums, verify/repair. |
-| Settings | Paths, retention, prompts, keybindings. |
+| Screen | Key | Purpose |
+| --- | --- | --- |
+| Dashboard | `1` | Meetings list + search, embedded detail pane, jobs strip, recording strip |
+| Recorder | `r` / `3` | Start/stop a recording, live waveform, markers |
+| Config | `,` / `4` | Active routes, API keys, storage, paths |
+| Agent | `a` | Per-meeting agent handoff: file paths + copyable CLI commands |
 
-## Default Layout
+The Dashboard is the default screen and combines browsing, FTS search, and detail
+viewing in one surface. There is no separate "meetings list" or "transcript" screen —
+the detail pane (right column) shows Summary, Transcript, and Speakers tabs.
 
-```text
- Noto                                        rec: idle  index: clean
-+--------------------------+-----------------------------------------+
-| Meetings                 | Product architecture sync               |
-| / search meetings        | 42m 36s  summarized  STT baseline       |
-| today                    | Decisions                               |
-| > Product sync           | 1. Use post-meeting diarization.        |
-|   Vendor benchmark       | 2. Keep artifacts local-first.          |
-+--------------------------+-----------------------------------------+
-| Jobs                     | Transcript                              |
-| ok indexed               | 00:14:02 Speaker 1  AssemblyAI is...    |
-| ok summary               | 00:14:28 Speaker 0  But source roles... |
-+--------------------------+-----------------------------------------+
- ? help   r record   i import   / search   tab pane   enter open   q quit
+## Dashboard Layout
+
 ```
+┌── dashboard (1/3) ─────────────────────────────────────────────────┐
+│ / search…               3 total                                     │
+│                                                                      │
+│  ▸ Product sync         Jan 05 14:30   ◆ 2  ▸ 1  ⚠ 1               │
+│    Sprint planning      Jan 04 09:00   ·                            │
+│    1:1 with Maya        Jan 03 11:00   ◆ 1  ▸ 2                    │
+│                                                                      │
+│  / search  ↑↓ navigate  ⏎ open  n next  x clear                     │
+├── jobs ──────────────────┬── recording ─────────────────────────────┤
+│  transcribe ▓▓░░░░  done │  ○ idle                                  │
+│                          │  press r to record                        │
+└──────────────────────────┴──────────────────────────────────────────┘
+                                                                       
+┌── details (2/3) ─────────────────────────────────────────────────────┐
+│ Product sync                                         Jan 05  14:30   │
+│  [Summary]  [Transcript]  [Speakers]                                 │
+│                                                                       │
+│  Three decisions on the roadmap. Timeline risk flagged.              │
+│  ◆ Ship v1 by end of Q2                                              │
+│  ◆ Keep terminal as primary UI                                        │
+│  ▸ Maya to circulate updated timeline by Friday                      │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+The bottom strip (jobs + recording) is hidden when both are idle.
 
 ## Keys
 
+### Global
+
 | Key | Action |
 | --- | --- |
-| `?` | Help. |
-| `r` | Start or open recording controls. |
-| `i` | Import audio or transcript. |
-| `/` | Search/filter current pane. |
-| `:` | Command palette. |
-| `tab` | Next pane. |
-| `enter` | Open selected item. |
-| `v` | Verify local artifacts and search index. |
-| `p` | Providers screen. |
-| `q` | Back/quit. |
+| `?` | Toggle help overlay |
+| `:` | Command palette |
+| `q` / `ctrl+c` | Back / quit |
+| `esc` | Back / close input / unfocus pane |
+| `1` | Go to dashboard |
+| `r` / `3` | Go to recorder |
+| `4` / `,` | Go to config |
+| `a` | Open agent handoff for selected meeting |
+| `ctrl+r` | Refresh meetings list |
 
-## Job Rules
+### Dashboard — list focus
 
-- Active recording is owned by the native macOS capture helper, not the TUI process.
-- `esc` exits the TUI but leaves active recording alive.
-- Stop requires confirmation if capture has errors or duration is under 10 seconds.
-- Raw-audio retention state is always visible during and after recording.
-- Mic/system source roles are always visible during recording because they drive local-speaker vs participant attribution.
-- V1 jobs are foreground child tasks owned by the current CLI/TUI process.
-- Long tasks show status, current step, elapsed time, and cancellability.
-- Exiting the TUI asks before cancelling an active mutating job.
-- Finished jobs promote artifacts only after schema and checksum validation.
-- Partial job outputs stay in `.tmp/`.
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Move cursor |
+| `⏎` / `tab` | Focus detail pane |
+| `/` | Focus search input |
+| `n` / `N` | Jump to next / previous search match |
+| `x` | Clear search |
+| `t` | Switch detail pane to Transcript tab |
+| `k` | Switch detail pane to Speakers tab |
+| `d` | Delete selected meeting |
 
-## Performance Rules
+### Dashboard — detail pane focus
 
-- No global render loop.
-- Idle dashboard does not tick.
-- Progress updates tick only while a job is active.
-- Recording status pulses at most once per second; separate me/participant audio meters update only while visible.
-- Transcript view virtualizes visible rows.
-- Wrapping is cached by terminal width.
-- Jobs run outside the TUI event loop.
+| Key | Action |
+| --- | --- |
+| `←` / `→` or `h` / `l` | Switch tabs (Summary / Transcript / Speakers) |
+| `↑` / `↓` or `j` / `k` | Scroll active tab |
+| `n` / `N` | Jump to next / previous search match in transcript |
+| `tab` / `esc` | Return focus to list |
+| `d` | Delete meeting |
 
-See [design.md](../design.md) for recording animation, empty states, responsive rules, and ASCII layout sketches.
+### Recorder
 
-## Test Rules
+| Key | Action |
+| --- | --- |
+| `i` | Edit title |
+| `r` | Start recording |
+| `s` | Stop recording |
+| `n` | Drop a marker |
+| `esc` | Back (active recording stays alive) |
 
-- Model tests cover key handling, pane focus, job state transitions, and recorder state.
-- Snapshot tests cover dashboard, recorder, search, meeting detail, transcript, settings, empty states, and error states.
-- Idle tests prove the TUI does not tick when no recording, job, spinner, or meter is visible.
-- Recording tests verify that source meters display me/mic and participants/system separately.
-- Every important TUI state must have equivalent JSON state through `noto status --json`, `noto verify --json`, or artifact commands.
+## Connection Modes
 
-See [testing.md](./testing.md) for the full validation plan.
+The TUI connects to `noto serve` in three ways, controlled by env vars:
 
-## References
+| Mode | How | When |
+| --- | --- | --- |
+| In-process (default) | `noto` auto-starts an in-process server | No server running, no `NOTO_API_URL` |
+| Local daemon | `noto` probes the local UDS, connects if alive | `noto serve` is running separately |
+| Remote | `NOTO_API_URL=http://host:port noto` | Remote server, optionally with `NOTO_API_TOKEN` |
 
-- [Bubble Tea](https://github.com/charmbracelet/bubbletea)
-- [Bubbles viewport](https://pkg.go.dev/github.com/charmbracelet/bubbles/v2/viewport)
-- [Bubbles list](https://pkg.go.dev/github.com/charmbracelet/bubbles/v2/list)
-- [Bubbles table](https://pkg.go.dev/github.com/charmbracelet/bubbles/table)
+The TUI code is identical in all three modes — it always uses `notoapi.Client`.
+
+## Status Bar (bottom row)
+
+```
+● REC  02:14   1 job   12 meetings   noto 0.1.0
+```
+
+| Indicator | Meaning |
+| --- | --- |
+| `● REC` | Recording is active, shows elapsed time |
+| `N job(s)` | Running or recently-completed pipeline jobs |
+| `N meetings` | Total meeting count in storage |
+
+## Performance Notes
+
+- No global render loop. Idle TUI does not tick.
+- Progress updates run only while a job is active.
+- Recording meters pulse at 8 Hz while recording; zero cost when stopped.
+- Jobs run in the backend, outside the TUI event loop.
+- Search fires on every keypress; results are debounced via query equality check.

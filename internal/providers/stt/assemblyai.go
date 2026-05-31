@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -28,6 +28,21 @@ type HTTPDoer interface {
 
 func (a *AssemblyAIAdapter) ProviderID() string {
 	return "assemblyai"
+}
+
+func (a *AssemblyAIAdapter) FeatureMap() ProviderFeatures {
+	return ProviderFeatures{
+		ProviderID: "assemblyai",
+		Features: []Feature{
+			FeatureTranscribe,
+			FeatureWordTimestamps,
+			FeatureSpeakerDiarize,
+			FeatureContextBiasing,
+			FeatureOverlapDetection,
+		},
+		SpeedTier: "accurate",
+		IsLocal:   false,
+	}
 }
 
 func (a *AssemblyAIAdapter) Transcribe(ctx context.Context, audio []byte, opts TranscribeOptions) (*artifacts.Transcript, error) {
@@ -95,7 +110,7 @@ func (a *AssemblyAIAdapter) upload(ctx context.Context, client HTTPDoer, baseURL
 
 func (a *AssemblyAIAdapter) submit(ctx context.Context, client HTTPDoer, baseURL string, uploadURL string, opts TranscribeOptions) (string, error) {
 	payload := map[string]any{
-		"audio_url":      uploadURL,
+		"audio_url":          uploadURL,
 		"language_detection": opts.Language == "",
 		"speech_models":      []string{"universal-3-pro", "universal-2"},
 		"speaker_labels":     true,
@@ -104,7 +119,9 @@ func (a *AssemblyAIAdapter) submit(ctx context.Context, client HTTPDoer, baseURL
 		payload["language_code"] = opts.Language
 	}
 	if len(opts.ContextBias) > 0 {
-		payload["keyterms_prompt"] = strings.Join(opts.ContextBias, ", ")
+		// AssemblyAI expects keyterms_prompt as an array of distinct terms,
+		// not a single joined string.
+		payload["keyterms_prompt"] = opts.ContextBias
 	}
 
 	body, err := json.Marshal(payload)
@@ -169,9 +186,10 @@ func (a *AssemblyAIAdapter) poll(ctx context.Context, client HTTPDoer, baseURL s
 		}
 
 		respBytes, err := io.ReadAll(resp.Body)
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			return nil, notoerr.Wrap("provider_response_invalid", "Could not read AssemblyAI poll response.", closeErr)
-		}
+		// A Close error after a successful read is advisory (common with
+		// keep-alive) and must not abort a transcription whose body we
+		// already have; only the read error is fatal.
+		_ = resp.Body.Close()
 		if err != nil {
 			return nil, notoerr.Wrap("provider_response_invalid", "Could not read AssemblyAI poll response.", err)
 		}
@@ -200,9 +218,8 @@ func (a *AssemblyAIAdapter) poll(ctx context.Context, client HTTPDoer, baseURL s
 		case <-ctx.Done():
 			return nil, notoerr.Wrap("provider_cancelled", "AssemblyAI transcription polling cancelled.", ctx.Err())
 		case <-timer.C:
-			if !timer.Stop() {
-				<-timer.C
-			}
+			// timer.C was already consumed by this case arm; calling
+			// Stop() + draining again would block forever. Just reset.
 			timer.Reset(interval)
 		}
 	}
@@ -211,13 +228,13 @@ func (a *AssemblyAIAdapter) poll(ctx context.Context, client HTTPDoer, baseURL s
 }
 
 type assemblyAIResponse struct {
-	Status          string  `json:"status"`
-	ID             string  `json:"id"`
-	LanguageCode   string  `json:"language_code"`
-	Text           string  `json:"text"`
-	Words          []word  `json:"words"`
-	Utterances     []utterance `json:"utterances"`
-	AudioDuration  float64 `json:"audio_duration"`
+	Status        string      `json:"status"`
+	ID            string      `json:"id"`
+	LanguageCode  string      `json:"language_code"`
+	Text          string      `json:"text"`
+	Words         []word      `json:"words"`
+	Utterances    []utterance `json:"utterances"`
+	AudioDuration float64     `json:"audio_duration"`
 }
 
 type word struct {
@@ -311,9 +328,9 @@ func (a *AssemblyAIAdapter) parseResponse(raw []byte, meetingID string) (*artifa
 			ID:    "assemblyai",
 			JobID: resp.ID,
 		},
-		Speakers:     speakers,
-		Segments:     segments,
-		Words:        words,
+		Speakers: speakers,
+		Segments: segments,
+		Words:    words,
 		Capabilities: artifacts.TranscriptCapabilities{
 			WordTimestamps:     len(words) > 0,
 			SpeakerDiarization: len(speakers) > 0,
@@ -328,52 +345,5 @@ func (a *AssemblyAIAdapter) parseResponse(raw []byte, meetingID string) (*artifa
 }
 
 func segmentID(i int) string {
-	return "seg_" + leftPad(i+1, 6)
-}
-
-func leftPad(n int, width int) string {
-	digits := "0123456789"
-	if n == 0 {
-		return "000000"[:width-1] + "0"
-	}
-	var rev []byte
-	for n > 0 {
-		rev = append(rev, digits[n%10])
-		n /= 10
-	}
-	out := make([]byte, 0, width)
-	for len(out)+len(rev) < width {
-		out = append(out, '0')
-	}
-	for i := len(rev) - 1; i >= 0; i-- {
-		out = append(out, rev[i])
-	}
-	return string(out)
-}
-
-func multipartWriter(fields map[string]string, audio []byte, filename string) (io.Writer, string, error) {
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-
-	for key, value := range fields {
-		if value == "" {
-			continue
-		}
-		if err := writer.WriteField(key, value); err != nil {
-			return nil, "", notoerr.Wrap("provider_request_failed", "Could not write multipart field.", err)
-		}
-	}
-
-	part, err := writer.CreateFormFile("file", filename)
-	if err != nil {
-		return nil, "", notoerr.Wrap("provider_request_failed", "Could not create multipart audio field.", err)
-	}
-	if _, err := part.Write(audio); err != nil {
-		return nil, "", notoerr.Wrap("provider_request_failed", "Could not write audio data.", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return nil, "", notoerr.Wrap("provider_request_failed", "Could not close multipart writer.", err)
-	}
-	return &body, writer.FormDataContentType(), nil
+	return fmt.Sprintf("seg_%06d", i+1)
 }

@@ -33,7 +33,7 @@
 - `indexes/noto.sqlite` is rebuildable cache; `.tmp/recording.m4a` is staging only.
 - Retained audio is promoted into `versions/{version_id}/audio/`.
 - Raw audio is deleted only after transcript artifacts validate and retention policy allows deletion.
-- V1 retention is local-only. No hosted upload or remote retention path exists in V1.
+- Retention is controlled by backend policy.
 
 ## Artifact Contract
 
@@ -233,15 +233,15 @@ origin. Speaker rename changes display names only.
 {
   "schema_version": "summary.v1",
   "meeting_id": "mtg_20260424_153012_ab12",
-  "short_summary": "The meeting settled on a local-first MVP.",
+"short_summary": "The meeting settled on a remote backend MVP.",
   "decisions": [
     {
-      "text": "Use post-meeting diarization for V1.",
+"text": "Use backend speaker profiles after transcription.",
       "speaker_ids": ["spk_0"],
       "evidence": [
         {
           "segment_id": "seg_000210",
-          "quote": "post-meeting diarization is enough for V1"
+"quote": "backend speaker profiles are enough for the first implementation"
         }
       ]
     }
@@ -267,7 +267,7 @@ If audio is deleted, keep `audio.json`, set `retention.retained=false`, set `del
 
 ## Hosted Audio Retention
 
-Hosted processing is post-V1. When added:
+Hosted processing rules:
 
 - Raw audio may leave the device only under explicit workspace policy.
 - The client uploads raw audio through exact-key signed object access, not through API request bodies.
@@ -338,7 +338,7 @@ Hosted processing is post-V1. When added:
 - Word timestamps are optional only when the processor declares no word timestamp capability.
 - Segment and word timestamps may overlap when speakers overlap; monotonic ordering uses start time, then end time, then ID.
 - `channel` is nullable for mixed/system audio and required only when the capture path preserves separate channels.
-- Recorded V1 audio should preserve mic and system/app audio as separate sources whenever the OS capture path supports it.
+- Recorded audio should preserve mic and system/app audio as separate sources whenever the OS capture path supports it.
 - `sources[].role` uses `local_speaker` for microphone input and `participants` for system/app audio by default.
 - Transcript speakers should include `origin` when source evidence supports it: `local_speaker`, `participant`, `mixed`, or `unknown`.
 - Transcript segments and words should include `source_id` and `source_role` when the source can be mapped.

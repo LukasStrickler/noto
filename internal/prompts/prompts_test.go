@@ -12,9 +12,9 @@ func TestPromptBuilder_Build(t *testing.T) {
 	builder := NewPromptBuilder("test.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_001",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_001",
+		Language:        "en",
 		DurationSeconds: 300.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},
@@ -66,9 +66,9 @@ func TestPromptBuilder_BuildSummaryRequest(t *testing.T) {
 	builder := NewPromptBuilder("summary.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_002",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_002",
+		Language:        "en",
 		DurationSeconds: 600.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},
@@ -105,9 +105,9 @@ func TestPromptBuilder_DecisionPrompt(t *testing.T) {
 	builder := NewPromptBuilder("summary.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_003",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_003",
+		Language:        "en",
 		DurationSeconds: 300.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},
@@ -140,9 +140,9 @@ func TestPromptBuilder_ActionItemPrompt(t *testing.T) {
 	builder := NewPromptBuilder("summary.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_004",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_004",
+		Language:        "en",
 		DurationSeconds: 300.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},
@@ -173,9 +173,9 @@ func TestPromptBuilder_RisksPrompt(t *testing.T) {
 	builder := NewPromptBuilder("summary.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_005",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_005",
+		Language:        "en",
 		DurationSeconds: 300.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},
@@ -206,9 +206,9 @@ func TestPromptBuilder_OpenQuestionsPrompt(t *testing.T) {
 	builder := NewPromptBuilder("summary.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_006",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_006",
+		Language:        "en",
 		DurationSeconds: 300.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},
@@ -305,9 +305,9 @@ func TestDecisionPromptHasFewShotExamples(t *testing.T) {
 	builder := NewPromptBuilder("summary.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_007",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_007",
+		Language:        "en",
 		DurationSeconds: 300.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},
@@ -342,9 +342,9 @@ func TestRiskPromptHasChainOfThought(t *testing.T) {
 	builder := NewPromptBuilder("summary.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_008",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_008",
+		Language:        "en",
 		DurationSeconds: 300.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},
@@ -382,9 +382,9 @@ func TestFullSummaryPrompt(t *testing.T) {
 	builder := NewPromptBuilder("summary.v1")
 
 	transcript := artifacts.Transcript{
-		SchemaVersion: "transcript.v1",
-		MeetingID:     "mtg_test_009",
-		Language:      "en",
+		SchemaVersion:   "transcript.v1",
+		MeetingID:       "mtg_test_009",
+		Language:        "en",
 		DurationSeconds: 300.0,
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_0", Label: "Speaker 0", Origin: "local_speaker"},

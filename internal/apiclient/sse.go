@@ -24,7 +24,10 @@ func (c *httpClient) streamSSE(ctx context.Context, path string) (<-chan notoapi
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	resp, err := c.stream.Do(req)
+	// bodyclose can't see the close through the goroutine below: the error
+	// path closes resp.Body inline, and the success path closes it via the
+	// stream goroutine's defer.
+	resp, err := c.stream.Do(req) //nolint:bodyclose
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +42,9 @@ func (c *httpClient) streamSSE(ctx context.Context, path string) (<-chan notoapi
 		defer close(out)
 		defer resp.Body.Close()
 		reader := bufio.NewReader(resp.Body)
-		var eventType, dataBuf string
+		// We only consume `data:` lines — the event kind also travels inside
+		// the JSON payload, so `event:` lines are ignored.
+		var dataBuf string
 		for {
 			select {
 			case <-ctx.Done():
@@ -54,7 +59,6 @@ func (c *httpClient) streamSSE(ctx context.Context, path string) (<-chan notoapi
 			switch {
 			case line == "":
 				if dataBuf == "" {
-					eventType = ""
 					continue
 				}
 				var ev notoapi.Event
@@ -65,11 +69,7 @@ func (c *httpClient) streamSSE(ctx context.Context, path string) (<-chan notoapi
 						return
 					}
 				}
-				eventType = ""
 				dataBuf = ""
-			case strings.HasPrefix(line, "event:"):
-				eventType = strings.TrimSpace(line[len("event:"):])
-				_ = eventType // kind also lives inside the JSON payload
 			case strings.HasPrefix(line, "data:"):
 				dataBuf += strings.TrimSpace(line[len("data:"):])
 			}

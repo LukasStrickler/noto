@@ -40,9 +40,9 @@ type Server struct {
 	httpSrv *http.Server
 	ln      net.Listener
 
-	mu       sync.Mutex
-	closed   bool
-	closeFn  func()
+	mu      sync.Mutex
+	closed  bool
+	closeFn func()
 }
 
 // New constructs but does not start a Server.
@@ -179,6 +179,8 @@ func statusForCode(code string) int {
 		return http.StatusBadRequest
 	case notoapi.CodeConflict, notoapi.CodeRecordingActive, notoapi.CodeRecordingInactive, notoapi.CodeArtifactConflict:
 		return http.StatusConflict
+	case notoapi.CodeUnauthorized:
+		return http.StatusUnauthorized
 	case notoapi.CodePermissionDenied:
 		return http.StatusForbidden
 	case notoapi.CodeUnsupportedCapability:

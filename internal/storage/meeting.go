@@ -456,6 +456,55 @@ func ListMeetings(recordingsDir string) ([]MeetingRef, error) {
 	return refs, nil
 }
 
+// CountMeetings counts stored meetings by walking the year/month/meeting
+// directory tree and checking only for a manifest.json (os.Stat, no parse).
+// It deliberately avoids ReadManifest so it stays cheap on hot paths.
+func CountMeetings(recordingsDir string) (int, error) {
+	meetingsDir := filepath.Join(recordingsDir, "meetings")
+	yearEntries, err := os.ReadDir(meetingsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, ErrReadFailed(meetingsDir, err)
+	}
+
+	count := 0
+	for _, yearEntry := range yearEntries {
+		if !yearEntry.IsDir() {
+			continue
+		}
+		yearDir := filepath.Join(meetingsDir, yearEntry.Name())
+		monthEntries, err := os.ReadDir(yearDir)
+		if err != nil {
+			continue
+		}
+		for _, monthEntry := range monthEntries {
+			if !monthEntry.IsDir() {
+				continue
+			}
+			monthDir := filepath.Join(yearDir, monthEntry.Name())
+			meetingEntries, err := os.ReadDir(monthDir)
+			if err != nil {
+				continue
+			}
+			for _, meetingEntry := range meetingEntries {
+				if !meetingEntry.IsDir() {
+					continue
+				}
+				if _, err := uuid.Parse(meetingEntry.Name()); err != nil {
+					continue
+				}
+				manifestPath := filepath.Join(monthDir, meetingEntry.Name(), "manifest.json")
+				if _, err := os.Stat(manifestPath); err == nil {
+					count++
+				}
+			}
+		}
+	}
+	return count, nil
+}
+
 func GetMeeting(recordingsDir string, meetingID uuid.UUID) (*Meeting, error) {
 	layout, err := LayoutFor(recordingsDir, meetingID)
 	if err != nil {
@@ -488,10 +537,10 @@ func GetMeeting(recordingsDir string, meetingID uuid.UUID) (*Meeting, error) {
 
 	return &Meeting{
 		MeetingID:        meetingID,
-		Title:           extractTitle(manifest),
+		Title:            extractTitle(manifest),
 		CurrentVersionID: manifest.CurrentVersionID,
-		Versions:        versions,
-		ShortSummary:    shortSummary,
+		Versions:         versions,
+		ShortSummary:     shortSummary,
 	}, nil
 }
 

@@ -1,0 +1,14 @@
+{
+  "hits": [
+    {
+      "meeting_id": "mtg-1",
+      "meeting_title": "Quarterly planning",
+      "speaker": "Maya",
+      "timestamp_seconds": 12,
+      "snippet": "planning the quarter",
+      "bm25_score": 0,
+      "result_type": ""
+    }
+  ],
+  "total": 0
+}

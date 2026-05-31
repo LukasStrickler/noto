@@ -52,6 +52,7 @@ type Model struct {
 	ID           string       `json:"id"`
 	DisplayName  string       `json:"display_name"`
 	Capabilities []Capability `json:"capabilities"`
+	SpeedTier    string       `json:"speed_tier,omitempty"`
 	PricingHint  string       `json:"pricing_hint,omitempty"`
 }
 

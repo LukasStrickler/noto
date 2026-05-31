@@ -78,11 +78,6 @@ type configLoadedMsg struct {
 	Err error
 }
 
-type configPatchedMsg struct {
-	Cfg notoapi.Config
-	Err error
-}
-
 type providerKeyResultMsg struct {
 	ProviderID string
 	Err        error
@@ -96,7 +91,7 @@ type providerTestMsg struct {
 
 // eventStreamMsg arrives once per server event (job/recorder/meter/etc).
 type eventStreamMsg struct {
-	Event notoapi.Event
+	Event  notoapi.Event
 	Closed bool
 }
 
@@ -105,10 +100,6 @@ type bannerMsg struct {
 	Kind string // "info" | "warn" | "error"
 	Text string
 }
-
-// tickMsg drives the recording elapsed-time display (only while the
-// recorder is active).
-type tickMsg struct{}
 
 // switchScreenMsg requests the root model to swap the active screen.
 type switchScreenMsg struct {

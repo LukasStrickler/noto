@@ -1,6 +1,8 @@
 // Package apiclient hosts the noto Client implementations.
-//   direct: in-process function calls into service.Service
-//   http:   HTTP/JSON+SSE over UDS or TCP
+//
+//	direct: in-process function calls into service.Service
+//	http:   HTTP/JSON+SSE over UDS or TCP
+//
 // CLIs use direct for zero-latency one-shots; the TUI uses http (UDS).
 package apiclient
 
@@ -10,6 +12,11 @@ import (
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/service"
 )
+
+// Compile-time proof that direct satisfies the full Client contract — a
+// crisp error here beats a cryptic one at a distant call site when a
+// method is added to the interface.
+var _ notoapi.Client = (*direct)(nil)
 
 // NewDirect wraps a service.Service to satisfy notoapi.Client.
 func NewDirect(svc *service.Service) notoapi.Client {
@@ -43,6 +50,9 @@ func (d *direct) DeleteMeeting(ctx context.Context, id string) error {
 }
 func (d *direct) VerifyMeeting(ctx context.Context, id string) (notoapi.Job, error) {
 	return d.svc.VerifyMeeting(ctx, id)
+}
+func (d *direct) UpdateSpeakerName(ctx context.Context, meetingID, speakerID, displayName string) error {
+	return d.svc.UpdateSpeakerName(ctx, meetingID, speakerID, displayName)
 }
 
 func (d *direct) Search(ctx context.Context, opts notoapi.SearchOpts) (notoapi.SearchResult, error) {
@@ -130,3 +140,36 @@ func (d *direct) ReindexStorage(ctx context.Context) (notoapi.Job, error) {
 
 func (d *direct) Health(ctx context.Context) (notoapi.Health, error) { return d.svc.Health(ctx) }
 func (d *direct) Close() error                                       { return nil }
+
+func (d *direct) ListSpeakerProfiles(ctx context.Context) ([]notoapi.SpeakerProfile, error) {
+	return d.svc.ListSpeakerProfiles(ctx)
+}
+func (d *direct) GetSpeakerProfile(ctx context.Context, id string) (notoapi.SpeakerProfile, error) {
+	return d.svc.GetSpeakerProfile(ctx, id)
+}
+func (d *direct) CreateSpeakerProfile(ctx context.Context, req notoapi.CreateSpeakerProfileRequest) (notoapi.SpeakerProfile, error) {
+	return d.svc.CreateSpeakerProfile(ctx, req)
+}
+func (d *direct) PatchSpeakerProfile(ctx context.Context, id string, patch notoapi.SpeakerProfilePatch) (notoapi.SpeakerProfile, error) {
+	return d.svc.PatchSpeakerProfile(ctx, id, patch)
+}
+func (d *direct) DeleteSpeakerProfile(ctx context.Context, id string) error {
+	return d.svc.DeleteSpeakerProfile(ctx, id)
+}
+func (d *direct) MergeSpeakerProfiles(ctx context.Context, targetID, sourceID string) (notoapi.SpeakerProfile, error) {
+	return d.svc.MergeSpeakerProfiles(ctx, targetID, sourceID)
+}
+
+func (d *direct) GetMeetingSpeakerMappings(ctx context.Context, meetingID string) (notoapi.MeetingSpeakerMappings, error) {
+	return d.svc.GetMeetingSpeakerMappings(ctx, meetingID)
+}
+func (d *direct) PatchMeetingSpeakerMappings(ctx context.Context, meetingID string, patch notoapi.MeetingSpeakerMappingsPatch) (notoapi.MeetingSpeakerMappings, error) {
+	return d.svc.PatchMeetingSpeakerMappings(ctx, meetingID, patch)
+}
+
+func (d *direct) AgentListMeetings(ctx context.Context, opts notoapi.AgentListOpts) (notoapi.AgentListResult, error) {
+	return d.svc.AgentListMeetings(ctx, opts)
+}
+func (d *direct) AgentGetMeeting(ctx context.Context, id string) (notoapi.AgentMeetingContext, error) {
+	return d.svc.AgentGetMeeting(ctx, id)
+}

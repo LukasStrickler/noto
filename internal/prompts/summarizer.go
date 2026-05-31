@@ -23,9 +23,9 @@ func NewPromptBuilder(version string) *PromptBuilder {
 type SummaryOptions struct {
 	IncludeDecisions     bool
 	IncludeActionItems   bool
-	IncludeRisks        bool
+	IncludeRisks         bool
 	IncludeOpenQuestions bool
-	SummaryType         SummaryType
+	SummaryType          SummaryType
 }
 
 // SummaryType specifies the summary extraction type.
@@ -89,7 +89,7 @@ func (b *PromptBuilder) BuildSummaryRequest(transcript artifacts.Transcript, opt
 	}
 
 	return &ChatRequest{
-		ModelID:  "", // Will be filled by provider
+		ModelID: "", // Will be filled by provider
 		Messages: []ChatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -321,7 +321,7 @@ type ChatMessage struct {
 
 // ChatRequest represents a chat completion request.
 type ChatRequest struct {
-	ModelID     string       `json:"model_id"`
+	ModelID     string        `json:"model_id"`
 	Messages    []ChatMessage `json:"messages"`
-	Temperature *float64    `json:"temperature,omitempty"`
+	Temperature *float64      `json:"temperature,omitempty"`
 }

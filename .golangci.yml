@@ -1,0 +1,58 @@
+# golangci-lint v2 config for noto.
+# Run with: golangci-lint run ./...   (CI runs this on every PR)
+#
+# Philosophy: high-signal linters only. errcheck stays on for real
+# operations, but the conventional "safe sinks" (deferred Close, stdout
+# writes) are excluded so the noise doesn't drown the signal.
+version: "2"
+
+linters:
+  enable:
+    - bodyclose # HTTP response bodies must be closed
+    - misspell # catch typos in comments/strings
+    - unconvert # remove redundant type conversions
+    # default set (errcheck, govet, ineffassign, staticcheck, unused) is on
+
+  settings:
+    staticcheck:
+      # QF* are "quickfix" refactor suggestions (tagged switches, dropping
+      # embedded-field selectors) — opinionated style, not correctness.
+      # ST1000 (a package comment on every package) is more churn than
+      # value here; the rest of stylecheck (ST100x naming, error strings)
+      # stays on.
+      checks:
+        - all
+        - -QF1002
+        - -QF1008
+        - -ST1000
+    errcheck:
+      # Don't require checking errors on these — they're either output
+      # sinks or teardown where a failed check changes nothing.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (*os.Process).Kill
+        - (*os/exec.Cmd).Wait
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*github.com/lukasstrickler/noto/internal/notohost.Host).Close
+        - (*github.com/lukasstrickler/noto/internal/appsocket.IPCClient).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - os.Remove
+        - os.RemoveAll
+
+  exclusions:
+    rules:
+      # Test setup (os.WriteFile/MkdirAll, db.Close) doesn't need the same
+      # error-checking rigor as production code paths.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

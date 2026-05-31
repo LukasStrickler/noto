@@ -1,3 +1,5 @@
+// Package artifacts defines noto's on-disk artifact schemas (meeting,
+// transcript, summary, audio, manifest) and their validation.
 package artifacts
 
 import "github.com/lukasstrickler/noto/internal/notoerr"
@@ -5,12 +7,12 @@ import "github.com/lukasstrickler/noto/internal/notoerr"
 type ArtifactKind string
 
 const (
-	KindMeeting     ArtifactKind = "meeting"
-	KindAudio       ArtifactKind = "audio"
-	KindTranscript  ArtifactKind = "transcript"
-	KindSummary     ArtifactKind = "summary"
-	KindChecksums   ArtifactKind = "checksums"
-	KindPrompt      ArtifactKind = "prompt"
+	KindMeeting    ArtifactKind = "meeting"
+	KindAudio      ArtifactKind = "audio"
+	KindTranscript ArtifactKind = "transcript"
+	KindSummary    ArtifactKind = "summary"
+	KindChecksums  ArtifactKind = "checksums"
+	KindPrompt     ArtifactKind = "prompt"
 )
 
 type Artifact interface {

@@ -14,10 +14,10 @@ import (
 )
 
 type OpenRouterAdapter struct {
-	BaseURL  string
-	APIKey   string
-	ModelID  string
-	HTTP     HTTPDoer
+	BaseURL string
+	APIKey  string
+	ModelID string
+	HTTP    HTTPDoer
 }
 
 type HTTPDoer interface {
@@ -92,7 +92,9 @@ func (a *OpenRouterAdapter) Summarize(ctx context.Context, transcript artifacts.
 		}
 
 		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			if err := sleepWithContext(ctx, time.Duration(1<<attempt)*time.Second); err != nil {
+				return nil, notoerr.Wrap("provider_cancelled", "OpenRouter request cancelled during backoff.", err)
+			}
 			continue
 		}
 
@@ -100,7 +102,9 @@ func (a *OpenRouterAdapter) Summarize(ctx context.Context, transcript artifacts.
 			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 				return nil, notoerr.New("provider_client_error", "OpenRouter summarization failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
 			}
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			if err := sleepWithContext(ctx, time.Duration(1<<attempt)*time.Second); err != nil {
+				return nil, notoerr.Wrap("provider_cancelled", "OpenRouter request cancelled during backoff.", err)
+			}
 			continue
 		}
 
@@ -162,6 +166,19 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+// sleepWithContext waits for d or until ctx is cancelled, whichever comes
+// first, so retry backoff stays responsive to job cancellation.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetingID string, modelID string) (*artifacts.Summary, error) {
 	var resp struct {
 		Choices []struct {
@@ -182,9 +199,9 @@ func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetin
 	content = strings.Trim(content, " \n")
 
 	var parsed struct {
-		ShortSummary  string `json:"short_summary"`
-		Decisions     []struct {
-			Text       string `json:"text"`
+		ShortSummary string `json:"short_summary"`
+		Decisions    []struct {
+			Text       string   `json:"text"`
 			SpeakerIDs []string `json:"speaker_ids"`
 			Evidence   []struct {
 				SegmentID string `json:"segment_id"`
@@ -217,7 +234,11 @@ func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetin
 	}
 
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		return nil, notoerr.Wrap("summary_parse_failed", "Failed to parse summary JSON from OpenRouter response.", err)
+		// The model ignored the JSON instruction and returned prose. Rather
+		// than failing the whole summarization, fall back to using the raw
+		// content as the short summary with no structured items. A failed
+		// Unmarshal of non-JSON content leaves parsed at its zero value.
+		parsed.ShortSummary = content
 	}
 
 	decisions := make([]artifacts.SummaryItem, len(parsed.Decisions))

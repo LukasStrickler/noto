@@ -9,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lukasstrickler/noto/internal/notoapi"
-	"github.com/lukasstrickler/noto/internal/tui/keys"
 	"github.com/lukasstrickler/noto/internal/tui/layout"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
 )
@@ -27,9 +26,38 @@ type recorderScreen struct {
 
 	micHist  []int
 	partHist []int
+
+	// Held peak (dBFS) per channel, decaying over samples, plus a latched
+	// clip indicator — implements design.md's "peak holds then decays" and
+	// "clipping turns the label into persistent CLIP" rules.
+	micPeak, partPeak int
+	micClip, partClip bool
 }
 
-const waveBuffer = 120
+const (
+	waveBuffer = 120
+
+	dbFloor          = -60 // quietest level the meter shows
+	peakDecayPerTick = 1   // dB the held peak falls per incoming sample
+	clipThresholdDB  = -1  // at/above this, latch CLIP
+)
+
+// updatePeak decays the previous held peak by one step, then raises it to
+// the new sample if louder. Once a sample reaches the clip threshold the
+// latch stays set (persistent CLIP) until the meter is reset.
+func updatePeak(prev int, clipped bool, sample int) (int, bool) {
+	peak := prev - peakDecayPerTick
+	if peak < dbFloor {
+		peak = dbFloor
+	}
+	if sample > peak {
+		peak = sample
+	}
+	if sample >= clipThresholdDB {
+		clipped = true
+	}
+	return peak, clipped
+}
 
 func newRecorderScreen() screen {
 	ti := textinput.New()
@@ -39,13 +67,14 @@ func newRecorderScreen() screen {
 		titleIn:  ti,
 		micHist:  make([]int, 0, waveBuffer),
 		partHist: make([]int, 0, waveBuffer),
+		micPeak:  dbFloor,
+		partPeak: dbFloor,
 	}
 }
 
-func (r *recorderScreen) id() screenID         { return sRecorder }
-func (r *recorderScreen) title() string        { return "recorder" }
-func (r *recorderScreen) helpKeys() []keys.Map { return nil }
-func (r *recorderScreen) inputActive() bool    { return r.titleFocus }
+func (r *recorderScreen) id() screenID      { return sRecorder }
+func (r *recorderScreen) title() string     { return "recorder" }
+func (r *recorderScreen) inputActive() bool { return r.titleFocus }
 
 func (r *recorderScreen) enter(ctx screenCtx, _ string) tea.Cmd {
 	return tea.Batch(fetchRecording(ctx), preflightCmd(ctx))
@@ -63,6 +92,8 @@ func (r *recorderScreen) update(ctx screenCtx, msg tea.Msg) (screen, tea.Cmd) {
 		}
 		r.micHist = r.micHist[:0]
 		r.partHist = r.partHist[:0]
+		r.micPeak, r.partPeak = dbFloor, dbFloor
+		r.micClip, r.partClip = false, false
 		return r, tea.Batch(
 			fetchRecording(ctx),
 			func() tea.Msg { return bannerMsg{Kind: "info", Text: "recording started"} },
@@ -101,7 +132,7 @@ func (r *recorderScreen) update(ctx screenCtx, msg tea.Msg) (screen, tea.Cmd) {
 			return r, cmd
 		}
 		switch {
-		case v.String() == "i":
+		case key.Matches(v, ctx.keys.EditTitle):
 			r.titleFocus = true
 			r.titleIn.Focus()
 			return r, nil
@@ -136,6 +167,8 @@ func (r *recorderScreen) pushSample(mic, part int) {
 	if len(r.partHist) > waveBuffer {
 		r.partHist = r.partHist[len(r.partHist)-waveBuffer:]
 	}
+	r.micPeak, r.micClip = updatePeak(r.micPeak, r.micClip, mic)
+	r.partPeak, r.partClip = updatePeak(r.partPeak, r.partClip, part)
 }
 
 func (r *recorderScreen) view(ctx screenCtx) string {
@@ -144,10 +177,10 @@ func (r *recorderScreen) view(ctx screenCtx) string {
 	subtitle := ""
 	if r.rec.Active {
 		body = r.renderActive(ctx)
-		subtitle = "recording — press s to stop"
+		subtitle = "recording — press " + ctx.keys.Stop.Help().Key + " to stop"
 	} else {
 		body = r.renderIdle(ctx)
-		subtitle = "press r to start"
+		subtitle = "press " + ctx.keys.Record.Help().Key + " to start"
 	}
 	return layout.Panel{
 		Title:    "recorder",
@@ -161,11 +194,6 @@ func (r *recorderScreen) view(ctx screenCtx) string {
 
 func (r *recorderScreen) renderIdle(ctx screenCtx) string {
 	s := ctx.styles
-	width := ctx.width - 6
-	if width < 30 {
-		width = 30
-	}
-
 	titleLine := r.titleIn.View()
 	if !r.titleFocus && strings.TrimSpace(r.titleIn.Value()) == "" {
 		titleLine = s.Muted.Render(r.titleIn.Placeholder)
@@ -189,10 +217,10 @@ func (r *recorderScreen) renderIdle(ctx screenCtx) string {
 	after := s.Muted.Render("pipeline ") + s.Secondary.Render("ingest → transcribe → summarize → index")
 
 	chips := strings.Join([]string{
-		hint(s, "i", "edit title"),
-		hint(s, "r", "start"),
-		hint(s, ":", "menu"),
-		hint(s, "esc", "back"),
+		chipAs(s, ctx.keys.EditTitle, "edit title"),
+		chipAs(s, ctx.keys.Record, "start"),
+		chip(s, ctx.keys.Palette),
+		chip(s, ctx.keys.Back),
 	}, "   ")
 
 	return strings.Join([]string{
@@ -225,14 +253,14 @@ func (r *recorderScreen) renderActive(ctx screenCtx) string {
 		waveW = 20
 	}
 	wave := strings.Join([]string{
-		renderWaveLane(s, "me/mic ", rec.MicDB, r.micHist, waveW, 0),
-		renderWaveLane(s, "system ", rec.ParticipantDB, r.partHist, waveW, 1),
+		renderWaveLane(s, "me/mic ", rec.MicDB, r.micPeak, r.micClip, r.micHist, waveW, 0),
+		renderWaveLane(s, "system ", rec.ParticipantDB, r.partPeak, r.partClip, r.partHist, waveW, 1),
 	}, "\n")
 
 	chips := strings.Join([]string{
-		hint(s, "s", "stop"),
-		hint(s, "n", "marker"),
-		hint(s, ":", "menu"),
+		chip(s, ctx.keys.Stop),
+		chip(s, ctx.keys.Marker),
+		chip(s, ctx.keys.Palette),
 	}, "   ")
 
 	markers := ""
@@ -258,8 +286,10 @@ func (r *recorderScreen) renderActive(ctx screenCtx) string {
 }
 
 // renderWaveLane draws one label + bar-pixel waveform + live dB read-out.
-// channelIdx routes me/mic to Primary and system to Secondary.
-func renderWaveLane(s theme.Styles, label string, current int, hist []int, w, channelIdx int) string {
+// The read-out also shows the held peak (peak-hold/decay) and latches a
+// persistent CLIP marker once a channel has clipped. channelIdx routes
+// me/mic to Primary and system to Secondary.
+func renderWaveLane(s theme.Styles, label string, current, peak int, clip bool, hist []int, w, channelIdx int) string {
 	if w < 8 {
 		w = 8
 	}
@@ -302,7 +332,12 @@ func renderWaveLane(s theme.Styles, label string, current int, hist []int, w, ch
 
 	bar := lipgloss.NewStyle().Foreground(color).Render(string(bars))
 	level := s.Muted.Render(fmt.Sprintf("%+3d dB", current))
-	return s.Muted.Render(label) + bar + "  " + level
+	peakStr := s.Muted.Render(fmt.Sprintf("peak %+3d", peak))
+	readout := level + "  " + peakStr
+	if clip {
+		readout += "  " + s.Recording.Render("CLIP")
+	}
+	return s.Muted.Render(label) + bar + "  " + readout
 }
 
 type preflightMsg struct {

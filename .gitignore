@@ -101,3 +101,4 @@ xcuserdata/
 # --- Misc agent state ---------------------------------------
 .sisyphus/runs/
 .sisyphus/cache/
+.ada/

@@ -152,7 +152,7 @@ func TestProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"mistral", "assemblyai", "elevenlabs", "openrouter"}
+	want := []string{"assemblyai", "openrouter"}
 	for _, w := range want {
 		found := false
 		for _, p := range list {

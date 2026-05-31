@@ -10,17 +10,17 @@ import (
 // Default configuration values using Viper-compatible dot notation keys.
 const (
 	// Config key prefixes
-	KeyNoto            = "noto"
-	KeyRecordingsDir   = "noto.recordings_dir"
-	KeyArtifactRoot    = "noto.artifact_root"
-	KeyConfigDir       = "noto.config_dir"
-	KeySchemaVersion   = "noto.schema_version"
+	KeyNoto          = "noto"
+	KeyRecordingsDir = "noto.recordings_dir"
+	KeyArtifactRoot  = "noto.artifact_root"
+	KeyConfigDir     = "noto.config_dir"
+	KeySchemaVersion = "noto.schema_version"
 
 	// Provider keys
-	KeyProviders     = "noto.providers"
-	KeySTTDefault    = "noto.providers.stt.default"
-	KeyLLMDefault    = "noto.providers.llm.default"
-	KeySummarizer    = "noto.providers.summarizer"
+	KeyProviders  = "noto.providers"
+	KeySTTDefault = "noto.providers.stt.default"
+	KeyLLMDefault = "noto.providers.llm.default"
+	KeySummarizer = "noto.providers.summarizer"
 
 	// UI keys
 	KeyUITheme = "noto.ui.theme"
@@ -33,9 +33,9 @@ const (
 	// Storage keys
 	KeyStorageType       = "noto.storage.type"
 	KeyStorageLocalPath  = "noto.storage.local.path"
-	KeyStorageS3Bucket    = "noto.storage.s3.bucket"
-	KeyStorageS3Region    = "noto.storage.s3.region"
-	KeyStorageS3Endpoint  = "noto.storage.s3.endpoint"
+	KeyStorageS3Bucket   = "noto.storage.s3.bucket"
+	KeyStorageS3Region   = "noto.storage.s3.region"
+	KeyStorageS3Endpoint = "noto.storage.s3.endpoint"
 
 	// Routing keys (from existing providers.RoutingPolicy)
 	KeyRoutingLLMProvider    = "noto.routing.llm_provider"
@@ -57,21 +57,19 @@ const EnvPrefix = "NOTO"
 const (
 	DefaultRecordingsDirName = "recordings"
 	DefaultArtifactRootName  = "Noto"
-	DefaultConfigDirName    = ".noto"
-	DefaultSTTProvider      = "assemblyai"
-	DefaultLLMProvider      = "openrouter"
-	DefaultLLMModel        = "openai/gpt-4.1-mini"
-	DefaultSummarizer      = "openrouter"
-	DefaultUITheme         = "dark"
-	DefaultSyncEnabled     = false
-	DefaultStorageType     = "local"
+	DefaultConfigDirName     = ".noto"
+	DefaultSTTProvider       = "assemblyai"
+	DefaultLLMProvider       = "openrouter"
+	DefaultLLMModel          = "openai/gpt-4.1-mini"
+	DefaultSummarizer        = "openrouter"
+	DefaultUITheme           = "dark"
+	DefaultSyncEnabled       = false
+	DefaultStorageType       = "local"
 )
 
-// Provider env var references (maps config ref to env var).
+// ProviderEnvRefs maps a config provider ref to its env var.
 var ProviderEnvRefs = map[string]string{
-	"provider:mistral":    "NOTO_API_KEY_MISTRAL",
 	"provider:assemblyai": "NOTO_API_KEY_ASSEMBLYAI",
-	"provider:elevenlabs": "NOTO_API_KEY_ELEVENLABS",
 	"provider:openrouter": "NOTO_API_KEY_OPENROUTER",
 }
 
@@ -128,9 +126,7 @@ const ConfigFileMode = 0o600
 // ProviderCredentialRefs returns the credential reference map.
 func ProviderCredentialRefs() map[string]string {
 	return map[string]string{
-		"mistral":    "provider:mistral",
 		"assemblyai": "provider:assemblyai",
-		"elevenlabs": "provider:elevenlabs",
 		"openrouter": "provider:openrouter",
 	}
 }
@@ -160,7 +156,7 @@ func SyncDefaults() map[string]interface{} {
 	return map[string]interface{}{
 		"enabled":  DefaultSyncEnabled,
 		"endpoint": "",
-		"bucket":    "",
+		"bucket":   "",
 	}
 }
 
@@ -188,19 +184,19 @@ func RoutingDefaults() providers.RoutingPolicy {
 func AllDefaults() map[string]interface{} {
 	return map[string]interface{}{
 		KeyNoto: map[string]interface{}{
-			"schema_version":   "config.v1",
-			"config_dir":       DefaultConfigDir(),
-			"artifact_root":    DefaultArtifactRoot(),
-			"recordings_dir":   DefaultRecordingsDir(),
-			"providers":       ProviderDefaults(),
-			"ui":               UIDefaults(),
-			"sync":             SyncDefaults(),
-			"storage":          StorageDefaults(),
+			"schema_version": "config.v1",
+			"config_dir":     DefaultConfigDir(),
+			"artifact_root":  DefaultArtifactRoot(),
+			"recordings_dir": DefaultRecordingsDir(),
+			"providers":      ProviderDefaults(),
+			"ui":             UIDefaults(),
+			"sync":           SyncDefaults(),
+			"storage":        StorageDefaults(),
 			"routing": map[string]interface{}{
-				"llm_provider":     DefaultLLMProvider,
-				"llm_model":        DefaultLLMModel,
-				"speech_provider":   DefaultSTTProvider,
-				"profile":          string(providers.RoutingProfileManual),
+				"llm_provider":    DefaultLLMProvider,
+				"llm_model":       DefaultLLMModel,
+				"speech_provider": DefaultSTTProvider,
+				"profile":         string(providers.RoutingProfileManual),
 			},
 		},
 	}

@@ -578,6 +578,81 @@ func TestPunctuationNormalizer_CapitalizesAfterSentenceBoundary(t *testing.T) {
 	}
 }
 
+func TestPunctuationNormalizer_WhitespaceOnlyDoesNotPanic(t *testing.T) {
+	transcript := &artifacts.Transcript{
+		SchemaVersion: "transcript.v1",
+		MeetingID:     "mtg_test",
+		Provider:      artifacts.TranscriptProvider{ID: "test"},
+		Speakers: []artifacts.Speaker{
+			{ID: "spk_0", Label: "Speaker 0", ProviderLabel: "SPEAKER_01"},
+		},
+		Segments: []artifacts.Segment{
+			{ID: "seg_000001", SpeakerID: "spk_0", StartSeconds: 0.0, EndSeconds: 5.0, Text: "   "},
+		},
+		Words: []artifacts.Word{},
+	}
+
+	norm := NewPunctuationNormalizer()
+	result, err := norm.Normalize(transcript)
+	if err != nil {
+		t.Fatalf("Normalize returned error: %v", err)
+	}
+	// Whitespace-only text has no last rune; it must be left untouched
+	// (and not blanked to "", which would fail transcript validation).
+	if result.Segments[0].Text != "   " {
+		t.Errorf("expected whitespace-only text unchanged, got %q", result.Segments[0].Text)
+	}
+}
+
+func TestPunctuationNormalizer_MultibytePunctuationPreserved(t *testing.T) {
+	transcript := &artifacts.Transcript{
+		SchemaVersion: "transcript.v1",
+		MeetingID:     "mtg_test",
+		Provider:      artifacts.TranscriptProvider{ID: "test"},
+		Speakers: []artifacts.Speaker{
+			{ID: "spk_0", Label: "Speaker 0", ProviderLabel: "SPEAKER_01"},
+		},
+		Segments: []artifacts.Segment{
+			// Ends with a full-width question mark (U+FF1F, multibyte). The
+			// final rune must be decoded as punctuation rather than its
+			// trailing UTF-8 byte, so no period should be appended.
+			{ID: "seg_000001", SpeakerID: "spk_0", StartSeconds: 0.0, EndSeconds: 5.0, Text: "これは質問です？"},
+		},
+		Words: []artifacts.Word{},
+	}
+
+	norm := NewPunctuationNormalizer()
+	result, err := norm.Normalize(transcript)
+	if err != nil {
+		t.Fatalf("Normalize returned error: %v", err)
+	}
+	if strings.HasSuffix(result.Segments[0].Text, ".") {
+		t.Errorf("expected no period after multibyte punctuation, got %q", result.Segments[0].Text)
+	}
+}
+
+func TestSpeakerLabelNormalizer_KeepsTranscriptValid(t *testing.T) {
+	transcript := makeTestTranscript()
+
+	norm := NewSpeakerLabelNormalizer()
+	result, err := norm.Normalize(transcript)
+	if err != nil {
+		t.Fatalf("Normalize returned error: %v", err)
+	}
+
+	// The normalizer rewrites only the human-readable Label; it must not
+	// touch Speaker.ID or Segment.SpeakerID, so the result stays valid.
+	if verr := result.Validate(); verr != nil {
+		t.Fatalf("normalized transcript failed validation: %v", verr)
+	}
+	if result.Speakers[0].ID != "spk_0" || result.Speakers[1].ID != "spk_1" {
+		t.Errorf("speaker IDs should be preserved, got %q and %q", result.Speakers[0].ID, result.Speakers[1].ID)
+	}
+	if result.Segments[0].SpeakerID != "spk_0" {
+		t.Errorf("segment speaker reference should be preserved, got %q", result.Segments[0].SpeakerID)
+	}
+}
+
 func TestSpeakerLabelNormalizer_MapsSPEAKERLabels(t *testing.T) {
 	transcript := &artifacts.Transcript{
 		SchemaVersion:   "transcript.v1",

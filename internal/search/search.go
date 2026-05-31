@@ -41,8 +41,10 @@ type MeetingHits struct {
 	MeetingTitle    string
 	CreatedAt       time.Time
 	TitleMatch      bool
+	SummaryMatch    bool // body of the short summary matched
 	TranscriptCount int
-	SummaryCount    int
+	SummaryCount    int // structured summary bullets (decisions+actions+risks+questions)
+	QuestionCount   int
 	BestScore       float64
 	Snippet         string
 	Hits            []SearchResult
@@ -56,10 +58,13 @@ const (
 	ResultTypeDecision   ResultType = "decision"
 	ResultTypeAction     ResultType = "action"
 	ResultTypeRisk       ResultType = "risk"
+	ResultTypeQuestion   ResultType = "question"
+	ResultTypeSummary    ResultType = "summary"
 )
 
 // FTS5 column order for bm25() weights. KEEP IN SYNC with the
-// CREATE VIRTUAL TABLE statement in NewSearchIndex.
+// CREATE VIRTUAL TABLE statement in NewSearchIndex AND with
+// schemaVersion when columns change.
 const (
 	colContent     = 0
 	colMeetingID   = 1
@@ -69,14 +74,23 @@ const (
 	colDecisions   = 5
 	colActions     = 6
 	colRisks       = 7
-	colSegmentID   = 8
-	colResultType  = 9
-	colCount       = 10
+	colQuestions   = 8
+	colSummaryBody = 9
+	colSegmentID   = 10
+	colResultType  = 11
+	colCount       = 12
 )
 
+// schemaVersion is bumped any time the FTS5 column set changes. On
+// open we drop and recreate the index if the on-disk version doesn't
+// match — the data is re-derivable by re-indexing meetings.
+const schemaVersion = 3
+
 // Per-column BM25 weights. Title is heavily boosted so a title-match
-// always outranks a body-only match. ID/segment-id/result-type get
-// weight 0 — they're stored for filtering, not relevance.
+// always outranks a body-only match. The summary body sits between
+// title and structured-summary bullets so a generic "this meeting is
+// about X" hit beats a same-token transcript hit. ID columns get 0 —
+// they're stored for filtering, not relevance.
 var columnWeights = [colCount]float64{
 	colContent:     1.0,
 	colMeetingID:   0.0,
@@ -86,9 +100,21 @@ var columnWeights = [colCount]float64{
 	colDecisions:   2.0,
 	colActions:     2.0,
 	colRisks:       2.0,
+	colQuestions:   2.0,
+	colSummaryBody: 3.0,
 	colSegmentID:   0.0,
 	colResultType:  0.0,
 }
+
+// bm25WeightsCSV is the comma-separated bm25() column-weight list. The weights
+// are constant, so it is computed once here rather than on every Search call.
+var bm25WeightsCSV = func() string {
+	parts := make([]string, 0, colCount)
+	for _, w := range columnWeights {
+		parts = append(parts, fmt.Sprintf("%.2f", w))
+	}
+	return strings.Join(parts, ", ")
+}()
 
 func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 	s.mu.Lock()
@@ -104,15 +130,33 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 		return fmt.Errorf("delete existing entries: %w", err)
 	}
 
+	insert := func(e entryRow) error {
+		e.meetingID = meeting.MeetingID
+		return s.insertEntry(tx, e)
+	}
+
 	if meeting.Title != "" {
-		if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, "", "", meeting.Title, "", "", "", "title"); err != nil {
+		if err := insert(entryRow{title: meeting.Title, resultType: "title"}); err != nil {
+			return err
+		}
+	}
+
+	// summary_body holds the full short summary as one row so a hit
+	// anywhere in the summary text outranks transcript-only hits.
+	if meeting.ShortSummary != "" {
+		if err := insert(entryRow{summaryBody: meeting.ShortSummary, resultType: "summary"}); err != nil {
 			return err
 		}
 	}
 
 	for _, seg := range meeting.TranscriptSegments {
 		if seg.Text != "" {
-			if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, seg.Text, seg.Speaker, "", "", "", seg.SegmentID, "transcript"); err != nil {
+			if err := insert(entryRow{
+				segmentText: seg.Text,
+				speaker:     seg.Speaker,
+				segmentID:   seg.SegmentID,
+				resultType:  "transcript",
+			}); err != nil {
 				return err
 			}
 		}
@@ -120,7 +164,7 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 
 	for _, dec := range meeting.Decisions {
 		if dec.Text != "" {
-			if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, "", "", "", "", dec.Text, "", "decision"); err != nil {
+			if err := insert(entryRow{decisions: dec.Text, resultType: "decision"}); err != nil {
 				return err
 			}
 		}
@@ -128,8 +172,8 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 
 	for _, act := range meeting.ActionItems {
 		if act.Text != "" {
-			text := act.Text + " " + act.Owner
-			if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, "", "", "", text, "", "", "action"); err != nil {
+			text := strings.TrimSpace(act.Text + " " + act.Owner)
+			if err := insert(entryRow{actions: text, resultType: "action"}); err != nil {
 				return err
 			}
 		}
@@ -137,7 +181,15 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 
 	for _, risk := range meeting.Risks {
 		if risk.Text != "" {
-			if err := s.insertEntry(tx, meeting.MeetingID, meeting.Title, "", "", "", "", risk.Text, "", "risk"); err != nil {
+			if err := insert(entryRow{risks: risk.Text, resultType: "risk"}); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, q := range meeting.OpenQuestions {
+		if q.Text != "" {
+			if err := insert(entryRow{questions: q.Text, resultType: "question"}); err != nil {
 				return err
 			}
 		}
@@ -162,18 +214,49 @@ func (s *SearchIndex) IndexMeeting(meeting *Meeting) error {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 
-	if _, err := s.db.Exec(`PRAGMA optimize`); err != nil {
-		return fmt.Errorf("optimize index: %w", err)
-	}
-
 	return nil
 }
 
-func (s *SearchIndex) insertEntry(tx *sql.Tx, meetingID, title, segmentText, speaker, decisions, actions, risks, segmentID, resultType string) error {
-	content := buildContent(title, segmentText, speaker, decisions, actions, risks)
+// Optimize runs SQLite's PRAGMA optimize. It is meant to be called once after
+// a batch of IndexMeeting calls (e.g. a full reindex or seed) rather than per
+// meeting, which would turn a batch index into N separate optimize passes.
+func (s *SearchIndex) Optimize() error {
+	if _, err := s.db.Exec(`PRAGMA optimize`); err != nil {
+		return fmt.Errorf("optimize index: %w", err)
+	}
+	return nil
+}
+
+// entryRow gathers the per-column values for a single FTS5 row. Each
+// IndexMeeting call writes one row per result type (title, transcript
+// segment, decision, action, risk, question, summary). Only the
+// columns relevant to that row type are populated; the rest stay
+// empty so BM25 doesn't get polluted by stale text.
+type entryRow struct {
+	meetingID   string
+	title       string
+	segmentText string
+	speaker     string
+	decisions   string
+	actions     string
+	risks       string
+	questions   string
+	summaryBody string
+	segmentID   string
+	resultType  string
+}
+
+func (s *SearchIndex) insertEntry(tx *sql.Tx, e entryRow) error {
+	// title is only populated on the dedicated title row — keeps the
+	// title column from getting credit for transcript/decision hits.
+	titleCol := ""
+	if e.resultType == "title" {
+		titleCol = e.title
+	}
+	content := buildContent(titleCol, e.segmentText, e.speaker, e.decisions, e.actions, e.risks, e.questions, e.summaryBody)
 	_, err := tx.Exec(
-		`INSERT INTO meetings_fts(content, meeting_id, title, segment_text, speaker, decisions, actions, risks, segment_id, result_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		content, meetingID, title, segmentText, speaker, decisions, actions, risks, segmentID, resultType,
+		`INSERT INTO meetings_fts(content, meeting_id, title, segment_text, speaker, decisions, actions, risks, questions, summary_body, segment_id, result_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		content, e.meetingID, titleCol, e.segmentText, e.speaker, e.decisions, e.actions, e.risks, e.questions, e.summaryBody, e.segmentID, e.resultType,
 	)
 	if err != nil {
 		return fmt.Errorf("insert entry: %w", err)
@@ -181,34 +264,24 @@ func (s *SearchIndex) insertEntry(tx *sql.Tx, meetingID, title, segmentText, spe
 	return nil
 }
 
-func buildContent(title, segmentText, speaker, decisions, actions, risks string) string {
-	var parts []string
-	if title != "" {
-		parts = append(parts, title)
+func buildContent(parts ...string) string {
+	out := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
 	}
-	if segmentText != "" {
-		parts = append(parts, segmentText)
-	}
-	if speaker != "" {
-		parts = append(parts, speaker)
-	}
-	if decisions != "" {
-		parts = append(parts, decisions)
-	}
-	if actions != "" {
-		parts = append(parts, actions)
-	}
-	if risks != "" {
-		parts = append(parts, risks)
-	}
-	return strings.Join(parts, " ")
+	return strings.Join(out, " ")
 }
 
 // sanitizeFTS5Query strips characters FTS5 would interpret as operators
 // (`*`, `:`, `(`, `)`, `"`, `-`, `+`, `^`, `.`, etc.) and re-emits the
-// remaining words as quoted phrases. An empty result means the query
-// had no usable tokens and the caller should return zero results
-// instead of erroring.
+// remaining words as `("term" OR term*)` groups so that an exact-term
+// hit and a prefix-only hit can both match a single query. BM25 ranks
+// the exact form higher because the prefix form matches a superset
+// of documents but contributes less per match. An empty result means
+// the query had no usable tokens and the caller should return zero
+// results instead of erroring.
 func sanitizeFTS5Query(query string) string {
 	var b strings.Builder
 	for _, r := range query {
@@ -228,11 +301,17 @@ func sanitizeFTS5Query(query string) string {
 	if len(tokens) == 0 {
 		return ""
 	}
-	quoted := make([]string, len(tokens))
+	groups := make([]string, len(tokens))
 	for i, t := range tokens {
-		quoted[i] = `"` + t + `"`
+		// Single-character tokens get prefix-only treatment; FTS5
+		// rejects bare `"x"` as a too-short phrase on default tokenizers.
+		if len(t) == 1 {
+			groups[i] = t + `*`
+			continue
+		}
+		groups[i] = `("` + t + `" OR ` + t + `*)`
 	}
-	return strings.Join(quoted, " ")
+	return strings.Join(groups, " ")
 }
 
 func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
@@ -250,27 +329,24 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	weightArgs := make([]string, 0, colCount)
-	for _, w := range columnWeights {
-		weightArgs = append(weightArgs, fmt.Sprintf("%.2f", w))
-	}
-
 	sqlText := `
 		SELECT
 			f.meeting_id,
-			f.title,
+			COALESCE(mm.title, f.title) AS title,
 			f.segment_text,
 			f.speaker,
 			f.decisions,
 			f.actions,
 			f.risks,
+			f.questions,
+			f.summary_body,
 			f.segment_id,
 			f.result_type,
-			bm25(meetings_fts, ` + strings.Join(weightArgs, ", ") + `) AS rank,
+			bm25(meetings_fts, ` + bm25WeightsCSV + `) AS rank,
 			snippet(meetings_fts, -1, '**', '**', '...', 16) AS snippet,
-			COALESCE(m.created_at, 0) AS created_ns
+			COALESCE(mm.created_at, 0) AS created_ns
 		FROM meetings_fts f
-		LEFT JOIN meetings_meta m ON m.meeting_id = f.meeting_id
+		LEFT JOIN meetings_meta mm ON mm.meeting_id = f.meeting_id
 		WHERE meetings_fts MATCH ?
 		ORDER BY rank ASC, created_ns DESC
 		LIMIT 500
@@ -285,11 +361,11 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		var title, segmentText, speaker, decisions, actions, risks, segmentID, resultType, snippet sql.NullString
+		var title, segmentText, speaker, decisions, actions, risks, questions, summaryBody, segmentID, resultType, snippet sql.NullString
 		var rank sql.NullFloat64
 		var createdNS sql.NullInt64
 
-		if err := rows.Scan(&r.MeetingID, &title, &segmentText, &speaker, &decisions, &actions, &risks, &segmentID, &resultType, &rank, &snippet, &createdNS); err != nil {
+		if err := rows.Scan(&r.MeetingID, &title, &segmentText, &speaker, &decisions, &actions, &risks, &questions, &summaryBody, &segmentID, &resultType, &rank, &snippet, &createdNS); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 
@@ -307,16 +383,21 @@ func (s *SearchIndex) Search(query string) ([]SearchResult, error) {
 		}
 
 		if r.Snippet == "" {
-			if title.String != "" {
+			switch {
+			case title.String != "":
 				r.Snippet = title.String
-			} else if segmentText.String != "" {
+			case segmentText.String != "":
 				r.Snippet = segmentText.String
-			} else if decisions.String != "" {
+			case summaryBody.String != "":
+				r.Snippet = summaryBody.String
+			case decisions.String != "":
 				r.Snippet = decisions.String
-			} else if actions.String != "" {
+			case actions.String != "":
 				r.Snippet = actions.String
-			} else if risks.String != "" {
+			case risks.String != "":
 				r.Snippet = risks.String
+			case questions.String != "":
+				r.Snippet = questions.String
 			}
 		}
 
@@ -339,8 +420,16 @@ func (s *SearchIndex) SearchMeetings(query string, limit int) ([]MeetingHits, er
 	if err != nil {
 		return nil, err
 	}
+	return s.GroupMeetings(hits, limit), nil
+}
+
+// GroupMeetings groups already-fetched Search results by meeting and ranks
+// the groups. Callers that need both the flat hit list and the grouped view
+// (e.g. Service.Search) can run Search once and pass the results here instead
+// of querying the FTS index twice.
+func (s *SearchIndex) GroupMeetings(hits []SearchResult, limit int) []MeetingHits {
 	if len(hits) == 0 {
-		return nil, nil
+		return nil
 	}
 	groups := map[string]*MeetingHits{}
 	order := []string{}
@@ -369,6 +458,11 @@ func (s *SearchIndex) SearchMeetings(query string, limit int) ([]MeetingHits, er
 			g.TranscriptCount++
 		case ResultTypeDecision, ResultTypeAction, ResultTypeRisk:
 			g.SummaryCount++
+		case ResultTypeQuestion:
+			g.SummaryCount++
+			g.QuestionCount++
+		case ResultTypeSummary:
+			g.SummaryMatch = true
 		}
 		if h.BM25Score < g.BestScore {
 			g.BestScore = h.BM25Score
@@ -388,6 +482,12 @@ func (s *SearchIndex) SearchMeetings(query string, limit int) ([]MeetingHits, er
 		if out[i].TitleMatch != out[j].TitleMatch {
 			return out[i].TitleMatch
 		}
+		// Among non-title hits, a summary-body match beats a body-only
+		// match — the user's words appearing in the summary signals
+		// stronger topical relevance than a single transcript line.
+		if out[i].SummaryMatch != out[j].SummaryMatch {
+			return out[i].SummaryMatch
+		}
 		// Lower BM25 = more relevant.
 		if out[i].BestScore != out[j].BestScore {
 			return out[i].BestScore < out[j].BestScore
@@ -398,7 +498,7 @@ func (s *SearchIndex) SearchMeetings(query string, limit int) ([]MeetingHits, er
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
-	return out, nil
+	return out
 }
 
 func (s *SearchIndex) DeleteFromIndex(meetingID string) error {
@@ -430,7 +530,39 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	_, err = db.Exec(`
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS schema_kv(
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create schema_kv table: %w", err)
+	}
+
+	// FTS5 doesn't support ALTER ADD COLUMN. When the schema changes
+	// we drop the index — the data is re-derivable by re-indexing
+	// meetings (the service will reindex on next IndexMeeting calls,
+	// or via the `reindex` job from config).
+	//
+	// We treat "no version row" as a stale schema too: pre-versioning
+	// installs have a v1 meetings_fts table without the new columns,
+	// and schema_kv was just created above so the row is missing on
+	// that exact upgrade.
+	var onDisk sql.NullString
+	if err := db.QueryRow(`SELECT value FROM schema_kv WHERE key='version'`).Scan(&onDisk); err != nil && err != sql.ErrNoRows {
+		db.Close()
+		return nil, fmt.Errorf("read schema version: %w", err)
+	}
+	wantVersion := fmt.Sprintf("%d", schemaVersion)
+	if !onDisk.Valid || onDisk.String != wantVersion {
+		if _, err := db.Exec(`DROP TABLE IF EXISTS meetings_fts`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("drop stale fts: %w", err)
+		}
+	}
+
+	if _, err := db.Exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(
 			content,
 			meeting_id,
@@ -440,24 +572,32 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 			decisions,
 			actions,
 			risks,
+			questions,
+			summary_body,
 			segment_id,
 			result_type,
 			tokenize='unicode61'
 		)
-	`)
-	if err != nil {
+	`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create FTS table: %w", err)
 	}
 
-	_, err = db.Exec(`
+	if _, err := db.Exec(`
+		INSERT INTO schema_kv(key, value) VALUES('version', ?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value
+	`, wantVersion); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("upsert schema version: %w", err)
+	}
+
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS meetings_meta(
 			meeting_id TEXT PRIMARY KEY,
 			title      TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL DEFAULT 0
 		)
-	`)
-	if err != nil {
+	`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create meta table: %w", err)
 	}
@@ -477,11 +617,13 @@ func (s *SearchIndex) Close() error {
 type IndexMeetingInput struct {
 	MeetingID          string
 	Title              string
+	ShortSummary       string
 	CreatedAt          time.Time
 	TranscriptSegments []TranscriptSegment
 	Decisions          []SummaryItem
 	ActionItems        []ActionItem
 	Risks              []SummaryItem
+	OpenQuestions      []SummaryItem
 }
 
 type TranscriptSegment struct {
@@ -504,22 +646,26 @@ type ActionItem struct {
 type Meeting struct {
 	MeetingID          string
 	Title              string
+	ShortSummary       string
 	CreatedAt          time.Time
 	TranscriptSegments []TranscriptSegment
 	Decisions          []SummaryItem
 	ActionItems        []ActionItem
 	Risks              []SummaryItem
+	OpenQuestions      []SummaryItem
 }
 
 func (s *SearchIndex) IndexMeetingFromInput(input *IndexMeetingInput) error {
 	meeting := &Meeting{
 		MeetingID:          input.MeetingID,
 		Title:              input.Title,
+		ShortSummary:       input.ShortSummary,
 		CreatedAt:          input.CreatedAt,
 		TranscriptSegments: input.TranscriptSegments,
 		Decisions:          input.Decisions,
 		ActionItems:        input.ActionItems,
 		Risks:              input.Risks,
+		OpenQuestions:      input.OpenQuestions,
 	}
 	return s.IndexMeeting(meeting)
 }

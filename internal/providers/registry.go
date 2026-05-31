@@ -21,22 +21,6 @@ func NewRegistry(suites []ProviderSuite) Registry {
 func DefaultRegistry() Registry {
 	return NewRegistry([]ProviderSuite{
 		{
-			ID:                     "mistral",
-			DisplayName:            "Mistral Voxtral",
-			Kind:                   ProviderKindSpeech,
-			Capabilities:           []Capability{CapabilityTranscribe, CapabilityDiarize, CapabilityWordTimestamps, CapabilityContextBiasing},
-			CredentialRef:          "provider:mistral",
-			RequiresNetwork:        true,
-			SendsRawAudioOffDevice: true,
-			PricingHint:            "Voxtral STT pricing should be refreshed from provider docs before live benchmark runs.",
-			Notes:                  "Speech-only in Noto. Do not route production LLM work to direct Mistral chat APIs.",
-			Models: []Model{{
-				ID:           "voxtral-mini-transcribe",
-				DisplayName:  "Voxtral Mini Transcribe",
-				Capabilities: []Capability{CapabilityTranscribe, CapabilityDiarize, CapabilityWordTimestamps, CapabilityContextBiasing},
-			}},
-		},
-		{
 			ID:                     "assemblyai",
 			DisplayName:            "AssemblyAI Universal",
 			Kind:                   ProviderKindSpeech,
@@ -50,38 +34,6 @@ func DefaultRegistry() Registry {
 				ID:           "universal-3-pro",
 				DisplayName:  "Universal-3 Pro",
 				Capabilities: []Capability{CapabilityTranscribe, CapabilityDiarize, CapabilityWordTimestamps},
-			}},
-		},
-		{
-			ID:                     "elevenlabs",
-			DisplayName:            "ElevenLabs Scribe",
-			Kind:                   ProviderKindSpeech,
-			Capabilities:           []Capability{CapabilityTranscribe, CapabilityDiarize, CapabilityWordTimestamps, CapabilityAudioTags},
-			CredentialRef:          "provider:elevenlabs",
-			RequiresNetwork:        true,
-			SendsRawAudioOffDevice: true,
-			PricingHint:            "Scribe v2 pricing should be refreshed before live benchmark runs.",
-			Notes:                  "Speech-only in Noto. Do not route production LLM work to ElevenLabs.",
-			Models: []Model{{
-				ID:           "scribe_v2",
-				DisplayName:  "Scribe v2",
-				Capabilities: []Capability{CapabilityTranscribe, CapabilityDiarize, CapabilityWordTimestamps, CapabilityAudioTags},
-			}},
-		},
-		{
-			ID:                     "local",
-			DisplayName:            "Local (whisper.cpp / NVIDIA Parakeet)",
-			Kind:                   ProviderKindSpeech,
-			Capabilities:           []Capability{CapabilityTranscribe, CapabilityWordTimestamps},
-			CredentialRef:          "provider:local",
-			RequiresNetwork:        false,
-			SendsRawAudioOffDevice: false,
-			PricingHint:            "Free. Runs against any OpenAI-compatible STT server (whisper.cpp, faster-whisper, NVIDIA NIM Parakeet).",
-			Notes:                  "Point NOTO_LOCAL_STT_URL at e.g. http://127.0.0.1:8000/v1/audio/transcriptions. Parakeet-TDT v2 currently leads the open ASR leaderboard.",
-			Models: []Model{{
-				ID:           "auto",
-				DisplayName:  "Whatever the local server exposes",
-				Capabilities: []Capability{CapabilityTranscribe, CapabilityWordTimestamps},
 			}},
 		},
 		{

@@ -17,15 +17,15 @@ type DirectoryLayout struct {
 	Year      string
 	Month     string
 
-	MeetingDir string
+	MeetingDir  string
 	VersionsDir string
-	TmpDir     string
+	TmpDir      string
 
-	ManifestPath    string
-	AudioPath       string
-	TranscriptPath  string
-	SummaryPath     string
-	ChecksumPath    string
+	ManifestPath   string
+	AudioPath      string
+	TranscriptPath string
+	SummaryPath    string
+	ChecksumPath   string
 }
 
 func LayoutFor(recordingsDir string, meetingID uuid.UUID) (DirectoryLayout, error) {
@@ -119,11 +119,6 @@ func ValidateLayout(layout DirectoryLayout) error {
 		return ErrInvalidLayout("meeting_dir is required")
 	}
 	return nil
-}
-
-type versionPaths struct {
-	VersionID string
-	Paths     DirectoryLayout
 }
 
 func ParseMeetingID(dir string) (uuid.UUID, error) {

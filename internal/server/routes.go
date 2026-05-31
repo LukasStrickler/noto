@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lukasstrickler/noto/internal/notoapi"
 )
@@ -20,6 +21,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Meetings
 	mux.HandleFunc("/v1/meetings", s.handleMeetings)
 	mux.HandleFunc("/v1/meetings/", s.handleMeetingByID)
+
+	// Speaker profiles
+	mux.HandleFunc("/v1/speaker-profiles", s.handleSpeakerProfiles)
+	mux.HandleFunc("/v1/speaker-profiles/", s.handleSpeakerProfileByID)
 
 	// Search
 	mux.HandleFunc("/v1/search", s.handleSearch)
@@ -47,6 +52,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/storage", s.handleStorage)
 	mux.HandleFunc("/v1/storage/verify", s.handleStorageVerify)
 	mux.HandleFunc("/v1/storage/reindex", s.handleStorageReindex)
+
+	// Agent API — optimised for AI agent consumption
+	mux.HandleFunc("/v1/agent/meetings", s.handleAgentMeetings)
+	mux.HandleFunc("/v1/agent/meetings/", s.handleAgentMeetingByID)
 }
 
 // --- Health ---
@@ -121,7 +130,16 @@ func (s *Server) handleMeetingByID(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	switch parts[1] {
+	// Re-split to handle sub-resources with an ID segment, e.g.
+	// "speakers/spk_0" → sub="speakers", subID="spk_0".
+	sub := parts[1]
+	subID := ""
+	if i := strings.IndexByte(sub, '/'); i >= 0 {
+		subID = sub[i+1:]
+		sub = sub[:i]
+	}
+
+	switch sub {
 	case "transcript":
 		t, err := s.svc.GetTranscript(r.Context(), id)
 		if err != nil {
@@ -161,8 +179,53 @@ func (s *Server) handleMeetingByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, job)
+	case "speaker-mappings":
+		switch r.Method {
+		case http.MethodGet:
+			mappings, err := s.svc.GetMeetingSpeakerMappings(r.Context(), id)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, mappings)
+		case http.MethodPatch:
+			var patch notoapi.MeetingSpeakerMappingsPatch
+			if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+				writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "invalid JSON", nil))
+				return
+			}
+			mappings, err := s.svc.PatchMeetingSpeakerMappings(r.Context(), id, patch)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, mappings)
+		default:
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+		}
+	case "speakers":
+		if r.Method != http.MethodPost {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+			return
+		}
+		if subID == "" {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "speaker id is required", nil))
+			return
+		}
+		var body struct {
+			DisplayName string `json:"display_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "invalid JSON", nil))
+			return
+		}
+		if err := s.svc.UpdateSpeakerName(r.Context(), id, subID, body.DisplayName); err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
-		writeError(w, notoapi.NewError(notoapi.CodeNotFound, "unknown sub-resource", map[string]any{"resource": parts[1]}))
+		writeError(w, notoapi.NewError(notoapi.CodeNotFound, "unknown sub-resource", map[string]any{"resource": sub}))
 	}
 }
 
@@ -183,6 +246,95 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// --- Speaker Profiles ---
+
+func (s *Server) handleSpeakerProfiles(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		profiles, err := s.svc.ListSpeakerProfiles(r.Context())
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, notoapi.ListSpeakerProfilesResult{Profiles: profiles, Total: len(profiles)})
+	case http.MethodPost:
+		var req notoapi.CreateSpeakerProfileRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "invalid JSON", nil))
+			return
+		}
+		p, err := s.svc.CreateSpeakerProfile(r.Context(), req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, p)
+	default:
+		writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+	}
+}
+
+func (s *Server) handleSpeakerProfileByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/v1/speaker-profiles/")
+	parts := strings.SplitN(path, "/", 2)
+	if parts[0] == "" {
+		writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "missing profile id", nil))
+		return
+	}
+	id := parts[0]
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			p, err := s.svc.GetSpeakerProfile(r.Context(), id)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, p)
+		case http.MethodPatch:
+			var patch notoapi.SpeakerProfilePatch
+			if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+				writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "invalid JSON", nil))
+				return
+			}
+			p, err := s.svc.PatchSpeakerProfile(r.Context(), id, patch)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, p)
+		case http.MethodDelete:
+			if err := s.svc.DeleteSpeakerProfile(r.Context(), id); err != nil {
+				writeError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+		}
+		return
+	}
+	if len(parts) > 1 && parts[1] == "merge" {
+		if r.Method != http.MethodPost {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+			return
+		}
+		var req notoapi.MergeSpeakerProfilesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "invalid JSON", nil))
+			return
+		}
+		p, err := s.svc.MergeSpeakerProfiles(r.Context(), id, req.SourceProfileID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+		return
+	}
+	writeError(w, notoapi.NewError(notoapi.CodeNotFound, "unknown sub-resource", map[string]any{"resource": parts[1]}))
 }
 
 // --- Imports ---
@@ -506,4 +658,53 @@ func (s *Server) handleStorageReindex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, j)
+}
+
+// --- Agent API ---
+
+// GET /v1/agent/meetings?limit=N&after=RFC3339&before=RFC3339
+func (s *Server) handleAgentMeetings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+		return
+	}
+	opts := notoapi.AgentListOpts{}
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil {
+		opts.Limit = n
+	}
+	if v := r.URL.Query().Get("after"); v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			opts.After = t
+		}
+	}
+	if v := r.URL.Query().Get("before"); v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			opts.Before = t
+		}
+	}
+	res, err := s.svc.AgentListMeetings(r.Context(), opts)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// GET /v1/agent/meetings/{id}
+func (s *Server) handleAgentMeetingByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/v1/agent/meetings/")
+	if id == "" {
+		writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "missing meeting id", nil))
+		return
+	}
+	result, err := s.svc.AgentGetMeeting(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }

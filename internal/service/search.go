@@ -45,25 +45,26 @@ func (s *Service) Search(_ context.Context, opts notoapi.SearchOpts) (notoapi.Se
 
 	// Group + rank per meeting so the UI can render
 	// "5 in transcript / 2 in summary" badges and prioritise title matches.
-	groups, err := s.search.SearchMeetings(q, 0)
-	if err == nil {
-		out.Meetings = make([]notoapi.MeetingHits, 0, len(groups))
-		for _, g := range groups {
-			mh := notoapi.MeetingHits{
-				MeetingID:       g.MeetingID,
-				MeetingTitle:    g.MeetingTitle,
-				CreatedAt:       g.CreatedAt,
-				TitleMatch:      g.TitleMatch,
-				TranscriptCount: g.TranscriptCount,
-				SummaryCount:    g.SummaryCount,
-				Score:           g.BestScore,
-				Snippet:         g.Snippet,
-			}
-			for _, h := range g.Hits {
-				mh.TopHits = append(mh.TopHits, hitFromSearchResult(h))
-			}
-			out.Meetings = append(out.Meetings, mh)
+	// Reuse the results already fetched above rather than querying FTS again.
+	groups := s.search.GroupMeetings(results, 0)
+	out.Meetings = make([]notoapi.MeetingHits, 0, len(groups))
+	for _, g := range groups {
+		mh := notoapi.MeetingHits{
+			MeetingID:       g.MeetingID,
+			MeetingTitle:    g.MeetingTitle,
+			CreatedAt:       g.CreatedAt,
+			TitleMatch:      g.TitleMatch,
+			SummaryMatch:    g.SummaryMatch,
+			TranscriptCount: g.TranscriptCount,
+			SummaryCount:    g.SummaryCount,
+			QuestionCount:   g.QuestionCount,
+			Score:           g.BestScore,
+			Snippet:         g.Snippet,
 		}
+		for _, h := range g.Hits {
+			mh.TopHits = append(mh.TopHits, hitFromSearchResult(h))
+		}
+		out.Meetings = append(out.Meetings, mh)
 	}
 	return out, nil
 }

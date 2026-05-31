@@ -192,22 +192,22 @@ func TestValidateTranscript(t *testing.T) {
 		{
 			name: "valid transcript",
 			t: Transcript{
-				SchemaVersion:   "transcript.v1",
-				MeetingID:       "mtg_123",
-				Provider:        TranscriptProvider{ID: "provider_1"},
-				Speakers:        []Speaker{{ID: "spk_1", Label: "Speaker 1"}},
-				Segments:        []Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello", StartSeconds: 0, EndSeconds: 1}},
-				Capabilities:    TranscriptCapabilities{WordTimestamps: true},
+				SchemaVersion: "transcript.v1",
+				MeetingID:     "mtg_123",
+				Provider:      TranscriptProvider{ID: "provider_1"},
+				Speakers:      []Speaker{{ID: "spk_1", Label: "Speaker 1"}},
+				Segments:      []Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello", StartSeconds: 0, EndSeconds: 1}},
+				Capabilities:  TranscriptCapabilities{WordTimestamps: true},
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing schema_version",
 			t: Transcript{
-				MeetingID:   "mtg_123",
-				Provider:    TranscriptProvider{ID: "provider_1"},
-				Speakers:    []Speaker{{ID: "spk_1"}},
-				Segments:    []Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello"}},
+				MeetingID: "mtg_123",
+				Provider:  TranscriptProvider{ID: "provider_1"},
+				Speakers:  []Speaker{{ID: "spk_1"}},
+				Segments:  []Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello"}},
 			},
 			wantErr: true,
 		},
@@ -311,12 +311,12 @@ func TestValidateTranscript(t *testing.T) {
 		{
 			name: "with confidence scores",
 			t: Transcript{
-				SchemaVersion:   "transcript.v1",
-				MeetingID:       "mtg_123",
-				Provider:        TranscriptProvider{ID: "provider_1"},
-				Speakers:        []Speaker{{ID: "spk_1", Label: "Speaker 1"}},
-				Segments:        []Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello", StartSeconds: 0, EndSeconds: 1, Confidence: &conf}},
-				Capabilities:    TranscriptCapabilities{WordTimestamps: true},
+				SchemaVersion: "transcript.v1",
+				MeetingID:     "mtg_123",
+				Provider:      TranscriptProvider{ID: "provider_1"},
+				Speakers:      []Speaker{{ID: "spk_1", Label: "Speaker 1"}},
+				Segments:      []Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello", StartSeconds: 0, EndSeconds: 1, Confidence: &conf}},
+				Capabilities:  TranscriptCapabilities{WordTimestamps: true},
 			},
 			wantErr: false,
 		},
@@ -557,9 +557,9 @@ func TestArtifactKind(t *testing.T) {
 	})
 
 	t.Run("transcript kind", func(t *testing.T) {
-		t_struct := Transcript{}
-		if t_struct.Kind() != KindTranscript {
-			t.Errorf("expected KindTranscript, got %s", t_struct.Kind())
+		tr := Transcript{}
+		if tr.Kind() != KindTranscript {
+			t.Errorf("expected KindTranscript, got %s", tr.Kind())
 		}
 	})
 
@@ -579,12 +579,12 @@ func TestArtifactKind(t *testing.T) {
 }
 
 func TestTranscriptKindAndVersion(t *testing.T) {
-	t_struct := Transcript{SchemaVersion: "transcript.v1"}
-	if t_struct.Kind() != KindTranscript {
-		t.Errorf("expected KindTranscript, got %s", t_struct.Kind())
+	tr := Transcript{SchemaVersion: "transcript.v1"}
+	if tr.Kind() != KindTranscript {
+		t.Errorf("expected KindTranscript, got %s", tr.Kind())
 	}
-	if t_struct.Version() != "transcript.v1" {
-		t.Errorf("expected transcript.v1, got %s", t_struct.Version())
+	if tr.Version() != "transcript.v1" {
+		t.Errorf("expected transcript.v1, got %s", tr.Version())
 	}
 }
 

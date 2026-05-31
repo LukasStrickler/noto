@@ -14,15 +14,15 @@ import (
 )
 
 type Config struct {
-	SchemaVersion  string                  `mapstructure:"schema_version"`
-	ConfigDir      string                  `mapstructure:"config_dir"`
-	ArtifactRoot   string                  `mapstructure:"artifact_root"`
-	RecordingsDir  string                  `mapstructure:"recordings_dir"`
-	Providers      ProviderConfig          `mapstructure:"providers"`
-	UI             UIConfig               `mapstructure:"ui"`
-	Sync           SyncConfig             `mapstructure:"sync"`
-	Storage        StorageConfig          `mapstructure:"storage"`
-	Routing        providers.RoutingPolicy `mapstructure:"routing"`
+	SchemaVersion string                  `mapstructure:"schema_version"`
+	ConfigDir     string                  `mapstructure:"config_dir"`
+	ArtifactRoot  string                  `mapstructure:"artifact_root"`
+	RecordingsDir string                  `mapstructure:"recordings_dir"`
+	Providers     ProviderConfig          `mapstructure:"providers"`
+	UI            UIConfig                `mapstructure:"ui"`
+	Sync          SyncConfig              `mapstructure:"sync"`
+	Storage       StorageConfig           `mapstructure:"storage"`
+	Routing       providers.RoutingPolicy `mapstructure:"routing"`
 }
 
 type ProviderConfig struct {
@@ -50,9 +50,9 @@ type SyncConfig struct {
 }
 
 type StorageConfig struct {
-	Type  string           `mapstructure:"type"`
+	Type  string             `mapstructure:"type"`
 	Local LocalStorageConfig `mapstructure:"local"`
-	S3    S3StorageConfig  `mapstructure:"s3"`
+	S3    S3StorageConfig    `mapstructure:"s3"`
 }
 
 type LocalStorageConfig struct {
@@ -90,8 +90,8 @@ func (s Store) Save(cfg Config) error {
 	return Save(cfg, s.dir)
 }
 
-// LoadOrDefault reads the config from s.dir; if the file does not exist
-// it returns DefaultConfig() with ConfigDir set.
+// Load reads the config from s.dir; if the file does not exist it returns
+// DefaultConfig() with ConfigDir set.
 func (s Store) Load() (Config, error) {
 	return Load(s.dir)
 }
@@ -209,8 +209,37 @@ func unmarshalNoto(v *viper.Viper, cfg *Config) error {
 	if s := v.GetString(KeyUITheme); s != "" {
 		cfg.UI.Theme = s
 	}
+	if s := v.GetString(KeySummarizer); s != "" {
+		cfg.Providers.Summarizer = s
+	}
+	// Sync + storage keys are pflag-bound (and storage.type is also
+	// env-bound), so AllSettings misses them when supplied via flag/env.
+	// Re-pull each one or a `--sync-endpoint`/`--storage-local-path` flag
+	// would be silently dropped. IsSet keeps the bool flag from clobbering
+	// a config-file value with its zero default.
+	if v.IsSet(KeySyncEnabled) {
+		cfg.Sync.Enabled = v.GetBool(KeySyncEnabled)
+	}
+	if s := v.GetString(KeySyncEndpoint); s != "" {
+		cfg.Sync.Endpoint = s
+	}
+	if s := v.GetString(KeySyncBucket); s != "" {
+		cfg.Sync.Bucket = s
+	}
 	if s := v.GetString(KeyStorageType); s != "" {
 		cfg.Storage.Type = s
+	}
+	if s := v.GetString(KeyStorageLocalPath); s != "" {
+		cfg.Storage.Local.Path = s
+	}
+	if s := v.GetString(KeyStorageS3Bucket); s != "" {
+		cfg.Storage.S3.Bucket = s
+	}
+	if s := v.GetString(KeyStorageS3Region); s != "" {
+		cfg.Storage.S3.Region = s
+	}
+	if s := v.GetString(KeyStorageS3Endpoint); s != "" {
+		cfg.Storage.S3.Endpoint = s
 	}
 	return nil
 }
@@ -291,14 +320,27 @@ func Save(cfg Config, dir string) error {
 	v.Set(KeyRoutingSpeechProvider, cfg.Routing.SpeechProvider)
 	v.Set(KeyRoutingProfile, string(cfg.Routing.Profile))
 
-	// viper.WriteConfigAs infers format from extension; the .tmp suffix
-	// confuses it. Write to a normal .yaml first then rename.
+	// Write atomically: a crash or disk-full mid-write must never leave a
+	// truncated config.yaml. viper.WriteConfigAs infers the marshaler from
+	// the file extension, so the temp file keeps a .yaml suffix; the final
+	// os.Rename is atomic on POSIX.
 	final := filepath.Join(dir, "config.yaml")
-	if err := v.WriteConfigAs(final); err != nil {
+	tmp, err := os.CreateTemp(dir, "config-*.yaml")
+	if err != nil {
+		return notoerr.Wrap("config_write_failed", "Failed to create temp config file", err)
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close() // WriteConfigAs reopens and rewrites the file.
+	defer os.Remove(tmpPath)
+
+	if err := v.WriteConfigAs(tmpPath); err != nil {
 		return notoerr.Wrap("config_write_failed", "Failed to write config file", err)
 	}
-	if err := os.Chmod(final, ConfigFileMode); err != nil {
+	if err := os.Chmod(tmpPath, ConfigFileMode); err != nil {
 		return notoerr.Wrap("config_file_perm_failed", "Could not set config file permissions", err)
+	}
+	if err := os.Rename(tmpPath, final); err != nil {
+		return notoerr.Wrap("config_write_failed", "Failed to finalize config file", err)
 	}
 
 	return nil
@@ -348,13 +390,13 @@ func DefaultConfig() Config {
 
 func (c Config) GetProviderConfig(provider string) ProviderSettings {
 	return ProviderSettings{
-		Provider: provider,
+		Provider:  provider,
 		APIKeyRef: fmt.Sprintf("provider:%s", provider),
 	}
 }
 
 type ProviderSettings struct {
-	Provider string
+	Provider  string
 	APIKeyRef string
 	Endpoint  string
 	Model     string

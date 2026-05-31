@@ -10,7 +10,7 @@ import (
 func (s *Service) GetStorage(ctx context.Context) (notoapi.Storage, error) {
 	list, _ := s.ListMeetings(ctx, notoapi.ListMeetingsOpts{})
 	return notoapi.Storage{
-		SchemaVersion: s.cfg.SchemaVersion,
+		SchemaVersion: s.currentCfg().SchemaVersion,
 		RecordingsDir: s.recordingsDir,
 		MeetingCount:  list.Total,
 		IndexState:    "clean",

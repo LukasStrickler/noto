@@ -6,41 +6,41 @@ import (
 
 // Flag names and descriptions for CLI flag definitions.
 const (
-	FlagRecordingsDir   = "recordings-dir"
-	FlagArtifactRoot    = "artifact-root"
-	FlagConfigDir       = "config-dir"
-	FlagSTTProvider     = "provider-stt"
-	FlagLLMProvider     = "provider-llm"
-	FlagLLMModel        = "model-llm"
-	FlagSummarizer      = "provider-summarizer"
-	FlagUITheme         = "ui-theme"
-	FlagSyncEnabled     = "sync-enabled"
-	FlagSyncEndpoint    = "sync-endpoint"
-	FlagSyncBucket      = "sync-bucket"
-	FlagStorageType     = "storage-type"
-	FlagStorageLocalPath = "storage-local-path"
-	FlagStorageS3Bucket = "storage-s3-bucket"
-	FlagStorageS3Region = "storage-s3-region"
+	FlagRecordingsDir     = "recordings-dir"
+	FlagArtifactRoot      = "artifact-root"
+	FlagConfigDir         = "config-dir"
+	FlagSTTProvider       = "provider-stt"
+	FlagLLMProvider       = "provider-llm"
+	FlagLLMModel          = "model-llm"
+	FlagSummarizer        = "provider-summarizer"
+	FlagUITheme           = "ui-theme"
+	FlagSyncEnabled       = "sync-enabled"
+	FlagSyncEndpoint      = "sync-endpoint"
+	FlagSyncBucket        = "sync-bucket"
+	FlagStorageType       = "storage-type"
+	FlagStorageLocalPath  = "storage-local-path"
+	FlagStorageS3Bucket   = "storage-s3-bucket"
+	FlagStorageS3Region   = "storage-s3-region"
 	FlagStorageS3Endpoint = "storage-s3-endpoint"
 )
 
 // FlagDescriptions holds descriptions for each CLI flag.
 var FlagDescriptions = map[string]string{
-	FlagRecordingsDir:    "Directory for meeting recordings",
-	FlagArtifactRoot:     "Root directory for Noto artifacts",
-	FlagConfigDir:        "Configuration directory",
-	FlagSTTProvider:      "Default speech-to-text provider",
-	FlagLLMProvider:      "Default LLM provider",
-	FlagLLMModel:         "Default LLM model",
-	FlagSummarizer:       "Default summarization provider",
-	FlagUITheme:          "UI theme (dark/light)",
-	FlagSyncEnabled:      "Enable cloud sync",
-	FlagSyncEndpoint:     "Sync gateway endpoint URL",
-	FlagSyncBucket:       "Sync bucket name",
+	FlagRecordingsDir:     "Directory for meeting recordings",
+	FlagArtifactRoot:      "Root directory for Noto artifacts",
+	FlagConfigDir:         "Configuration directory",
+	FlagSTTProvider:       "Default speech-to-text provider",
+	FlagLLMProvider:       "Default LLM provider",
+	FlagLLMModel:          "Default LLM model",
+	FlagSummarizer:        "Default summarization provider",
+	FlagUITheme:           "UI theme (dark/light)",
+	FlagSyncEnabled:       "Enable cloud sync",
+	FlagSyncEndpoint:      "Sync gateway endpoint URL",
+	FlagSyncBucket:        "Sync bucket name",
 	FlagStorageType:       "Storage backend type (local/s3)",
 	FlagStorageLocalPath:  "Local storage path",
 	FlagStorageS3Bucket:   "S3 bucket name",
-	FlagStorageS3Region:  "S3 region",
+	FlagStorageS3Region:   "S3 region",
 	FlagStorageS3Endpoint: "S3 endpoint URL (for R2)",
 }
 

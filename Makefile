@@ -69,12 +69,47 @@ test:
 test-e2e:
 	$(GO) test -count=1 -run E2E -v ./internal/notohost/
 
+.PHONY: test-race
+test-race:
+	$(GO) test -race -count=1 ./...
+
 .PHONY: vet
 vet:
 	$(GO) vet ./...
 
+# gofmt the project source in place.
+.PHONY: fmt
+fmt:
+	@"$$($(GO) env GOROOT)/bin/gofmt" -w cmd internal
+
+# Fail (without modifying anything) if any file isn't gofmt-clean — the
+# gate CI enforces.
+.PHONY: fmt-check
+fmt-check:
+	@files=$$("$$($(GO) env GOROOT)/bin/gofmt" -l cmd internal); \
+	if [ -n "$$files" ]; then \
+		echo "These files need gofmt (run 'make fmt'):"; echo "$$files"; exit 1; \
+	fi; \
+	echo "gofmt: clean"
+
+# golangci-lint config lives in .golangci.yml. Falls back to `go vet`
+# with a hint if the linter isn't installed locally.
+GOLANGCI ?= golangci-lint
+GOLANGCI_VERSION ?= v2.1.6
 .PHONY: lint
-lint: vet
+lint:
+	@if command -v $(GOLANGCI) >/dev/null 2>&1; then \
+		$(GOLANGCI) run ./...; \
+	else \
+		echo "golangci-lint not found — run 'make lint-install'; falling back to vet"; \
+		$(GO) vet ./...; \
+	fi
+
+# Install the pinned golangci-lint into the toolchain bin so `make lint`
+# works on a fresh checkout.
+.PHONY: lint-install
+lint-install:
+	GOBIN="$$($(GO) env GOROOT)/bin" $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 .PHONY: clean
 clean:
@@ -84,9 +119,9 @@ clean:
 tidy:
 	$(GO) mod tidy
 
-# Run the full check sweep that a PR should pass.
+# Run the full check sweep that a PR should pass — same gates as CI.
 .PHONY: check
-check: vet test
+check: fmt-check vet lint test
 
 # --- bootstrap-go --------------------------------------------------
 # Download a Go toolchain into ./.tools/go and use it for subsequent

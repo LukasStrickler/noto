@@ -32,9 +32,11 @@ import (
 	"github.com/lukasstrickler/noto/internal/apiclient"
 	"github.com/lukasstrickler/noto/internal/appsocket"
 	"github.com/lukasstrickler/noto/internal/config"
+	"github.com/lukasstrickler/noto/internal/data"
 	"github.com/lukasstrickler/noto/internal/db"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/providers"
+	"github.com/lukasstrickler/noto/internal/repo"
 	"github.com/lukasstrickler/noto/internal/search"
 	"github.com/lukasstrickler/noto/internal/secrets"
 	"github.com/lukasstrickler/noto/internal/server"
@@ -71,10 +73,13 @@ type Host struct {
 }
 
 type ownedDeps struct {
-	search *search.SearchIndex
-	jobsDB *db.DB
-	ipc    *appsocket.IPCClient
-	cfg    config.Store
+	search          *search.SearchIndex
+	jobsDB          *db.DB
+	ipc             *appsocket.IPCClient
+	cfg             config.Store
+	speakerProfiles data.SpeakerProfileRepository
+	meetingMappings data.MeetingSpeakerMappingRepository
+	dataDB          *data.DB
 }
 
 // Start prepares the deps, starts the service workers, and binds the
@@ -103,6 +108,14 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("notohost: open search index: %w", err)
 	}
+
+	dataDB, err := data.Open(sqlitePath)
+	if err != nil {
+		_ = idx.Close()
+		return nil, fmt.Errorf("notohost: open data db: %w", err)
+	}
+	speakerProfiles := data.NewSQLiteSpeakerProfileRepository(dataDB)
+	meetingMappings := data.NewSQLiteMeetingSpeakerMappingRepository(dataDB)
 
 	jobsDBPath := filepath.Join(cfg.ConfigDir, "noto-jobs.sqlite")
 	jobsDB, err := db.Open(jobsDBPath)
@@ -134,14 +147,17 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	store := secrets.EnvFallbackStore{Primary: primary}
 
 	svc := service.New(service.Deps{
-		Config:      cfg,
-		ConfigStore: cfgStore,
-		Secrets:     store,
-		Registry:    registry,
-		Search:      idx,
-		JobsDB:      jobsDB,
-		IPC:         ipc,
-		Version:     opts.Version,
+		Config:          cfg,
+		ConfigStore:     cfgStore,
+		Secrets:         store,
+		Registry:        registry,
+		Search:          idx,
+		JobsDB:          jobsDB,
+		IPC:             ipc,
+		Version:         opts.Version,
+		SpeakerProfiles: speakerProfiles,
+		MeetingMappings: meetingMappings,
+		Repo:            repo.NewLocal(recordingsDir),
 	})
 
 	serviceCtx, cancel := context.WithCancel(ctx)
@@ -200,7 +216,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	h := &Host{
 		svc:    svc,
 		srv:    srv,
-		deps:   ownedDeps{search: idx, jobsDB: jobsDB, ipc: ipc, cfg: cfgStore},
+		deps:   ownedDeps{search: idx, jobsDB: jobsDB, ipc: ipc, cfg: cfgStore, speakerProfiles: speakerProfiles, meetingMappings: meetingMappings, dataDB: dataDB},
 		logger: logger,
 		addr:   boundAddr,
 		token:  token,
@@ -271,6 +287,9 @@ func (h *Host) Close() error {
 	if h.deps.ipc != nil {
 		_ = h.deps.ipc.Close()
 	}
+	if h.deps.dataDB != nil {
+		_ = h.deps.dataDB.Close()
+	}
 	return nil
 }
 
@@ -331,9 +350,9 @@ func loadConfig() (config.Config, config.Store, error) {
 // one in-process if no server is reachable.
 //
 // Discovery rule:
-//   1. If NOTO_API_URL is set, use it (with optional NOTO_API_TOKEN).
-//   2. If the default UDS exists and responds to /v1/healthz, use it.
-//   3. Otherwise spawn an in-process Host owned by the caller.
+//  1. If NOTO_API_URL is set, use it (with optional NOTO_API_TOKEN).
+//  2. If the default UDS exists and responds to /v1/healthz, use it.
+//  3. Otherwise spawn an in-process Host owned by the caller.
 //
 // The returned closeFn is non-nil only when the caller owns the Host
 // (case 3). It must be invoked to free resources.

@@ -1,0 +1,15 @@
+{
+  "meeting_id": "mtg-1",
+  "segments": [
+    {
+      "id": "s1",
+      "speaker_id": "spk1",
+      "speaker": "Maya",
+      "role": "local_speaker",
+      "start_sec": 1,
+      "end_sec": 4,
+      "text": "Let's start."
+    }
+  ],
+  "speakers": null
+}

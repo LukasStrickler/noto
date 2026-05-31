@@ -155,7 +155,7 @@ func TestValidateLayout(t *testing.T) {
 	validLayout := DirectoryLayout{
 		RecordingsDir: "/tmp/noto",
 		MeetingID:     uuid.New(),
-		MeetingDir:   "/tmp/noto/meetings/2026/04/id",
+		MeetingDir:    "/tmp/noto/meetings/2026/04/id",
 	}
 
 	if err := ValidateLayout(validLayout); err != nil {

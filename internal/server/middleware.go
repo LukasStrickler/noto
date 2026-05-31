@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/lukasstrickler/noto/internal/notoapi"
 )
 
-// middleware adds auth (bearer on TCP, peer-cred on UDS), CORS-ish
+// middleware adds auth (bearer on TCP, peer-cred on UDS), proxy-buffering
 // headers for the SSE streams, and a request log line.
 func (s *Server) middleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -22,12 +24,12 @@ func (s *Server) middleware(h http.Handler) http.Handler {
 			expected := "Bearer " + s.opts.Token
 			if auth != expected {
 				w.Header().Set("WWW-Authenticate", "Bearer realm=\"noto\"")
-				writeError(w, &authError{})
+				writeError(w, notoapi.NewError(notoapi.CodeUnauthorized, "authentication required", nil))
 				return
 			}
 		}
 
-		// SSE / streaming streams need these flags through reverse proxies.
+		// SSE streams need these flags to survive reverse proxies.
 		if strings.HasPrefix(r.URL.Path, "/v1/jobs/events") ||
 			strings.HasPrefix(r.URL.Path, "/v1/recording/meters") {
 			w.Header().Set("Cache-Control", "no-cache")
@@ -60,10 +62,6 @@ func (s *statusWriter) Flush() {
 		f.Flush()
 	}
 }
-
-type authError struct{}
-
-func (e *authError) Error() string { return "auth required" }
 
 // encodeJSON is a tiny wrapper to keep the import surface in one place.
 func encodeJSON(w io.Writer, v any) {

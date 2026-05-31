@@ -45,7 +45,7 @@ var FewShotDecisionExamples = []DecisionExample{
 	},
 	{
 		Name: "Vendor Selection Decision",
-		Transcript: `[seg_000450] Speaker 0: "We've tested both AssemblyAI and ElevenLabs for transcription."
+		Transcript: `[seg_000450] Speaker 0: "We've tested AssemblyAI for transcription."
 [seg_000451] Speaker 1: "AssemblyAI gave us better diarization results in our benchmarks."
 [seg_000452] Speaker 0: "The cost difference is significant too. AssemblyAI is more affordable."
 [seg_000453] Speaker 1: "Let's go with AssemblyAI as our default provider."
@@ -74,18 +74,18 @@ type DecisionExample struct {
 var FewShotRiskExamples = []RiskExample{
 	{
 		Name: "Performance Risk",
-		Transcript: `[seg_000600] Speaker 1: "The main concern I have is that local transcription might exceed our V1 latency targets."
-[seg_000601] Speaker 0: "We've been seeing 2-3x realtime for local Whisper models."
-[seg_000602] Speaker 1: "For a 30-minute meeting, that's potentially 60-90 minutes of processing time."
+		Transcript: `[seg_000600] Speaker 1: "The main concern I have is that the transcription queue might exceed our latency targets."
+[seg_000601] Speaker 0: "We've been seeing 2-3x realtime during peak provider load."
+[seg_000602] Speaker 1: "For a 30-minute meeting, that's potentially 60-90 minutes before notes are ready."
 [seg_000603] Speaker 0: "That's definitely a problem if users are expecting near-instant results."`,
 		ExpectedOutput: `{
   "risks": [
     {
-      "text": "Local transcription may exceed V1 latency targets - Whisper models running 2-3x realtime could mean 60-90 minutes for 30-minute meetings.",
+      "text": "Transcription queue latency may exceed expectations - 2-3x realtime provider processing could mean 60-90 minutes before notes are ready for 30-minute meetings.",
       "speaker_ids": ["spk_0", "spk_1"],
       "evidence": [
-        {"segment_id": "seg_000600", "quote": "local transcription might exceed our V1 latency targets"},
-        {"segment_id": "seg_000601", "quote": "We've been seeing 2-3x realtime for local Whisper models"}
+        {"segment_id": "seg_000600", "quote": "transcription queue might exceed our latency targets"},
+        {"segment_id": "seg_000601", "quote": "We've been seeing 2-3x realtime during peak provider load"}
       ]
     }
   ]

@@ -7,11 +7,11 @@ import (
 )
 
 type MeetingManifest struct {
-	SchemaVersion     string             `json:"schema_version"`
-	MeetingID         string             `json:"meeting_id"`
-	CurrentVersionID  string             `json:"current_version_id"`
-	Versions          []ManifestVersion  `json:"versions"`
-	Metadata          ManifestMetadata    `json:"metadata"`
+	SchemaVersion    string            `json:"schema_version"`
+	MeetingID        string            `json:"meeting_id"`
+	CurrentVersionID string            `json:"current_version_id"`
+	Versions         []ManifestVersion `json:"versions"`
+	Metadata         ManifestMetadata  `json:"metadata"`
 }
 
 type ManifestMetadata struct {
@@ -26,11 +26,11 @@ type ManifestVersion struct {
 }
 
 type MeetingSource struct {
-	Kind              string `json:"kind"`
-	CaptureDevice     string `json:"capture_device,omitempty"`
-	SourcePolicy      string `json:"source_policy,omitempty"`
+	Kind               string `json:"kind"`
+	CaptureDevice      string `json:"capture_device,omitempty"`
+	SourcePolicy       string `json:"source_policy,omitempty"`
 	LocalSpeakerSource string `json:"local_speaker_source,omitempty"`
-	ParticipantSource string `json:"participant_source,omitempty"`
+	ParticipantSource  string `json:"participant_source,omitempty"`
 }
 
 type ProviderInfo struct {

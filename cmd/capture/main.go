@@ -16,9 +16,9 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
-	
+
 	ctx := context.Background()
-	
+
 	switch os.Args[1] {
 	case "start":
 		if err := cmdStart(ctx, os.Args[2:]); err != nil {
@@ -106,24 +106,24 @@ func cmdStart(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	sources := fs.String("sources", "microphone,system_audio", "comma-separated sources")
 	sampleRate := fs.Int("sample-rate", 44100, "sample rate in Hz")
-	
+
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	
+
 	sourceList := parseSources(*sources)
-	
+
 	client, err := appsocket.NewIPCClient()
 	if err != nil {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
 	defer client.Close()
-	
+
 	result, err := client.Start(ctx, sourceList, *sampleRate)
 	if err != nil {
 		return fmt.Errorf("start failed: %w", err)
 	}
-	
+
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(data))
 	return nil
@@ -135,12 +135,12 @@ func cmdStop(ctx context.Context) error {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
 	defer client.Close()
-	
+
 	result, err := client.Stop(ctx)
 	if err != nil {
 		return fmt.Errorf("stop failed: %w", err)
 	}
-	
+
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(data))
 	return nil
@@ -152,11 +152,11 @@ func cmdPause(ctx context.Context) error {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
 	defer client.Close()
-	
+
 	if err := client.Pause(ctx); err != nil {
 		return fmt.Errorf("pause failed: %w", err)
 	}
-	
+
 	fmt.Println(`{"status": "paused"}`)
 	return nil
 }
@@ -167,11 +167,11 @@ func cmdResume(ctx context.Context) error {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
 	defer client.Close()
-	
+
 	if err := client.Resume(ctx); err != nil {
 		return fmt.Errorf("resume failed: %w", err)
 	}
-	
+
 	fmt.Println(`{"status": "recording"}`)
 	return nil
 }
@@ -182,12 +182,12 @@ func cmdLevel(ctx context.Context) error {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
 	defer client.Close()
-	
+
 	result, err := client.GetAudioLevel(ctx)
 	if err != nil {
 		return fmt.Errorf("getAudioLevel failed: %w", err)
 	}
-	
+
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(data))
 	return nil
@@ -199,18 +199,18 @@ func cmdStatus(ctx context.Context) error {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
 	defer client.Close()
-	
+
 	level, err := client.GetAudioLevel(ctx)
 	if err != nil {
 		return fmt.Errorf("status check failed: %w", err)
 	}
-	
+
 	status := map[string]any{
 		"state":       "ready",
 		"audio_level": level,
-		"timestamp":    time.Now().UTC().Format(time.RFC3339),
+		"timestamp":   time.Now().UTC().Format(time.RFC3339),
 	}
-	
+
 	data, _ := json.MarshalIndent(status, "", "  ")
 	fmt.Println(string(data))
 	return nil
@@ -222,12 +222,12 @@ func cmdAudio(ctx context.Context) error {
 		return fmt.Errorf("could not create IPC client: %w", err)
 	}
 	defer client.Close()
-	
+
 	result, err := client.GetCapturedAudio(ctx)
 	if err != nil {
 		return fmt.Errorf("getCapturedAudio failed: %w", err)
 	}
-	
+
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(data))
 	return nil
@@ -237,7 +237,7 @@ func parseSources(s string) []string {
 	if s == "" {
 		return []string{"microphone"}
 	}
-	
+
 	var sources []string
 	for _, part := range splitCommas(s) {
 		part = trimQuotes(part)
@@ -245,18 +245,18 @@ func parseSources(s string) []string {
 			sources = append(sources, part)
 		}
 	}
-	
+
 	if len(sources) == 0 {
 		sources = []string{"microphone"}
 	}
-	
+
 	return sources
 }
 
 func splitCommas(s string) []string {
 	var result []string
 	var current []byte
-	
+
 	for i := 0; i < len(s); i++ {
 		if s[i] == ',' {
 			if len(current) > 0 {
@@ -267,11 +267,11 @@ func splitCommas(s string) []string {
 			current = append(current, s[i])
 		}
 	}
-	
+
 	if len(current) > 0 {
 		result = append(result, string(current))
 	}
-	
+
 	return result
 }
 

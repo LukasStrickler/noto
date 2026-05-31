@@ -6,18 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lukasstrickler/noto/internal/artifacts"
-	"github.com/lukasstrickler/noto/internal/artifactwriter"
+	"github.com/lukasstrickler/noto/internal/data"
 	"github.com/lukasstrickler/noto/internal/notoapi"
+	"github.com/lukasstrickler/noto/internal/providers"
 	"github.com/lukasstrickler/noto/internal/providers/llm"
 	"github.com/lukasstrickler/noto/internal/providers/stt"
+	"github.com/lukasstrickler/noto/internal/repo"
 	"github.com/lukasstrickler/noto/internal/search"
-	"github.com/lukasstrickler/noto/internal/storage"
+	"github.com/lukasstrickler/noto/internal/speakers"
 )
 
 // CreateJob enqueues a job and triggers the workers to look. The job
@@ -61,8 +62,7 @@ func (s *Service) ListJobs(_ context.Context, opts notoapi.ListJobsOpts) ([]noto
 	if limit <= 0 {
 		limit = 100
 	}
-	q := `SELECT id, kind, meeting_id, status, phase, progress, detail, error, options_json,
-		   created_at, started_at, finished_at, attempt FROM jobs WHERE 1=1`
+	q := `SELECT ` + jobColumns + ` FROM jobs WHERE 1=1`
 	args := []any{}
 	if opts.Status != "" {
 		q += " AND status = ?"
@@ -87,13 +87,15 @@ func (s *Service) ListJobs(_ context.Context, opts notoapi.ListJobsOpts) ([]noto
 		}
 		out = append(out, j)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, notoapi.NewError(notoapi.CodeInternal, "list jobs: "+err.Error(), nil)
+	}
 	return out, nil
 }
 
 func (s *Service) GetJob(_ context.Context, id string) (notoapi.Job, error) {
 	row := s.jobsDB.QueryRow(
-		`SELECT id, kind, meeting_id, status, phase, progress, detail, error, options_json,
-		         created_at, started_at, finished_at, attempt FROM jobs WHERE id = ?`,
+		`SELECT `+jobColumns+` FROM jobs WHERE id = ?`,
 		id,
 	)
 	j, err := scanJob(row)
@@ -172,6 +174,12 @@ func (s *Service) StreamEvents(ctx context.Context) (<-chan notoapi.Event, error
 	return out, nil
 }
 
+// jobColumns is the column list every job SELECT shares; it must stay in
+// the order scanJob reads them. Keeping it in one place stops the queries
+// from drifting out of sync with the scan.
+const jobColumns = `id, kind, meeting_id, status, phase, progress, detail, error, options_json,
+	created_at, started_at, finished_at, attempt`
+
 // scanJob reads a row from the jobs table.
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -179,17 +187,17 @@ type rowScanner interface {
 
 func scanJob(r rowScanner) (notoapi.Job, error) {
 	var (
-		j           notoapi.Job
-		mid         sql.NullString
-		phase       sql.NullString
-		detail      sql.NullString
-		errStr      sql.NullString
-		optsJSON    sql.NullString
-		startedAt   sql.NullInt64
-		finishedAt  sql.NullInt64
-		createdAt   int64
-		kind        string
-		status      string
+		j          notoapi.Job
+		mid        sql.NullString
+		phase      sql.NullString
+		detail     sql.NullString
+		errStr     sql.NullString
+		optsJSON   sql.NullString
+		startedAt  sql.NullInt64
+		finishedAt sql.NullInt64
+		createdAt  int64
+		kind       string
+		status     string
 	)
 	if err := r.Scan(
 		&j.ID, &kind, &mid, &status, &phase, &j.Progress, &detail, &errStr,
@@ -241,22 +249,18 @@ func (s *Service) startWorkers(ctx context.Context) {
 	// Small fixed-size pool: 4 generic workers is plenty for V1 since
 	// most jobs are network-bound (STT/LLM API calls).
 	for i := 0; i < 4; i++ {
-		go s.workerLoop(ctx, i)
+		go s.workerLoop(ctx)
 	}
 }
 
-var workerWake = make(chan struct{}, 1)
-
 func (s *Service) notifyWorkers() {
-	// non-blocking nudge
 	select {
-	case workerWake <- struct{}{}:
+	case s.workerWake <- struct{}{}:
 	default:
 	}
 }
 
-func (s *Service) workerLoop(ctx context.Context, id int) {
-	_ = id
+func (s *Service) workerLoop(ctx context.Context) {
 	ticker := time.NewTicker(workerPollInterval)
 	defer ticker.Stop()
 	for {
@@ -264,7 +268,7 @@ func (s *Service) workerLoop(ctx context.Context, id int) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-		case <-workerWake:
+		case <-s.workerWake:
 		}
 		for {
 			job, ok := s.claimNextJob()
@@ -285,9 +289,7 @@ func (s *Service) claimNextJob() (notoapi.Job, bool) {
 	}
 	defer tx.Rollback()
 	row := tx.QueryRow(
-		`SELECT id, kind, meeting_id, status, phase, progress, detail, error, options_json,
-		         created_at, started_at, finished_at, attempt
-		   FROM jobs WHERE status = ? ORDER BY created_at LIMIT 1`,
+		`SELECT `+jobColumns+` FROM jobs WHERE status = ? ORDER BY created_at LIMIT 1`,
 		string(notoapi.JobQueued),
 	)
 	job, err := scanJob(row)
@@ -412,8 +414,12 @@ func (s *Service) emitStatusBar() {
 	bar.RecordingActive = rec.Active
 	bar.RecordingTitle = rec.Title
 	bar.ElapsedSec = rec.ElapsedSec
-	if list, err := s.ListMeetings(context.Background(), notoapi.ListMeetingsOpts{}); err == nil {
-		bar.MeetingCount = list.Total
+	// Cheap directory count — emitStatusBar runs on every job event, so it
+	// must not re-read and JSON-parse every meeting's artifacts.
+	if n, err := s.repo.CountMeetings(context.Background()); err == nil {
+		bar.MeetingCount = n
+	} else {
+		bar.IndexState = "error"
 	}
 	row := s.jobsDB.QueryRow(`SELECT
 		SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END),
@@ -432,75 +438,90 @@ func (s *Service) emitStatusBar() {
 // in the TUI; provider-specific calls slot in as they get wired.
 
 func (s *Service) runIngest(ctx context.Context, job *notoapi.Job) error {
+	mid, err := parseMeetingID("ingest", job.MeetingID)
+	if err != nil {
+		return err
+	}
 	s.publishProgress(job, "preparing layout", 0.2, "")
-	if job.MeetingID == "" {
-		return fmt.Errorf("ingest: meeting_id is required")
-	}
-	mid, err := uuid.Parse(job.MeetingID)
-	if err != nil {
-		return fmt.Errorf("ingest: invalid meeting id: %w", err)
-	}
-	layout, err := storage.LayoutFor(s.recordingsDir, mid)
-	if err != nil {
-		return err
-	}
-	if err := storage.EnsureDirs(layout); err != nil {
-		return err
-	}
 	title := jobOptString(job.Options, "title", "Untitled meeting")
-	now := time.Now()
-	versionID := fmt.Sprintf("ver_%s_%s", now.Format("20060102150405"), newID()[:8])
-	manifest := &artifacts.MeetingManifest{
-		SchemaVersion:    "manifest.v1",
-		MeetingID:        mid.String(),
-		CurrentVersionID: versionID,
-		Metadata:         artifacts.ManifestMetadata{Title: title},
-		Versions: []artifacts.ManifestVersion{
-			{VersionID: versionID, CreatedAt: now, Reason: string(artifacts.ReasonAudioImported), Checksum: "n/a"},
-		},
-	}
-	mw := artifactwriter.NewManifestWriter(s.recordingsDir)
-	if err := mw.WriteManifest(mid, manifest); err != nil {
-		return err
+	// CreateMeeting is idempotent: if ImportAudio already wrote the
+	// manifest, this is a no-op (GetMeeting will succeed for this id).
+	if existing, err := s.repo.GetMeeting(ctx, mid); err != nil || existing == nil {
+		if err := s.repo.CreateMeeting(ctx, mid, repo.CreateMeetingOpts{
+			Title:  title,
+			Reason: string(artifacts.ReasonAudioImported),
+		}); err != nil {
+			return err
+		}
 	}
 	s.publishProgress(job, "ingest complete", 1.0, "")
 	return sleep(ctx, 100*time.Millisecond)
 }
 
 func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
-	if job.MeetingID == "" {
-		return fmt.Errorf("transcribe: meeting_id is required")
-	}
-	mid, err := uuid.Parse(job.MeetingID)
-	if err != nil {
-		return err
-	}
-	layout, err := storage.LayoutFor(s.recordingsDir, mid)
+	mid, err := parseMeetingID("transcribe", job.MeetingID)
 	if err != nil {
 		return err
 	}
 
-	providerID := s.cfg.Routing.SpeechProvider
 	title := jobOptString(job.Options, "title", "Untitled meeting")
-	audioPath := jobOptString(job.Options, "output_path", layout.AudioPath)
+	// Job options carry the explicit path (from record/import); fall back
+	// to whatever the repo knows about for this meeting.
+	audioPath := jobOptString(job.Options, "output_path", "")
+	if audioPath == "" {
+		audioPath, _ = s.repo.AudioPath(mid)
+	}
 	if _, err := os.Stat(audioPath); err != nil {
 		audioPath = ""
 	}
 
-	// Try the real STT provider if a key is configured and we have audio.
-	transcript, err := s.transcribeWithProvider(ctx, job, providerID, mid, title, audioPath)
-	if err != nil {
-		return err
+	var transcript *artifacts.Transcript
+	var audio []byte
+	if audioPath != "" {
+		s.publishProgress(job, "transcribing", 0.3, "")
+		key, _ := s.secrets.Get(ctx, "provider:assemblyai")
+		if strings.TrimSpace(key) != "" {
+			var rerr error
+			audio, rerr = os.ReadFile(audioPath)
+			if rerr != nil {
+				return fmt.Errorf("read audio: %w", rerr)
+			}
+			adapter, err := s.newSTTAdapter("assemblyai")
+			if err != nil {
+				return fmt.Errorf("get assemblyai adapter: %w", err)
+			}
+			transcript, err = adapter.Transcribe(ctx, audio, stt.TranscribeOptions{
+				Language:  jobOptString(job.Options, "language", ""),
+				MeetingID: mid.String(),
+			})
+			if err != nil {
+				return fmt.Errorf("transcribe: %w", err)
+			}
+			// Clean the raw provider output (merge diarization gaps, fix
+			// overlapping timestamps, canonicalize speaker labels, …) before
+			// anything downstream consumes it. MeetingID is set first so the
+			// normalized result can be validated. If normalization produces
+			// something the storage layer can't read back, keep the raw
+			// transcript and surface a note rather than failing the job.
+			transcript.MeetingID = mid.String()
+			if normalized, nerr := providers.NormalizeTranscript(transcript); nerr != nil {
+				s.publishProgress(job, "normalization skipped", 0.5, nerr.Error())
+			} else if normalized != nil {
+				if verr := artifacts.ValidateTranscript(*normalized); verr != nil {
+					s.publishProgress(job, "normalization skipped", 0.5, verr.Error())
+				} else {
+					transcript = normalized
+				}
+			}
+		}
 	}
 	if transcript == nil {
-		// Fall through to a deterministic synthesis so the pipeline
-		// still produces a meeting (useful for Linux dry-runs and tests).
 		s.publishProgress(job, "synthesizing transcript", 0.6, "no audio or no provider key")
 		transcript = &artifacts.Transcript{
 			SchemaVersion: "transcript.v1",
 			MeetingID:     mid.String(),
 			Provider: artifacts.TranscriptProvider{
-				ID:    providerID,
+				ID:    s.currentCfg().Routing.SpeechProvider,
 				JobID: job.ID,
 			},
 			Speakers: []artifacts.Speaker{
@@ -510,61 +531,24 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 			Segments: synthesizeSegments(title),
 		}
 	} else {
-		// The provider adapter fills in everything; just make sure the
-		// meeting_id matches the layout we are writing to.
 		transcript.MeetingID = mid.String()
 	}
-	if err := storage.WriteTranscript(layout, transcript); err != nil {
+	embeddings := map[string][]float64(nil)
+	if s.speakerEmbedder != nil && len(audio) > 0 {
+		if generated, err := s.speakerEmbedder.EmbedSpeakers(ctx, audio, transcript); err == nil {
+			embeddings = generated
+		}
+	}
+	// Speaker matching is best-effort: a failure here must not fail the
+	// transcribe job, but surface it as a progress note rather than drop it.
+	if err := s.matchSpeakers(ctx, mid.String(), transcript, embeddings); err != nil {
+		s.publishProgress(job, "speaker matching skipped", 0.9, err.Error())
+	}
+	if err := s.repo.SaveTranscript(ctx, mid, transcript); err != nil {
 		return err
 	}
 	s.publishProgress(job, "transcript written", 1.0, fmt.Sprintf("%d segments", len(transcript.Segments)))
 	return nil
-}
-
-// transcribeWithProvider returns (nil, nil) when the provider can't run
-// (no key, no audio, fake provider). It returns a real transcript when
-// the call succeeds, or an error when the provider actively failed.
-func (s *Service) transcribeWithProvider(ctx context.Context, job *notoapi.Job, providerID string, mid uuid.UUID, _ string, audioPath string) (*artifacts.Transcript, error) {
-	if audioPath == "" {
-		return nil, nil
-	}
-	suite, ok := s.registry.Get(providerID)
-	if !ok {
-		return nil, nil
-	}
-	if suite.CredentialRef == "" {
-		return nil, nil // fake provider
-	}
-	key, err := s.secrets.Get(ctx, suite.CredentialRef)
-	if err != nil || strings.TrimSpace(key) == "" {
-		return nil, nil
-	}
-	audio, err := os.ReadFile(audioPath)
-	if err != nil {
-		return nil, fmt.Errorf("read audio: %w", err)
-	}
-	s.publishProgress(job, "uploading audio", 0.30, providerID)
-	var transcript *artifacts.Transcript
-	switch providerID {
-	case "assemblyai":
-		adapter := &stt.AssemblyAIAdapter{APIKey: key}
-		transcript, err = adapter.Transcribe(ctx, audio, stt.TranscribeOptions{MeetingID: mid.String()})
-	case "local":
-		// Local provider expects an OpenAI-compatible STT server on
-		// NOTO_LOCAL_STT_URL (or 127.0.0.1:8000 default). Key is
-		// optional and only used as a bearer token.
-		adapter := &stt.LocalAdapter{APIKey: key}
-		transcript, err = adapter.Transcribe(ctx, audio, stt.TranscribeOptions{MeetingID: mid.String()})
-	default:
-		// Other speech providers (mistral, elevenlabs) need their own
-		// adapter implementations; until those land, fall back to
-		// synthesis so the pipeline still progresses.
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%s transcribe: %w", providerID, err)
-	}
-	return transcript, nil
 }
 
 func synthesizeSegments(title string) []artifacts.Segment {
@@ -593,32 +577,20 @@ func synthesizeSegments(title string) []artifacts.Segment {
 }
 
 func (s *Service) runSummarize(ctx context.Context, job *notoapi.Job) error {
-	if job.MeetingID == "" {
-		return fmt.Errorf("summarize: meeting_id is required")
-	}
-	mid, err := uuid.Parse(job.MeetingID)
-	if err != nil {
-		return err
-	}
-	layout, err := storage.LayoutFor(s.recordingsDir, mid)
+	mid, err := parseMeetingID("summarize", job.MeetingID)
 	if err != nil {
 		return err
 	}
 	s.publishProgress(job, "loading transcript", 0.2, "")
-	transcript, err := storage.ReadTranscript(layout)
+	transcript, err := s.repo.LoadTranscript(ctx, mid)
 	if err != nil {
 		return err
 	}
 	title := jobOptString(job.Options, "title", "Untitled meeting")
 
-	// Try a real LLM summary if a key is configured.
 	if real := s.summarizeWithProvider(ctx, job, *transcript, mid); real != nil {
-		// Persist JSON and a rendered markdown.
-		if data, err := json.MarshalIndent(real, "", "  "); err == nil {
-			_ = os.WriteFile(filepath.Join(layout.MeetingDir, "summary.json"), data, 0o644)
-		}
 		md := renderSummaryMD(title, real, transcript)
-		if err := storage.WriteSummary(layout, md); err != nil {
+		if err := s.repo.SaveSummary(ctx, mid, md, real); err != nil {
 			return err
 		}
 		s.publishProgress(job, "summary written", 1.0, "real LLM")
@@ -626,16 +598,29 @@ func (s *Service) runSummarize(ctx context.Context, job *notoapi.Job) error {
 	}
 
 	s.publishProgress(job, "synthesizing summary", 0.6, "no LLM key configured")
-	summary := &artifacts.Summary{
+	cfg := s.currentCfg()
+	summary := synthesizeSummary(title, mid.String(), cfg.Routing.LLMProvider, cfg.Routing.LLMModel)
+	md := renderSummaryMD(title, summary, transcript)
+	if err := s.repo.SaveSummary(ctx, mid, md, summary); err != nil {
+		return err
+	}
+	s.publishProgress(job, "summary written", 1.0, "")
+	return nil
+}
+
+// synthesizeSummary returns a deterministic placeholder summary used when no
+// LLM key is configured.
+func synthesizeSummary(title, meetingID, llmProvider, llmModel string) *artifacts.Summary {
+	return &artifacts.Summary{
 		SchemaVersion: "summary.v1",
-		MeetingID:     mid.String(),
+		MeetingID:     meetingID,
 		ShortSummary:  fmt.Sprintf("Meeting %q reached three decisions and one action item.", title),
 		Decisions: []artifacts.SummaryItem{
 			{Text: "Ship v1 by end of quarter", SpeakerIDs: []string{"spk_0"}, Evidence: []artifacts.Evidence{{SegmentID: "seg_000070", Quote: "ship the v1 by end of quarter"}}},
 			{Text: "Pick top three open questions; defer the rest", SpeakerIDs: []string{"spk_0", "spk_1"}, Evidence: []artifacts.Evidence{{SegmentID: "seg_000150", Quote: "decide on the top three and defer the rest"}}},
 		},
 		ActionItems: []artifacts.ActionItem{
-			{Text: "Circulate the timeline next week", Owner: "spk_0", Evidence: []artifacts.Evidence{{SegmentID: "seg_000040", Quote: "timeline first"}}},
+			{Text: "Circulate the timeline next week", Owner: "spk_0", Evidence: []artifacts.Evidence{{SegmentID: "seg_000030", Quote: "timeline first"}}},
 		},
 		Risks: []artifacts.SummaryItem{
 			{Text: "Timeline may be aggressive for v1 scope.", Evidence: []artifacts.Evidence{{SegmentID: "seg_000070", Quote: "ship the v1 by end of quarter"}}},
@@ -643,18 +628,8 @@ func (s *Service) runSummarize(ctx context.Context, job *notoapi.Job) error {
 		OpenQuestions: []artifacts.SummaryItem{
 			{Text: "Which open questions are highest priority?", Evidence: []artifacts.Evidence{{SegmentID: "seg_000100", Quote: "open-questions list"}}},
 		},
-		Model: artifacts.SummaryModel{Provider: s.cfg.Routing.LLMProvider, ModelID: s.cfg.Routing.LLMModel, PromptVersion: "summary.v1"},
+		Model: artifacts.SummaryModel{Provider: llmProvider, ModelID: llmModel, PromptVersion: "summary.v1"},
 	}
-	// Persist JSON and a rendered markdown.
-	if data, err := json.MarshalIndent(summary, "", "  "); err == nil {
-		_ = os.WriteFile(filepath.Join(layout.MeetingDir, "summary.json"), data, 0o644)
-	}
-	md := renderSummaryMD(title, summary, transcript)
-	if err := storage.WriteSummary(layout, md); err != nil {
-		return err
-	}
-	s.publishProgress(job, "summary written", 1.0, "")
-	return nil
 }
 
 // summarizeWithProvider returns nil when no provider key is configured;
@@ -662,7 +637,8 @@ func (s *Service) runSummarize(ctx context.Context, job *notoapi.Job) error {
 // error (the job then falls through to the deterministic synthesis so
 // users always see *some* output).
 func (s *Service) summarizeWithProvider(ctx context.Context, job *notoapi.Job, transcript artifacts.Transcript, mid uuid.UUID) *artifacts.Summary {
-	providerID := s.cfg.Routing.LLMProvider
+	cfg := s.currentCfg()
+	providerID := cfg.Routing.LLMProvider
 	if providerID == "" {
 		providerID = "openrouter"
 	}
@@ -675,7 +651,7 @@ func (s *Service) summarizeWithProvider(ctx context.Context, job *notoapi.Job, t
 		return nil
 	}
 	s.publishProgress(job, "calling LLM", 0.6, providerID)
-	adapter := &llm.OpenRouterAdapter{APIKey: key, ModelID: s.cfg.Routing.LLMModel}
+	adapter := &llm.OpenRouterAdapter{APIKey: key, ModelID: cfg.Routing.LLMModel}
 	summary, err := adapter.Summarize(ctx, transcript, llm.SummarizeOptions{MeetingID: mid.String()})
 	if err != nil {
 		s.publishProgress(job, "llm error, falling back", 0.7, err.Error())
@@ -724,42 +700,80 @@ func renderSummaryMD(title string, s *artifacts.Summary, _ *artifacts.Transcript
 }
 
 func (s *Service) runIndex(ctx context.Context, job *notoapi.Job) error {
-	s.publishProgress(job, "rebuilding index", 0.3, "")
-	_ = ctx
+	s.publishProgress(job, "rebuilding index", 0.1, "")
 	if job.MeetingID == "" {
-		// reindex everything — for now, just touch the index.
-		return nil
-	}
-	mid, err := uuid.Parse(job.MeetingID)
-	if err != nil {
-		return err
-	}
-	layout, err := storage.LayoutFor(s.recordingsDir, mid)
-	if err != nil {
-		return err
-	}
-	t, err := storage.ReadTranscript(layout)
-	if err != nil {
-		s.publishProgress(job, "no transcript to index", 1.0, "")
-		return nil
-	}
-	title := jobOptString(job.Options, "title", "Untitled meeting")
-	// Re-read summary if it exists to capture decisions/actions/risks.
-	var decisions, actions, risks []string
-	if data, err := os.ReadFile(filepath.Join(layout.MeetingDir, "summary.json")); err == nil {
-		var sum artifacts.Summary
-		if jerr := json.Unmarshal(data, &sum); jerr == nil {
-			for _, d := range sum.Decisions {
-				decisions = append(decisions, d.Text)
+		// Reindex all meetings.
+		meetings, err := s.repo.ListMeetings(ctx)
+		if err != nil {
+			return err
+		}
+		for i, m := range meetings {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-			for _, a := range sum.ActionItems {
-				actions = append(actions, a.Text)
-			}
-			for _, r := range sum.Risks {
-				risks = append(risks, r.Text)
+			progress := 0.1 + float64(i)/float64(len(meetings)+1)*0.9
+			s.publishProgress(job, "indexing", progress, m.Title)
+			if err := s.indexOneMeeting(ctx, m.ID, jobOptString(job.Options, "title", m.Title)); err != nil {
+				s.publishProgress(job, "index error (skipped)", progress, err.Error())
 			}
 		}
+		// Optimize once after the whole batch rather than per meeting.
+		if err := s.search.Optimize(); err != nil {
+			s.publishProgress(job, "optimize skipped", 1.0, err.Error())
+		}
+		s.publishProgress(job, "reindex complete", 1.0, fmt.Sprintf("%d meetings", len(meetings)))
+		return nil
 	}
+	mid, err := parseMeetingID("reindex", job.MeetingID)
+	if err != nil {
+		return err
+	}
+	if err := s.indexOneMeeting(ctx, mid, jobOptString(job.Options, "title", "Untitled meeting")); err != nil {
+		return err
+	}
+	s.publishProgress(job, "indexed", 1.0, "")
+	return nil
+}
+
+// indexOneMeeting reads the meeting's transcript + summary and upserts
+// the FTS entry. Returns nil silently when no transcript exists yet.
+func (s *Service) indexOneMeeting(ctx context.Context, mid uuid.UUID, titleHint string) error {
+	if s.search == nil {
+		return nil
+	}
+	t, err := s.repo.LoadTranscript(ctx, mid)
+	if err != nil {
+		return nil // no transcript yet — skip silently
+	}
+
+	var shortSummary string
+	var decisions, actions, risks, questions []string
+	createdAt := time.Now().UTC()
+
+	if _, summary, err := s.repo.LoadSummary(ctx, mid); err == nil && summary != nil {
+		shortSummary = summary.ShortSummary
+		for _, d := range summary.Decisions {
+			decisions = append(decisions, d.Text)
+		}
+		for _, a := range summary.ActionItems {
+			actions = append(actions, a.Text)
+		}
+		for _, r := range summary.Risks {
+			risks = append(risks, r.Text)
+		}
+		for _, q := range summary.OpenQuestions {
+			questions = append(questions, q.Text)
+		}
+	}
+
+	// Use the repo's meeting record for the canonical creation time.
+	if sm, err := s.repo.GetMeeting(ctx, mid); err == nil {
+		createdAt = sm.CreatedAt
+		if titleHint == "" || titleHint == "Untitled meeting" {
+			titleHint = sm.Title
+		}
+	}
+
 	segs := make([]search.TranscriptSegment, 0, len(t.Segments))
 	for _, seg := range t.Segments {
 		segs = append(segs, search.TranscriptSegment{
@@ -769,43 +783,31 @@ func (s *Service) runIndex(ctx context.Context, job *notoapi.Job) error {
 			Timestamp: seg.StartSeconds,
 		})
 	}
-	decItems := make([]search.SummaryItem, 0, len(decisions))
-	for _, d := range decisions {
-		decItems = append(decItems, search.SummaryItem{Text: d})
-	}
-	actItems := make([]search.ActionItem, 0, len(actions))
-	for _, a := range actions {
-		actItems = append(actItems, search.ActionItem{Text: a})
-	}
-	riskItems := make([]search.SummaryItem, 0, len(risks))
-	for _, r := range risks {
-		riskItems = append(riskItems, search.SummaryItem{Text: r})
-	}
-	// Pull the meeting's manifest-recorded creation time so the index's
-	// recency tiebreaker matches the disk-side list-by-recency order.
-	createdAt := time.Now().UTC()
-	if manifest, err := storage.ReadManifest(layout); err == nil {
-		for _, v := range manifest.Versions {
-			if v.VersionID == manifest.CurrentVersionID {
-				createdAt = v.CreatedAt
-				break
-			}
+	toItems := func(texts []string) []search.SummaryItem {
+		items := make([]search.SummaryItem, len(texts))
+		for i, t := range texts {
+			items[i] = search.SummaryItem{Text: t}
 		}
+		return items
 	}
-	input := &search.IndexMeetingInput{
+	toActionItems := func(texts []string) []search.ActionItem {
+		items := make([]search.ActionItem, len(texts))
+		for i, t := range texts {
+			items[i] = search.ActionItem{Text: t}
+		}
+		return items
+	}
+	return s.search.IndexMeetingFromInput(&search.IndexMeetingInput{
 		MeetingID:          mid.String(),
-		Title:              title,
+		Title:              titleHint,
+		ShortSummary:       shortSummary,
 		CreatedAt:          createdAt,
 		TranscriptSegments: segs,
-		Decisions:          decItems,
-		ActionItems:        actItems,
-		Risks:              riskItems,
-	}
-	if err := s.search.IndexMeetingFromInput(input); err != nil {
-		return err
-	}
-	s.publishProgress(job, "indexed", 1.0, "")
-	return nil
+		Decisions:          toItems(decisions),
+		ActionItems:        toActionItems(actions),
+		Risks:              toItems(risks),
+		OpenQuestions:      toItems(questions),
+	})
 }
 
 func jobOptString(opts map[string]any, key, def string) string {
@@ -820,12 +822,153 @@ func jobOptString(opts map[string]any, key, def string) string {
 	return def
 }
 
-func (s *Service) runVerify(ctx context.Context, job *notoapi.Job) error {
-	s.publishProgress(job, "verifying checksums", 0.5, job.MeetingID)
-	if err := sleep(ctx, 250*time.Millisecond); err != nil {
+// parseMeetingID validates and parses a job's meeting_id. The error is
+// prefixed with the job kind so a failure points at the originating job.
+func parseMeetingID(kind, raw string) (uuid.UUID, error) {
+	if raw == "" {
+		return uuid.Nil, fmt.Errorf("%s: meeting_id is required", kind)
+	}
+	mid, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("%s: invalid meeting id: %w", kind, err)
+	}
+	return mid, nil
+}
+
+func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artifacts.Transcript, embeddings map[string][]float64) error {
+	if tr == nil || len(tr.Speakers) == 0 {
+		return nil
+	}
+	if len(embeddings) == 0 {
+		return nil
+	}
+	existing, err := s.speakerProfiles.List(ctx)
+	if err != nil {
 		return err
 	}
+	var candidates []speakers.Candidate
+	for _, p := range existing {
+		if len(p.EmbeddingVector) > 0 {
+			candidates = append(candidates, speakers.Candidate{
+				ProfileID: p.ID,
+				Name:      p.DisplayName,
+				Centroid:  p.EmbeddingVector,
+			})
+		}
+	}
+	now := time.Now()
+	for _, sp := range tr.Speakers {
+		emb, ok := embeddings[sp.ProviderLabel]
+		if !ok || len(emb) == 0 {
+			_ = s.meetingMappings.Upsert(ctx, data.MeetingSpeakerMapping{
+				MeetingID:        meetingID,
+				MeetingSpeakerID: sp.ID,
+				ProviderLabel:    sp.ProviderLabel,
+				ProfileID:        nil,
+				MatchConfidence:  nil,
+				MatchStatus:      "unmatched",
+				CreatedAt:        now,
+				UpdatedAt:        now,
+			})
+			continue
+		}
+		var decision speakers.MatchDecision
+		if len(candidates) > 0 {
+			decision, err = speakers.Match(emb, candidates)
+			if err != nil {
+				return err
+			}
+		} else {
+			decision = speakers.MatchDecision{Status: speakers.StatusNew, Reason: "no existing profiles"}
+		}
+		var profileID *string
+		var confidence *float64
+		status := string(decision.Status)
+		switch decision.Status {
+		case speakers.StatusAuto, speakers.StatusPending:
+			// Copy out of the loop-scoped decision so the stored pointer
+			// can't be mutated by the next iteration.
+			pid := decision.ProfileID
+			score := decision.Score
+			profileID = &pid
+			confidence = &score
+		case speakers.StatusNew:
+			// Mint a globally-unique profile id. The transcript-local
+			// sp.ID (e.g. "spk_0") is not unique across meetings and would
+			// collide on the speaker_profiles primary key, so reuse here
+			// silently dropped every profile after the first.
+			newID := "spk_" + uuid.NewString()
+			profileID = &newID
+		}
+		if err := s.meetingMappings.Upsert(ctx, data.MeetingSpeakerMapping{
+			MeetingID:        meetingID,
+			MeetingSpeakerID: sp.ID,
+			ProviderLabel:    sp.ProviderLabel,
+			ProfileID:        profileID,
+			MatchConfidence:  confidence,
+			MatchStatus:      status,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}); err != nil {
+			return err
+		}
+		if decision.Status == speakers.StatusNew && profileID != nil {
+			p := data.SpeakerProfile{
+				ID:              *profileID,
+				DisplayName:     sp.DisplayName,
+				EmbeddingVector: emb,
+				EmbeddingDim:    len(emb),
+				EmbeddingModel:  "titanet-large",
+				CreatedAt:       now,
+				UpdatedAt:       now,
+				LastSeenAt:      &now,
+			}
+			if err := s.speakerProfiles.Create(ctx, p); err != nil {
+				return err
+			}
+		} else if decision.Status == speakers.StatusAuto && profileID != nil {
+			p, err := s.speakerProfiles.Get(ctx, *profileID)
+			if err == nil {
+				allEmbs := []speakers.Embedding{p.EmbeddingVector, emb}
+				centroid, cerr := speakers.Centroid(allEmbs)
+				if cerr == nil && len(centroid) > 0 {
+					p.EmbeddingVector = centroid
+					p.EmbeddingDim = len(centroid)
+					p.LastSeenAt = &now
+					p.UpdatedAt = now
+					if err := s.speakerProfiles.Update(ctx, p); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
 	return nil
+}
+
+func (s *Service) runVerify(ctx context.Context, job *notoapi.Job) error {
+	if job.MeetingID == "" {
+		// Verify all meetings.
+		meetings, err := s.repo.ListMeetings(ctx)
+		if err != nil {
+			return err
+		}
+		var firstErr error
+		for i, m := range meetings {
+			s.publishProgress(job, "verifying", float64(i)/float64(len(meetings)+1), m.Title)
+			if err := s.repo.VerifyIntegrity(ctx, m.ID); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("meeting %s: %w", m.ID, err)
+			}
+		}
+		s.publishProgress(job, "verify complete", 1.0, fmt.Sprintf("%d meetings", len(meetings)))
+		return firstErr
+	}
+	mid, err := parseMeetingID("verify", job.MeetingID)
+	if err != nil {
+		return err
+	}
+	s.publishProgress(job, "verifying checksums", 0.5, job.MeetingID)
+	return s.repo.VerifyIntegrity(ctx, mid)
 }
 
 // runPipeline chains ingest → transcribe → summarize → index for one
@@ -861,4 +1004,3 @@ func sleep(ctx context.Context, d time.Duration) error {
 		return nil
 	}
 }
-

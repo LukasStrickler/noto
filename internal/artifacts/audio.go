@@ -7,27 +7,27 @@ import (
 )
 
 type AudioMetadata struct {
-	SchemaVersion   string          `json:"schema_version"`
-	MeetingID       string          `json:"meeting_id"`
-	AssetID         string          `json:"asset_id"`
-	Path            string          `json:"path"`
-	Format          string          `json:"format"`
-	Codec           string          `json:"codec"`
-	DurationSeconds float64         `json:"duration_seconds"`
-	Channels        int             `json:"channels"`
-	SampleRateHz    int             `json:"sample_rate_hz"`
-	Sources         []AudioSource   `json:"sources"`
-	SizeBytes       int64           `json:"size_bytes"`
-	SHA256          string          `json:"sha256"`
-	Retention       AudioRetention  `json:"retention"`
+	SchemaVersion   string         `json:"schema_version"`
+	MeetingID       string         `json:"meeting_id"`
+	AssetID         string         `json:"asset_id"`
+	Path            string         `json:"path"`
+	Format          string         `json:"format"`
+	Codec           string         `json:"codec"`
+	DurationSeconds float64        `json:"duration_seconds"`
+	Channels        int            `json:"channels"`
+	SampleRateHz    int            `json:"sample_rate_hz"`
+	Sources         []AudioSource  `json:"sources"`
+	SizeBytes       int64          `json:"size_bytes"`
+	SHA256          string         `json:"sha256"`
+	Retention       AudioRetention `json:"retention"`
 }
 
 type AudioSource struct {
-	ID          string `json:"id"`
-	Role        string `json:"role"`
-	Label       string `json:"label"`
-	Channel     int    `json:"channel"`
-	DeviceName  string `json:"device_name,omitempty"`
+	ID         string `json:"id"`
+	Role       string `json:"role"`
+	Label      string `json:"label"`
+	Channel    int    `json:"channel"`
+	DeviceName string `json:"device_name,omitempty"`
 }
 
 type AudioRetention struct {

@@ -1,22 +1,7 @@
 package providers
 
 import (
-	"context"
-
-	"github.com/lukasstrickler/noto/internal/artifacts"
 	"github.com/lukasstrickler/noto/internal/notoerr"
-	"github.com/lukasstrickler/noto/internal/providers/llm"
-	"github.com/lukasstrickler/noto/internal/providers/stt"
-)
-
-// Type aliases re-export the provider interfaces and option structs at the
-// top-level `providers` package so callers (router, wrappers) can use them
-// without explicitly importing the leaf packages.
-type (
-	STTProvider       = stt.STTProvider
-	LLMProvider       = llm.LLMProvider
-	TranscribeOptions = stt.TranscribeOptions
-	SummarizeOptions  = llm.SummarizeOptions
 )
 
 type RoutingProfile string
@@ -28,22 +13,22 @@ const (
 )
 
 type RoutingPolicy struct {
-	SpeechProvider       string         `json:"speech_provider"`
-	SpeechProviders     []string       `json:"speech_providers"`
-	LLMProvider         string         `json:"llm_provider"`
-	LLMProviders        []string       `json:"llm_providers"`
-	LLMModel            string         `json:"llm_model"`
-	Profile             RoutingProfile `json:"profile"`
+	SpeechProvider  string         `json:"speech_provider"`
+	SpeechProviders []string       `json:"speech_providers"`
+	LLMProvider     string         `json:"llm_provider"`
+	LLMProviders    []string       `json:"llm_providers"`
+	LLMModel        string         `json:"llm_model"`
+	Profile         RoutingProfile `json:"profile"`
 }
 
 func DefaultRoutingPolicy() RoutingPolicy {
 	return RoutingPolicy{
-		SpeechProvider: "mistral",
-		SpeechProviders: []string{"mistral", "assemblyai"},
-		LLMProvider:    "openrouter",
-		LLMProviders:   []string{"openrouter", "mistral"},
-		LLMModel:       "openai/gpt-4.1-mini",
-		Profile:        RoutingProfileManual,
+		SpeechProvider:  "assemblyai",
+		SpeechProviders: []string{"assemblyai"},
+		LLMProvider:     "openrouter",
+		LLMProviders:    []string{"openrouter"},
+		LLMModel:        "openai/gpt-4.1-mini",
+		Profile:         RoutingProfileManual,
 	}
 }
 
@@ -101,14 +86,14 @@ type ProviderRouter struct {
 
 func (r ProviderRouter) STTProvider() STTProviderSuite {
 	return STTProviderSuite{
-		Primary:   r.Policy.SpeechProvider,
+		Primary:  r.Policy.SpeechProvider,
 		Fallback: r.fallbackProviders(r.Policy.SpeechProviders, r.Policy.SpeechProvider),
 	}
 }
 
 func (r ProviderRouter) LLMProvider() LLMProviderSuite {
 	return LLMProviderSuite{
-		Primary:   r.Policy.LLMProvider,
+		Primary:  r.Policy.LLMProvider,
 		Fallback: r.fallbackProviders(r.Policy.LLMProviders, r.Policy.LLMProvider),
 	}
 }
@@ -124,52 +109,11 @@ func (r ProviderRouter) fallbackProviders(providers []string, primary string) []
 }
 
 type STTProviderSuite struct {
-	Primary   string
-	Fallback  []string
+	Primary  string
+	Fallback []string
 }
 
 type LLMProviderSuite struct {
-	Primary   string
-	Fallback  []string
-}
-
-type STTProviderWrapper struct {
-	inner   STTProvider
-	jobID   string
-}
-
-func NewSTTProviderWrapper(inner STTProvider) *STTProviderWrapper {
-	return &STTProviderWrapper{inner: inner}
-}
-
-func (w *STTProviderWrapper) ProviderID() string {
-	return w.inner.ProviderID()
-}
-
-func (w *STTProviderWrapper) Transcribe(ctx context.Context, audio []byte, opts TranscribeOptions) (*artifacts.Transcript, error) {
-	transcript, err := w.inner.Transcribe(ctx, audio, opts)
-	if transcript != nil {
-		w.jobID = transcript.Provider.JobID
-	}
-	return transcript, err
-}
-
-func (w *STTProviderWrapper) JobID() string {
-	return w.jobID
-}
-
-type LLMProviderWrapper struct {
-	inner LLMProvider
-}
-
-func NewLLMProviderWrapper(inner LLMProvider) *LLMProviderWrapper {
-	return &LLMProviderWrapper{inner: inner}
-}
-
-func (w *LLMProviderWrapper) ProviderID() string {
-	return w.inner.ProviderID()
-}
-
-func (w *LLMProviderWrapper) Summarize(ctx context.Context, transcript artifacts.Transcript, opts SummarizeOptions) (*artifacts.Summary, error) {
-	return w.inner.Summarize(ctx, transcript, opts)
+	Primary  string
+	Fallback []string
 }

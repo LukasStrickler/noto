@@ -129,12 +129,12 @@ func TestWriteTranscript(t *testing.T) {
 
 	conf := 0.95
 	transcript := &artifacts.Transcript{
-		SchemaVersion:   "transcript.v1",
-		MeetingID:       meetingID.String(),
-		Provider:        artifacts.TranscriptProvider{ID: "test-provider"},
-		Speakers:        []artifacts.Speaker{{ID: "spk_1", Label: "Speaker 1"}},
-		Segments:        []artifacts.Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello", StartSeconds: 0, EndSeconds: 1, Confidence: &conf}},
-		Capabilities:    artifacts.TranscriptCapabilities{WordTimestamps: true},
+		SchemaVersion: "transcript.v1",
+		MeetingID:     meetingID.String(),
+		Provider:      artifacts.TranscriptProvider{ID: "test-provider"},
+		Speakers:      []artifacts.Speaker{{ID: "spk_1", Label: "Speaker 1"}},
+		Segments:      []artifacts.Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello", StartSeconds: 0, EndSeconds: 1, Confidence: &conf}},
+		Capabilities:  artifacts.TranscriptCapabilities{WordTimestamps: true},
 	}
 
 	if err := WriteTranscript(layout, transcript); err != nil {
@@ -162,12 +162,12 @@ func TestReadTranscript(t *testing.T) {
 
 	conf := 0.95
 	transcript := &artifacts.Transcript{
-		SchemaVersion:   "transcript.v1",
-		MeetingID:       meetingID.String(),
-		Provider:        artifacts.TranscriptProvider{ID: "test-provider"},
-		Speakers:        []artifacts.Speaker{{ID: "spk_1", Label: "Speaker 1"}},
-		Segments:        []artifacts.Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello", StartSeconds: 0, EndSeconds: 1, Confidence: &conf}},
-		Capabilities:    artifacts.TranscriptCapabilities{WordTimestamps: true},
+		SchemaVersion: "transcript.v1",
+		MeetingID:     meetingID.String(),
+		Provider:      artifacts.TranscriptProvider{ID: "test-provider"},
+		Speakers:      []artifacts.Speaker{{ID: "spk_1", Label: "Speaker 1"}},
+		Segments:      []artifacts.Segment{{ID: "seg_1", SpeakerID: "spk_1", Text: "Hello", StartSeconds: 0, EndSeconds: 1, Confidence: &conf}},
+		Capabilities:  artifacts.TranscriptCapabilities{WordTimestamps: true},
 	}
 
 	if err := WriteTranscript(layout, transcript); err != nil {

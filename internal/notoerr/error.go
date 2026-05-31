@@ -1,3 +1,5 @@
+// Package notoerr defines the coded domain error type shared by noto's
+// service and storage layers, plus helpers to render it as JSON.
 package notoerr
 
 import (
