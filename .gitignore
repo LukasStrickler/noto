@@ -32,7 +32,9 @@ tmp/
 *.sqlite-shm
 *.wal
 *.shm
-data/
+# Anchored to repo root so it ignores a top-level dev-data dir without
+# swallowing source packages like internal/.../data.
+/data/
 storage/local/
 recordings/
 exports/

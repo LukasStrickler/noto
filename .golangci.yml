@@ -37,8 +37,8 @@ linters:
         - (*database/sql.DB).Close
         - (*database/sql.Rows).Close
         - (*database/sql.Tx).Rollback
-        - (*github.com/lukasstrickler/noto/internal/notohost.Host).Close
-        - (*github.com/lukasstrickler/noto/internal/appsocket.IPCClient).Close
+        - (*github.com/lukasstrickler/noto/internal/app/host.Host).Close
+        - (*github.com/lukasstrickler/noto/internal/transport/appsocket.IPCClient).Close
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/lukasstrickler/noto/internal/cli"
+	"github.com/lukasstrickler/noto/internal/ui/cli"
 )
 
 func main() {

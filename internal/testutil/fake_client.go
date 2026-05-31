@@ -3,7 +3,7 @@ package testutil
 import (
 	"context"
 
-	"github.com/lukasstrickler/noto/internal/notoapi"
+	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
 
 // FakeClient is a programmable in-memory notoapi.Client for driving TUI

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lukasstrickler/noto/internal/artifacts"
-	"github.com/lukasstrickler/noto/internal/repo"
+	"github.com/lukasstrickler/noto/internal/core/artifacts"
+	"github.com/lukasstrickler/noto/internal/platform/repo"
 )
 
 // FakeRepo is an in-memory ArtifactRepository for unit tests.

@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/lukasstrickler/noto/internal/appsocket"
+	"github.com/lukasstrickler/noto/internal/transport/appsocket"
 )
 
 func main() {
