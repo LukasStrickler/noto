@@ -10,12 +10,15 @@ the reverse), and never `ui`. `host` is the composition root and the deliberate
 exception: it wires `service` together with `transport/server`,
 `transport/apiclient`, and `transport/appsocket` to stand up the process.
 
-**Packages**
+## Packages
 
-| Package | Responsibility |
-|---------|----------------|
-| `service` | CORE ORCHESTRATOR — every HTTP handler and CLI command funnels through `Service`. Owns recording state, job lifecycle, and composes storage/search/registry/secrets/IPC/event-hub |
-| `host` | Composition root: decides remote vs. local-daemon vs. in-process, opens the shared `noto.sqlite` once, and starts `service` + `server` (`Start`/`Connect`) |
+- `service` — CORE ORCHESTRATOR. Every HTTP handler and CLI command funnels
+  through `Service`; it owns recording state + job lifecycle and composes
+  storage/search/registry/secrets/IPC/event-hub. See its own `AGENTS.md` for
+  the per-file map.
+- `host` — composition root: decides remote vs. local-daemon vs. in-process,
+  opens the shared `noto.sqlite` once, and starts `service` + `server`
+  (`Start`/`Connect`)
 
 **Anti-pattern:** `service` reaches storage **only** through the
 `repo.ArtifactRepository` interface — never `platform/storage` directly — and

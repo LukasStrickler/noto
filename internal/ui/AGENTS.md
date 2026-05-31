@@ -7,17 +7,13 @@ The two human-facing surfaces: the Bubble Tea TUI and the CLI command set.
 `platform/search` directly — that bypasses the service layer and the storage
 seam.
 
-**Packages**
+## Packages
 
-| Package | Responsibility |
-|---------|----------------|
-| `tui` | Bubble Tea screens, models, and the `keys`/`layout`/`theme` subpackages |
-| `cli` | All CLI verb handlers (each a thin `notoapi.Client` caller): `cli.go` (dispatch), `commands_*.go` (verbs), `helpers.go` |
-
-**TUI conventions live in the repo-root `CLAUDE.md`:** keys are defined once in
-`tui/keys` and every label is derived from that definition; pane/row sizing goes
-through `tui/layout.Split` (never hand-rolled `width/3`). Read it before touching
-keybindings or layout.
+- `tui` — Bubble Tea screens, models, and the `keys`/`layout`/`theme`
+  subpackages. See its own `AGENTS.md` for the per-file map and conventions.
+- `cli` — all CLI verb handlers (each a thin `notoapi.Client` caller):
+  `cli.go` (dispatch), `commands_*.go` (verbs), `helpers.go`
 
 **Anti-pattern:** no direct storage/search access; no hand-written key strings
-in views. See the repo-root `AGENTS.md` for the big picture.
+in views (see the TUI conventions in the repo-root `CLAUDE.md`). See the
+repo-root `AGENTS.md` for the big picture.

@@ -68,7 +68,9 @@ noto/
 
 Each role group (`core`, `platform`, `app`, `transport`, `ui`) has its own
 `AGENTS.md` stating that layer's dependency rule, packages, and local
-anti-pattern — read the one for the subtree you're editing.
+anti-pattern — read the one for the subtree you're editing. The two densest
+packages, `app/service/` and `ui/tui/`, have a deeper `AGENTS.md` with a
+per-file map and local conventions.
 
 ---
 
