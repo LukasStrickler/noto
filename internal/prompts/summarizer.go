@@ -82,7 +82,7 @@ func (b *PromptBuilder) Build(systemPrompt string, transcript artifacts.Transcri
 
 // BuildSummaryRequest creates a ChatRequest for the LLM provider.
 func (b *PromptBuilder) BuildSummaryRequest(transcript artifacts.Transcript, opts SummaryOptions) (*ChatRequest, error) {
-	systemPrompt := b.buildSystemPrompt(opts.SummaryType)
+	systemPrompt := b.SystemPrompt(opts.SummaryType)
 	userPrompt, err := b.Build(systemPrompt, transcript)
 	if err != nil {
 		return nil, err
@@ -97,8 +97,10 @@ func (b *PromptBuilder) BuildSummaryRequest(transcript artifacts.Transcript, opt
 	}, nil
 }
 
-// buildSystemPrompt returns the appropriate system prompt for the summary type.
-func (b *PromptBuilder) buildSystemPrompt(summaryType SummaryType) string {
+// SystemPrompt returns the appropriate system prompt for the summary type.
+// Exported so LLM adapters can use the versioned, few-shot/chain-of-thought
+// templates as the single source of truth for the system message.
+func (b *PromptBuilder) SystemPrompt(summaryType SummaryType) string {
 	switch summaryType {
 	case SummaryTypeDecisions:
 		return decisionPromptTemplate

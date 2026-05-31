@@ -11,7 +11,13 @@ import (
 
 	"github.com/lukasstrickler/noto/internal/artifacts"
 	"github.com/lukasstrickler/noto/internal/notoerr"
+	"github.com/lukasstrickler/noto/internal/prompts"
 )
+
+// summaryPromptVersion identifies the prompt-template revision recorded on each
+// Summary. Defined once so the request builder and the parsed response can't
+// drift apart.
+const summaryPromptVersion = "summary.v1"
 
 type OpenRouterAdapter struct {
 	BaseURL string
@@ -114,7 +120,7 @@ func (a *OpenRouterAdapter) Summarize(ctx context.Context, transcript artifacts.
 	return nil, notoerr.New("provider_server_error", "OpenRouter service unavailable after retries.", nil)
 }
 
-func buildSummaryMessages(transcript artifacts.Transcript) []ChatMessage {
+func buildSummaryMessages(transcript artifacts.Transcript) []prompts.ChatMessage {
 	var textBuilder strings.Builder
 	totalChars := 0
 	maxChars := 100_000
@@ -137,33 +143,17 @@ func buildSummaryMessages(transcript artifacts.Transcript) []ChatMessage {
 		totalChars += len(segText)
 	}
 
-	systemPrompt := `You are a meeting summarization assistant. Given a transcript, extract:
-1. A short 2-sentence summary of the meeting
-2. Key decisions made (with brief description)
-3. Action items (with potential assignees, use @person format)
-4. Risks or concerns mentioned
-5. Open questions or unresolved topics
-
-Return your response as a JSON object with the following structure:
-{
-  "short_summary": "...",
-  "decisions": [{"text": "...", "speaker_ids": [...], "evidence": [{"segment_id": "...", "quote": "..."}]}],
-  "action_items": [{"text": "...", "owner": "@person", "evidence": [...]}],
-  "risks": [{"text": "...", "evidence": [...]}],
-  "open_questions": [{"text": "...", "evidence": [...]}]
-}`
-
+	// The system prompt comes from the versioned, few-shot/chain-of-thought
+	// prompt builder (single source of truth). The user message keeps the
+	// truncating serialization above so oversized transcripts stay under the
+	// 1MB request guard.
+	systemPrompt := prompts.NewPromptBuilder(summaryPromptVersion).SystemPrompt(prompts.SummaryTypeFull)
 	userContent := "Please summarize this meeting transcript:\n\n" + textBuilder.String()
 
-	return []ChatMessage{
+	return []prompts.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userContent},
 	}
-}
-
-type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
 }
 
 // sleepWithContext waits for d or until ctx is cancelled, whichever comes
@@ -315,7 +305,7 @@ func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetin
 		Model: artifacts.SummaryModel{
 			Provider:      "openrouter",
 			ModelID:       modelID,
-			PromptVersion: "summary.v1",
+			PromptVersion: summaryPromptVersion,
 		},
 	}
 

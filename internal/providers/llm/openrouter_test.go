@@ -142,3 +142,35 @@ func TestSummarize_MissingAPIKey(t *testing.T) {
 		t.Errorf("error code = %q, want provider_config_invalid", code)
 	}
 }
+
+// The system prompt must be sourced from the internal/prompts package (the
+// versioned, few-shot/chain-of-thought templates), not a terse inline string.
+// "expert meeting analyst" is the prompts template's framing; the old inline
+// prompt opened with "You are a meeting summarization assistant" and is gone.
+func TestBuildSummaryMessages_UsesPromptsSystemPrompt(t *testing.T) {
+	msgs := buildSummaryMessages(testTranscript())
+	if len(msgs) != 2 || msgs[0].Role != "system" || msgs[1].Role != "user" {
+		t.Fatalf("expected [system,user] messages, got %+v", msgs)
+	}
+	if !strings.Contains(msgs[0].Content, "expert meeting analyst") {
+		t.Errorf("system prompt not sourced from prompts package:\n%s", msgs[0].Content)
+	}
+	if strings.Contains(msgs[0].Content, "You are a meeting summarization assistant") {
+		t.Errorf("stale inline system prompt still present")
+	}
+}
+
+// Wiring the prompts package must NOT drop openrouter's transcript truncation:
+// prompts.Build does not truncate, so a transcript past the 150-segment cap has
+// to still produce a truncation marker, keeping the request under the 1MB guard.
+func TestBuildSummaryMessages_TruncatesLargeTranscript(t *testing.T) {
+	tr := testTranscript()
+	tr.Segments = make([]artifacts.Segment, 200)
+	for i := range tr.Segments {
+		tr.Segments[i] = artifacts.Segment{ID: "seg", SpeakerID: "spk_0", Text: "filler text for a long meeting"}
+	}
+	user := buildSummaryMessages(tr)[1].Content
+	if !strings.Contains(user, "... (truncated)") {
+		t.Errorf("expected truncation marker for a >150-segment transcript")
+	}
+}
