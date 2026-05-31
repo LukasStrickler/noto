@@ -1,6 +1,10 @@
-// Package db owns the single *sql.DB shared by the search index and the
-// jobs queue. One connection means coherent WAL semantics, simpler
-// lifecycle, and no duplicate schema migration code.
+// Package db is the single place that opens and tunes noto's SQLite
+// connections. Open returns a pragma-tuned, write-serialized handle with no
+// schema applied; each schema owner (the jobs queue here, the search index,
+// the speaker store) applies its own DDL via Migrate. Centralizing Open means
+// one definition of the DSN/pragmas/connection limits instead of a copy per
+// caller, and lets the composition root share one handle to noto.sqlite across
+// the search index and speaker store rather than opening it twice.
 package db
 
 import (
@@ -20,8 +24,10 @@ type DB struct {
 	mu   sync.Mutex
 }
 
-// Open opens (and migrates) the noto SQLite database at sqlitePath.
-// sqlitePath is typically `<config_dir>/noto.sqlite`.
+// Open opens a pragma-tuned SQLite connection at sqlitePath. It applies no
+// schema — call Migrate with the appropriate DDL afterwards. The connection is
+// limited to a single open connection because SQLite is single-writer anyway,
+// which keeps WAL semantics coherent across all callers of this one handle.
 func Open(sqlitePath string) (*DB, error) {
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)", filepath.ToSlash(sqlitePath))
 	sqlDB, err := sql.Open("sqlite", dsn)
@@ -30,23 +36,20 @@ func Open(sqlitePath string) (*DB, error) {
 	}
 	sqlDB.SetMaxOpenConns(1) // serialize writes; SQLite is single-writer anyway
 	sqlDB.SetMaxIdleConns(1)
-	d := &DB{DB: sqlDB, path: sqlitePath}
-	if err := d.migrate(); err != nil {
-		sqlDB.Close()
-		return nil, err
-	}
-	return d, nil
+	return &DB{DB: sqlDB, path: sqlitePath}, nil
 }
 
 func (d *DB) Path() string {
 	return d.path
 }
 
-// migrate applies every required schema definition. Idempotent.
-func (d *DB) migrate() error {
+// Migrate applies the given schema statements in order. Idempotent when the
+// statements are (e.g. CREATE TABLE IF NOT EXISTS). Safe to call from multiple
+// schema owners sharing one handle.
+func (d *DB) Migrate(stmts []string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, stmt := range schemaStatements {
+	for _, stmt := range stmts {
 		if _, err := d.DB.Exec(stmt); err != nil {
 			return fmt.Errorf("migrate: %w (stmt: %s)", err, stmt)
 		}
@@ -54,10 +57,11 @@ func (d *DB) migrate() error {
 	return nil
 }
 
-var schemaStatements = []string{
+// JobsSchema is the DDL for the jobs queue (lives at noto-jobs.sqlite, a
+// separate file from noto.sqlite so the write-heavy queue never contends with
+// the search index / speaker store).
+var JobsSchema = []string{
 	// Jobs queue. id is a ULID-ish string. Workers consume by status.
-	// internal/search keeps its own DB file (noto.sqlite); this jobs DB
-	// lives at noto-jobs.sqlite so writes never contend.
 	`CREATE TABLE IF NOT EXISTS jobs (
 		id TEXT PRIMARY KEY,
 		kind TEXT NOT NULL,

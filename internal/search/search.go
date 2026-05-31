@@ -11,13 +11,17 @@ import (
 	"time"
 	"unicode"
 
-	_ "modernc.org/sqlite"
+	"github.com/lukasstrickler/noto/internal/db"
 )
 
 type SearchIndex struct {
 	db   *sql.DB
 	mu   sync.RWMutex
 	path string
+	// ownsConn is true when this index opened its own connection (and must
+	// close it); false when the connection is borrowed from a caller that
+	// shares it with other components.
+	ownsConn bool
 }
 
 type SearchResult struct {
@@ -519,25 +523,49 @@ func (s *SearchIndex) DeleteFromIndex(meetingID string) error {
 	return tx.Commit()
 }
 
+// NewSearchIndex opens (or creates) a standalone search index at path, owning
+// the underlying connection. Use NewSearchIndexConn to build the index on a
+// connection shared with other components (e.g. the one noto.sqlite handle the
+// host also hands to the speaker store).
 func NewSearchIndex(path string) (*SearchIndex, error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("create directory: %w", err)
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("create directory: %w", err)
+		}
 	}
 
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	conn, err := db.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	if err := migrateSearchSchema(conn.DB); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return &SearchIndex{db: conn.DB, path: path, ownsConn: true}, nil
+}
 
-	if _, err := db.Exec(`
+// NewSearchIndexConn builds a search index on an already-open connection. The
+// caller retains ownership of the handle, so Close is a no-op — this lets the
+// composition root share one noto.sqlite connection across the search index
+// and the speaker store instead of opening the file twice.
+func NewSearchIndexConn(conn *sql.DB) (*SearchIndex, error) {
+	if err := migrateSearchSchema(conn); err != nil {
+		return nil, err
+	}
+	return &SearchIndex{db: conn, ownsConn: false}, nil
+}
+
+// migrateSearchSchema creates/upgrades the FTS5 index and metadata tables on
+// conn. It never closes conn — ownership stays with the caller.
+func migrateSearchSchema(conn *sql.DB) error {
+	if _, err := conn.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_kv(
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)
 	`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create schema_kv table: %w", err)
+		return fmt.Errorf("create schema_kv table: %w", err)
 	}
 
 	// FTS5 doesn't support ALTER ADD COLUMN. When the schema changes
@@ -550,19 +578,17 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 	// and schema_kv was just created above so the row is missing on
 	// that exact upgrade.
 	var onDisk sql.NullString
-	if err := db.QueryRow(`SELECT value FROM schema_kv WHERE key='version'`).Scan(&onDisk); err != nil && err != sql.ErrNoRows {
-		db.Close()
-		return nil, fmt.Errorf("read schema version: %w", err)
+	if err := conn.QueryRow(`SELECT value FROM schema_kv WHERE key='version'`).Scan(&onDisk); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("read schema version: %w", err)
 	}
 	wantVersion := fmt.Sprintf("%d", schemaVersion)
 	if !onDisk.Valid || onDisk.String != wantVersion {
-		if _, err := db.Exec(`DROP TABLE IF EXISTS meetings_fts`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("drop stale fts: %w", err)
+		if _, err := conn.Exec(`DROP TABLE IF EXISTS meetings_fts`); err != nil {
+			return fmt.Errorf("drop stale fts: %w", err)
 		}
 	}
 
-	if _, err := db.Exec(`
+	if _, err := conn.Exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(
 			content,
 			meeting_id,
@@ -579,38 +605,34 @@ func NewSearchIndex(path string) (*SearchIndex, error) {
 			tokenize='unicode61'
 		)
 	`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create FTS table: %w", err)
+		return fmt.Errorf("create FTS table: %w", err)
 	}
 
-	if _, err := db.Exec(`
+	if _, err := conn.Exec(`
 		INSERT INTO schema_kv(key, value) VALUES('version', ?)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value
 	`, wantVersion); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("upsert schema version: %w", err)
+		return fmt.Errorf("upsert schema version: %w", err)
 	}
 
-	if _, err := db.Exec(`
+	if _, err := conn.Exec(`
 		CREATE TABLE IF NOT EXISTS meetings_meta(
 			meeting_id TEXT PRIMARY KEY,
 			title      TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL DEFAULT 0
 		)
 	`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create meta table: %w", err)
+		return fmt.Errorf("create meta table: %w", err)
 	}
-
-	return &SearchIndex{
-		db:   db,
-		path: path,
-	}, nil
+	return nil
 }
 
 func (s *SearchIndex) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.ownsConn {
+		return nil // borrowed connection; owner closes it
+	}
 	return s.db.Close()
 }
 

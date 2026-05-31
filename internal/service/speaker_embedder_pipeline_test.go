@@ -136,6 +136,9 @@ func TestRunTranscribe_UsesSpeakerEmbedderForMappings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open jobs db: %v", err)
 	}
+	if err := jobsDB.Migrate(db.JobsSchema); err != nil {
+		t.Fatalf("migrate jobs db: %v", err)
+	}
 	defer jobsDB.Close()
 	svc := New(Deps{
 		Config:          cfg,

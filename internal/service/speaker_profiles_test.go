@@ -271,5 +271,5 @@ func TestMeetingSpeakerMappingsPatchNotFound(t *testing.T) {
 	}
 }
 
-var _ = data.DB{}
+var _ = data.SpeakerProfile{}
 var _ = os.MkdirAll

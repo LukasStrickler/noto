@@ -79,7 +79,9 @@ type ownedDeps struct {
 	cfg             config.Store
 	speakerProfiles data.SpeakerProfileRepository
 	meetingMappings data.MeetingSpeakerMappingRepository
-	dataDB          *data.DB
+	// appDB is the single noto.sqlite handle shared by the search index and
+	// the speaker store; the host owns it and closes it once.
+	appDB *db.DB
 }
 
 // Start prepares the deps, starts the service workers, and binds the
@@ -103,25 +105,37 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		return nil, fmt.Errorf("notohost: prepare recordings dir: %w", err)
 	}
 
+	// One handle to noto.sqlite, shared by the search index and the speaker
+	// store (these used to open the same file twice, with mismatched pragmas).
+	// The jobs queue lives in a separate file so its write traffic never
+	// contends with the index.
 	sqlitePath := filepath.Join(cfg.ConfigDir, "noto.sqlite")
-	idx, err := search.NewSearchIndex(sqlitePath)
+	appDB, err := db.Open(sqlitePath)
 	if err != nil {
-		return nil, fmt.Errorf("notohost: open search index: %w", err)
+		return nil, fmt.Errorf("notohost: open app db: %w", err)
 	}
-
-	dataDB, err := data.Open(sqlitePath)
+	idx, err := search.NewSearchIndexConn(appDB.DB)
 	if err != nil {
-		_ = idx.Close()
-		return nil, fmt.Errorf("notohost: open data db: %w", err)
+		_ = appDB.Close()
+		return nil, fmt.Errorf("notohost: init search index: %w", err)
 	}
-	speakerProfiles := data.NewSQLiteSpeakerProfileRepository(dataDB)
-	meetingMappings := data.NewSQLiteMeetingSpeakerMappingRepository(dataDB)
+	if err := data.Migrate(appDB); err != nil {
+		_ = appDB.Close()
+		return nil, fmt.Errorf("notohost: migrate speaker store: %w", err)
+	}
+	speakerProfiles := data.NewSQLiteSpeakerProfileRepository(appDB)
+	meetingMappings := data.NewSQLiteMeetingSpeakerMappingRepository(appDB)
 
 	jobsDBPath := filepath.Join(cfg.ConfigDir, "noto-jobs.sqlite")
 	jobsDB, err := db.Open(jobsDBPath)
 	if err != nil {
-		_ = idx.Close()
+		_ = appDB.Close()
 		return nil, fmt.Errorf("notohost: open jobs db: %w", err)
+	}
+	if err := jobsDB.Migrate(db.JobsSchema); err != nil {
+		_ = appDB.Close()
+		_ = jobsDB.Close()
+		return nil, fmt.Errorf("notohost: migrate jobs db: %w", err)
 	}
 
 	// IPC client is best-effort; nil if no Swift helper exists on this
@@ -163,7 +177,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	serviceCtx, cancel := context.WithCancel(ctx)
 	if err := svc.Start(serviceCtx); err != nil {
 		cancel()
-		_ = idx.Close()
+		_ = appDB.Close()
 		_ = jobsDB.Close()
 		return nil, err
 	}
@@ -194,14 +208,14 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	if err != nil {
 		cancel()
 		_ = svc.Close()
-		_ = idx.Close()
+		_ = appDB.Close()
 		_ = jobsDB.Close()
 		return nil, err
 	}
 	if err := srv.Start(serviceCtx); err != nil {
 		cancel()
 		_ = svc.Close()
-		_ = idx.Close()
+		_ = appDB.Close()
 		_ = jobsDB.Close()
 		return nil, err
 	}
@@ -216,7 +230,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	h := &Host{
 		svc:    svc,
 		srv:    srv,
-		deps:   ownedDeps{search: idx, jobsDB: jobsDB, ipc: ipc, cfg: cfgStore, speakerProfiles: speakerProfiles, meetingMappings: meetingMappings, dataDB: dataDB},
+		deps:   ownedDeps{search: idx, jobsDB: jobsDB, ipc: ipc, cfg: cfgStore, speakerProfiles: speakerProfiles, meetingMappings: meetingMappings, appDB: appDB},
 		logger: logger,
 		addr:   boundAddr,
 		token:  token,
@@ -279,7 +293,7 @@ func (h *Host) Close() error {
 		_ = h.svc.Close()
 	}
 	if h.deps.search != nil {
-		_ = h.deps.search.Close()
+		_ = h.deps.search.Close() // no-op: borrows the shared appDB handle
 	}
 	if h.deps.jobsDB != nil {
 		_ = h.deps.jobsDB.Close()
@@ -287,8 +301,8 @@ func (h *Host) Close() error {
 	if h.deps.ipc != nil {
 		_ = h.deps.ipc.Close()
 	}
-	if h.deps.dataDB != nil {
-		_ = h.deps.dataDB.Close()
+	if h.deps.appDB != nil {
+		_ = h.deps.appDB.Close()
 	}
 	return nil
 }

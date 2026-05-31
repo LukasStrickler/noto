@@ -34,6 +34,9 @@ func newTestSvc(t *testing.T, fr repo.ArtifactRepository) *service.Service {
 	if err != nil {
 		t.Fatalf("jobs db: %v", err)
 	}
+	if err := jobsDB.Migrate(db.JobsSchema); err != nil {
+		t.Fatalf("migrate jobs db: %v", err)
+	}
 	t.Cleanup(func() { _ = jobsDB.Close() })
 	primary := secrets.NewFileStore(filepath.Join(cfgDir, "creds.json"))
 	return service.New(service.Deps{
