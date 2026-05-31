@@ -17,7 +17,7 @@ implementing the behavior.
 
 - HTTP API server with all planned REST endpoints
 - SSE endpoint for job progress and recorder events
-- `ArtifactRepository` interface (`internal/repo`) with `LocalArtifactRepository` implementation
+- `ArtifactRepository` interface (`internal/platform/repo`) with `LocalArtifactRepository` implementation
 - SQLite-backed job queue with workers, cancellation, restart recovery
 - Full pipeline: ingest → transcribe → summarize → index
 - AssemblyAI STT adapter (with deterministic dry-run fallback)
@@ -47,10 +47,10 @@ implementing the behavior.
 
 ### ✅ Testing Infrastructure — DONE
 
-- `internal/repo` — 7 atomic tests for `LocalArtifactRepository` (no host, no HTTP)
-- `internal/service/meetings_unit_test.go` — 9 atomic unit tests using `testutil.FakeRepo`
+- `internal/platform/repo` — 7 atomic tests for `LocalArtifactRepository` (no host, no HTTP)
+- `internal/app/service/meetings_unit_test.go` — 9 atomic unit tests using `testutil.FakeRepo`
 - `internal/testutil.FakeRepo` — in-memory `ArtifactRepository` for fast unit tests
-- E2E tests: `notohost/host_test.go` (record/pipeline/search/agent), `service/import_test.go`
+- E2E tests: `internal/app/host/host_test.go` (record/pipeline/search/agent), `internal/app/service/import_test.go`
 - Service tests: speaker profiles, embedder pipeline, matching
 
 ### ❌ Phase 3: Capture Integration — NOT STARTED
@@ -58,7 +58,7 @@ implementing the behavior.
 - Native macOS capture helper (Swift binary) is separate from this repo
 - `cmd/capture/main.go` is an IPC relay tool for scripting/dev — not the actual capture binary
 - Without the Swift helper, recording runs in dry-run mode
-- Estimated scope: Swift binary + macOS audio API + IPC protocol (already defined in `internal/appsocket`)
+- Estimated scope: Swift binary + macOS audio API + IPC protocol (already defined in `internal/transport/appsocket`)
 
 ## Remaining Gaps
 
@@ -72,7 +72,7 @@ implementing the behavior.
 ### Features
 
 - Speaker embedding service requires external `NOTO_SPEAKER_EMBEDDING_URL` — no bundled service
-- Live STT during recording (`providers/live/speech.go` exists but not wired to recording pipeline)
+- Live STT during recording (not implemented — recording is transcribed post-hoc via the batch pipeline)
 
 ## Out of Scope for Active Build Plan
 

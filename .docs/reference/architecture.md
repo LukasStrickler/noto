@@ -8,7 +8,7 @@ The backend owns all storage and processing. The TUI is a thin local consumer.
 ```
 Local TUI/CLI ←→ noto serve (HTTP/SSE) ←→ AssemblyAI (STT) + OpenRouter (LLM)
                      ↓
-              ArtifactRepository (internal/repo)
+              ArtifactRepository (internal/platform/repo)
                      ↓
               LocalArtifactRepository → SQLite + filesystem artifacts
 ```
@@ -28,43 +28,43 @@ Local TUI/CLI ←→ noto serve (HTTP/SSE) ←→ AssemblyAI (STT) + OpenRouter 
 | `cmd/noto` | TUI/CLI entry point, command wiring |
 | `cmd/noto serve` | Backend daemon, HTTP server, job runner |
 | `cmd/capture` | macOS native capture helper |
-| `internal/repo` | `ArtifactRepository` interface + `LocalArtifactRepository` |
-| `internal/storage` | Low-level filesystem artifact R/W (used only by `repo`) |
-| `internal/artifacts` | Meeting, audio, transcript, summary types and schemas |
-| `internal/service` | Business logic. Uses `repo` interface — never calls `storage` directly |
-| `internal/server` | HTTP API handlers, SSE, middleware |
-| `internal/notohost` | Server lifecycle, dep injection, in-process/remote dispatch |
-| `internal/apiclient` | Direct (in-process) and HTTP client implementations |
-| `internal/search` | SQLite FTS5 index and queries |
-| `internal/providers/stt` | AssemblyAI STT adapter |
-| `internal/providers/llm` | OpenRouter LLM adapter |
-| `internal/data` | Speaker profile + meeting speaker mapping repositories (SQLite) |
+| `internal/platform/repo` | `ArtifactRepository` interface + `LocalArtifactRepository` |
+| `internal/platform/storage` | Low-level filesystem artifact R/W (used only by `repo`) |
+| `internal/core/artifacts` | Meeting, audio, transcript, summary types and schemas |
+| `internal/app/service` | Business logic. Uses `repo` interface — never calls `storage` directly |
+| `internal/transport/server` | HTTP API handlers, SSE, middleware |
+| `internal/app/host` | Server lifecycle, dep injection, in-process/remote dispatch |
+| `internal/transport/apiclient` | Direct (in-process) and HTTP client implementations |
+| `internal/platform/search` | SQLite FTS5 index and queries |
+| `internal/platform/providers/stt` | AssemblyAI STT adapter |
+| `internal/platform/providers/llm` | OpenRouter LLM adapter |
+| `internal/platform/speakerstore` | Speaker profile + meeting speaker mapping repositories (SQLite) |
 | `internal/testutil` | `FakeRepo` and test helpers for unit tests |
-| `internal/tui` | Bubble Tea screens and models |
+| `internal/ui/tui` | Bubble Tea screens and models |
 
 ## Interfaces
 
 | Interface | Package | Purpose |
 | --- | --- | --- |
-| `ArtifactRepository` | `internal/repo` | All artifact persistence. Current: `LocalArtifactRepository`. Future: Postgres + S3. |
-| `notoapi.Client` | `internal/notoapi` | TUI/CLI → backend. Direct in-process or HTTP. |
-| `STTProvider` | `internal/providers/stt` | Transcription adapter (AssemblyAI). |
-| `SummaryProvider` | `internal/providers/llm` | LLM summarization adapter (OpenRouter). |
-| `JobQueue` | `internal/service` | SQLite-backed job scheduling and state machine. |
-| `SearchIndex` | `internal/search` | FTS5 query and indexing interface. |
+| `ArtifactRepository` | `internal/platform/repo` | All artifact persistence. Current: `LocalArtifactRepository`. Future: Postgres + S3. |
+| `notoapi.Client` | `internal/transport/notoapi` | TUI/CLI → backend. Direct in-process or HTTP. |
+| `STTProvider` | `internal/platform/providers/stt` | Transcription adapter (AssemblyAI). |
+| `SummaryProvider` | `internal/platform/providers/llm` | LLM summarization adapter (OpenRouter). |
+| `JobQueue` | `internal/app/service` | SQLite-backed job scheduling and state machine. |
+| `SearchIndex` | `internal/platform/search` | FTS5 query and indexing interface. |
 
 ## Storage Seam
 
 Service methods access storage **only** through `repo.ArtifactRepository`.
-The `internal/storage` package is an implementation detail of `LocalArtifactRepository`
-and must not be imported by `internal/service` or `internal/server`.
+The `internal/platform/storage` package is an implementation detail of `LocalArtifactRepository`
+and must not be imported by `internal/app/service` or `internal/transport/server`.
 
 ```
-internal/service  →  internal/repo (ArtifactRepository interface)
+internal/app/service  →  internal/platform/repo (ArtifactRepository interface)
                           ↓
-                  internal/repo/local.go (LocalArtifactRepository)
+                  internal/platform/repo/local.go (LocalArtifactRepository)
                           ↓
-                  internal/storage (filesystem / SQLite)
+                  internal/platform/storage (filesystem / SQLite)
 ```
 
 For unit tests, inject `testutil.FakeRepo` instead. No disk I/O, no goroutines.
@@ -95,7 +95,7 @@ For unit tests, inject `testutil.FakeRepo` instead. No disk I/O, no goroutines.
 ## Invariants
 
 - The backend is the source of truth; TUI is a local consumer.
-- Service methods never import `internal/storage` directly.
+- Service methods never import `internal/platform/storage` directly.
 - Capture stays local on the macOS machine.
 - All provider traffic (AssemblyAI, OpenRouter) flows through the backend.
 - Speaker profile matching runs on the backend, not in the TUI.

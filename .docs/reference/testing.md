@@ -5,10 +5,10 @@
 | Layer | What it proves | Where |
 | --- | --- | --- |
 | **Unit** | Single function/method, no I/O | `*_test.go` alongside the package; use `testutil.FakeRepo` |
-| **Repo** | `LocalArtifactRepository` reads/writes correctly | `internal/repo/local_test.go` (temp dir, real filesystem) |
-| **Integration** | Full pipeline via in-process host | `internal/notohost/host_test.go`, `internal/service/import_test.go` |
-| **Server** | HTTP handler routing and error shapes | `internal/server/routes_speaker_test.go` |
-| **TUI** | Screen model updates and rendering | `internal/tui/*_test.go` (characterization + search) |
+| **Repo** | `LocalArtifactRepository` reads/writes correctly | `internal/platform/repo/local_test.go` (temp dir, real filesystem) |
+| **Integration** | Full pipeline via in-process host | `internal/app/host/host_test.go`, `internal/app/service/import_test.go` |
+| **Server** | HTTP handler routing and error shapes | `internal/transport/server/routes_speaker_test.go` |
+| **TUI** | Screen model updates and rendering | `internal/ui/tui/*_test.go` (characterization + search) |
 
 ## Writing Unit Tests
 
@@ -17,7 +17,7 @@ Use `testutil.FakeRepo` for service-layer tests that should not touch the filesy
 ```go
 import (
     "github.com/lukasstrickler/noto/internal/testutil"
-    "github.com/lukasstrickler/noto/internal/repo"
+    "github.com/lukasstrickler/noto/internal/platform/repo"
 )
 
 func TestService_DeleteMeeting(t *testing.T) {
@@ -36,11 +36,11 @@ func TestService_DeleteMeeting(t *testing.T) {
 }
 ```
 
-See `internal/service/meetings_unit_test.go` for the `newTestSvc` helper pattern.
+See `internal/app/service/meetings_unit_test.go` for the `newTestSvc` helper pattern.
 
 ## Writing Integration Tests
 
-Use `notohost.Start` for end-to-end flows. The host starts in-process — no
+Use `host.Start` for end-to-end flows. The host starts in-process — no
 separate server needed:
 
 ```go
@@ -49,7 +49,7 @@ func TestE2E(t *testing.T) {
     t.Setenv("NOTO_ARTIFACT_ROOT", t.TempDir())
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
-    host, err := notohost.Start(ctx, notohost.Options{
+    host, err := host.Start(ctx, host.Options{
         Address: filepath.Join(t.TempDir(), "noto.sock"),
     })
     // ... use host.Client()
@@ -64,11 +64,11 @@ but cannot access unexported symbols.
 
 ```
 internal/
-  service/
+  app/service/
     meetings.go
     meetings_unit_test.go   ← same package, accesses internals
     import_test.go          ← package service_test, external style
-  repo/
+  platform/repo/
     local.go
     local_test.go           ← package repo_test, black-box
   testutil/
@@ -92,6 +92,6 @@ A feature is done when:
 
 - `go test ./...` passes.
 - Service-layer logic has unit tests using `testutil.FakeRepo`.
-- `LocalArtifactRepository` changes have tests in `internal/repo/local_test.go`.
+- `LocalArtifactRepository` changes have tests in `internal/platform/repo/local_test.go`.
 - CLI JSON output has at minimum a smoke test (call the command, parse JSON, check key fields).
 - Agent-facing endpoints are covered by the server routes test or an integration test.

@@ -158,12 +158,12 @@ All providers normalize output to standard Noto schemas.
 ## Adding a Provider
 
 **STT:**
-1. Implement `stt.STTProvider` in `internal/providers/stt/`
-2. Register in `internal/providers/registry.go`
+1. Implement `stt.STTProvider` in `internal/platform/providers/stt/`
+2. Register in `internal/platform/providers/registry.go`
 3. Add schema tests for the transcript output
 4. Confirm downstream processors (search, summary) work unchanged
 
 **LLM:**
-1. Implement `llm.SummaryProvider` in `internal/providers/llm/`
+1. Implement `llm.SummaryProvider` in `internal/platform/providers/llm/`
 2. Register in the registry
 3. Add schema tests for the summary output

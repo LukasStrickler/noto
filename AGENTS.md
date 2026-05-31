@@ -2,7 +2,7 @@
 
 **Generated:** 2026-05-20
 **Type:** Terminal-first meeting recorder (Go, Bubble Tea TUI)
-**Core Stack:** Go 1.24.2 + Bubble Tea TUI + remote `noto serve` backend + SQLite FTS5 + AssemblyAI
+**Core Stack:** Go 1.25 + Bubble Tea TUI + remote `noto serve` backend + SQLite FTS5 + AssemblyAI
 
 ---
 
@@ -23,32 +23,44 @@ Noto records meetings via a macOS native capture helper, sends recordings to a `
 
 ## STRUCTURE
 
+Packages are grouped by architectural **role**, following the dependency
+flow (leaves → infra → app → delivery):
+
 ```
 noto/
 ├── cmd/
 │   ├── noto/          # main CLI entry point
 │   └── capture/       # macOS audio capture helper (Go wrapper → Swift)
 ├── internal/
-│   ├── cli/           # all CLI command handlers (notoapi.Client callers)
-│   ├── service/       # CORE ORCHESTRATOR — wires everything together
-│   ├── tui/           # Bubble Tea UI (screens, keys, theme, layout)
-│   ├── artifacts/     # artifact types: meeting, audio, transcript, summary
-│   ├── storage/       # file-based artifact persistence
-│   ├── search/        # SQLite FTS5 index + query parser
-│   ├── db/            # low-level SQLite wrappers
-│   ├── providers/     # STT + LLM provider registry + routers
-│   │   ├── stt/       # AssemblyAI production STT adapter
-│   │   ├── llm/       # OpenRouter
-│   │   └── live/      # real-time speech
-│   ├── server/        # HTTP server (routing, middleware, auth)
-│   ├── notoapi/       # API types (requests, responses, client interface)
-│   ├── apiclient/     # HTTP client to talk to noto server/daemon
-│   ├── appsocket/     # IPC client ↔ capture helper Unix socket
-│   ├── notohost/      # in-process server host (spawns service + server)
-│   ├── config/        # viper-based config (dirs, providers, model preferences)
-│   ├── secrets/       # Keychain (darwin) / file (linux) credential store
-│   ├── prompts/       # LLM prompt templates
-│   └── notoerr/       # structured errors
+│   ├── core/                  # domain types + pure logic (leaves, no infra deps)
+│   │   ├── artifacts/         # artifact types: meeting, audio, transcript, summary
+│   │   ├── speakers/          # speaker-matching domain logic
+│   │   └── notoerr/           # structured errors
+│   ├── platform/              # infrastructure adapters (disk, db, network, AI)
+│   │   ├── config/            # viper-based config (dirs, providers, models)
+│   │   ├── secrets/           # Keychain (darwin) / file (linux) credential store
+│   │   ├── db/                # single SQLite connection opener + Migrate
+│   │   ├── storage/           # file-based artifact persistence (used only by repo)
+│   │   ├── repo/              # ArtifactRepository iface + LocalArtifactRepository
+│   │   ├── search/            # SQLite FTS5 index + query parser
+│   │   ├── speakerstore/      # speaker profile + meeting-mapping repos (SQLite)
+│   │   └── providers/         # STT + LLM provider registry + routers
+│   │       ├── stt/           # AssemblyAI production STT adapter
+│   │       ├── speech/        # transcript normalization
+│   │       └── llm/           # OpenRouter LLM adapter
+│   │           └── prompts/   # versioned LLM prompt templates (few-shot + CoT)
+│   ├── app/                   # application core + composition root
+│   │   ├── service/           # CORE ORCHESTRATOR — wires everything together
+│   │   └── host/              # in-process server host (spawns service + server)
+│   ├── transport/             # delivery boundaries
+│   │   ├── notoapi/           # API types (requests, responses, client interface)
+│   │   ├── server/            # HTTP server (routing, middleware, auth)
+│   │   ├── apiclient/         # HTTP client to talk to noto server/daemon
+│   │   └── appsocket/         # IPC client ↔ capture helper Unix socket
+│   ├── ui/                    # user interfaces
+│   │   ├── tui/               # Bubble Tea UI (screens, keys, theme, layout)
+│   │   └── cli/               # all CLI command handlers (notoapi.Client callers)
+│   └── testutil/              # FakeRepo + test helpers (not a layer)
 ├── scripts/           # go toolchain wrapper (downloads into .tools/go/)
 ├── bin/               # built binaries (gitignored)
 └── .tools/            # local Go toolchain (gitignored)
@@ -60,22 +72,22 @@ noto/
 
 ### Service is the Hub
 
-`internal/service/service.go` — every HTTP handler and every CLI command funnels through `Service`. It owns:
+`internal/app/service/service.go` — every HTTP handler and every CLI command funnels through `Service`. It owns:
 - Recording state (mutex-protected)
 - Job lifecycle (jobCancels map)
 - Composes: storage, search, registry, secrets, IPC client, event hub
 
-### Notohost — The Connection Owner
+### Host — The Connection Owner
 
-`internal/notohost/` — decides whether to connect to a remote backend (`NOTO_API_URL` + `NOTO_API_TOKEN`), use a local daemon, or start an in-process development host. All `noto` commands go through this. Never import storage/search directly from CLI.
+`internal/app/host/` — decides whether to connect to a remote backend (`NOTO_API_URL` + `NOTO_API_TOKEN`), use a local daemon, or start an in-process development host. All `noto` commands go through this. Never import storage/search directly from CLI.
 
 ### Provider Registry
 
-`internal/providers/registry.go` — pluggable provider registry. Production STT is AssemblyAI only for now; summaries use OpenRouter-compatible LLMs. Providers implement interfaces in `types.go`.
+`internal/platform/providers/registry.go` — pluggable provider registry. Production STT is AssemblyAI only for now; summaries use OpenRouter-compatible LLMs. Providers implement interfaces in `types.go`.
 
 ### Artifacts as Structured Types
 
-`internal/artifacts/` — typed artifacts (meeting, audio, transcript, summary) each implement `Artifact` interface with `Kind()`, `Version()`, `Validate()`. Artifacts are the universal exchange type between storage, search, and providers.
+`internal/core/artifacts/` — typed artifacts (meeting, audio, transcript, summary) each implement `Artifact` interface with `Kind()`, `Version()`, `Validate()`. Artifacts are the universal exchange type between storage, search, and providers.
 
 ### Jobs Pipeline
 
@@ -83,11 +95,11 @@ Recording/import → job queued → AssemblyAI transcription/diarization → spe
 
 ### appsocket IPC
 
-`internal/appsocket/` — `IPCClient` connects to the capture helper via Unix domain socket. `cmd/capture` is a Go binary that wraps the macOS Swift helper. The Swift side does the actual audio capture.
+`internal/transport/appsocket/` — `IPCClient` connects to the capture helper via Unix domain socket. `cmd/capture` is a Go binary that wraps the macOS Swift helper. The Swift side does the actual audio capture.
 
 ### Event Hub for SSE
 
-`internal/service/events.go` — in-process `eventHub` for broadcasting job progress to SSE handlers and the TUI.
+`internal/app/service/events.go` — in-process `eventHub` for broadcasting job progress to SSE handlers and the TUI.
 
 ---
 
@@ -95,26 +107,26 @@ Recording/import → job queued → AssemblyAI transcription/diarization → spe
 
 | Need | Location |
 |------|----------|
-| How a CLI command works | `internal/cli/cli.go` (all `run*` methods) |
-| How TUI screens are structured | `internal/tui/screen*.go`, `root.go` |
-| How recording is triggered | `internal/service/recording.go` |
-| How STT is integrated | `internal/providers/stt/provider.go` and `internal/providers/stt/assemblyai.go` |
-| How artifacts are written/read | `internal/artifacts/artifact.go`, `internal/service/storage.go` |
-| How search index works | `internal/search/search.go` |
-| How FTS query parsing works | Read `internal/search/` carefully |
-| How jobs are queued/executed | `internal/service/jobs.go` |
-| How providers are configured | `internal/service/providers.go`, `internal/config/` |
-| How capture helper IPC works | `internal/appsocket/`, `cmd/capture/main.go` |
-| How secrets are stored | `internal/secrets/` |
-| How LLM prompts are built | `internal/prompts/`, `internal/providers/llm/` |
+| How a CLI command works | `internal/ui/cli/cli.go` (all `run*` methods) |
+| How TUI screens are structured | `internal/ui/tui/screen*.go`, `root.go` |
+| How recording is triggered | `internal/app/service/recording.go` |
+| How STT is integrated | `internal/platform/providers/stt/provider.go` and `internal/platform/providers/stt/assemblyai.go` |
+| How artifacts are written/read | `internal/core/artifacts/artifact.go`, `internal/app/service/storage.go` |
+| How search index works | `internal/platform/search/search.go` |
+| How FTS query parsing works | Read `internal/platform/search/` carefully |
+| How jobs are queued/executed | `internal/app/service/jobs.go` |
+| How providers are configured | `internal/app/service/providers.go`, `internal/platform/config/` |
+| How capture helper IPC works | `internal/transport/appsocket/`, `cmd/capture/main.go` |
+| How secrets are stored | `internal/platform/secrets/` |
+| How LLM prompts are built | `internal/platform/providers/llm/prompts/`, `internal/platform/providers/llm/` |
 
 ---
 
 ## CONVENTIONS (THIS PROJECT)
 
-- **go.mod**: module `github.com/lukasstrickler/noto`, Go 1.24.2
+- **go.mod**: module `github.com/lukasstrickler/noto`, Go 1.25 (toolchain 1.26.3)
 - **Error handling**: `notoerr.Error` type (structured, typed errors); never bare `errors.New`
-- **Config**: viper-based; defaults in `internal/config/defaults.go`
+- **Config**: viper-based; defaults in `internal/platform/config/defaults.go`
 - **Secrets**: macOS Keychain on darwin, `~/.noto/credentials.json` elsewhere
 - **Artifacts**: stored in `ConfigDir/recordings/<meeting_id>/` as JSON + companion Markdown
 - **SQLite**: two DBs — `noto.sqlite` (meetings index) and `noto-jobs.sqlite` (job queue)

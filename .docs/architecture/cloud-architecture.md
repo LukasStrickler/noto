@@ -25,7 +25,7 @@ of the remote API.
 │  └──────────────┘  └──────────────┘  └──────────────────────┘   │
 │                                                                   │
 │  ┌──────────────────────────────────────────────────────────┐    │
-│  │  ArtifactRepository (internal/repo)                      │    │
+│  │  ArtifactRepository (internal/platform/repo)                      │    │
 │  │  LocalArtifactRepository → SQLite + filesystem artifacts │    │
 │  │  Future: swap to Postgres + S3 without changing services │    │
 │  └──────────────────────────────────────────────────────────┘    │
@@ -46,7 +46,7 @@ of the remote API.
 2. **Speaker profiles are first-class.** AssemblyAI provides per-meeting diarization
    labels. The backend maintains persistent cross-meeting speaker identity via
    an embedding/matching pipeline.
-3. **Storage seam enforced.** The `ArtifactRepository` interface (`internal/repo`)
+3. **Storage seam enforced.** The `ArtifactRepository` interface (`internal/platform/repo`)
    is the only storage access point. Service methods never call the storage package
    directly. This keeps Postgres/S3 swap to one package change.
 4. **AssemblyAI for production STT.** Local model stacks are not in scope.
@@ -97,11 +97,11 @@ The backend exposes HTTP/SSE endpoints at `/v1/...`:
 
 ## ArtifactRepository Interface
 
-`internal/repo.ArtifactRepository` is the storage seam. Service methods use it
-exclusively; they do not import `internal/storage` directly.
+`internal/platform/repo.ArtifactRepository` is the storage seam. Service methods use it
+exclusively; they do not import `internal/platform/storage` directly.
 
 ```go
-// internal/repo/repo.go
+// internal/platform/repo/repo.go
 type ArtifactRepository interface {
     CreateMeeting(ctx context.Context, id uuid.UUID, opts CreateMeetingOpts) error
     GetMeeting(ctx context.Context, id uuid.UUID) (*StoredMeeting, error)
@@ -120,8 +120,8 @@ type ArtifactRepository interface {
 }
 ```
 
-**Current implementation**: `LocalArtifactRepository` in `internal/repo/local.go`,
-backed by the `internal/storage` package (SQLite + filesystem).
+**Current implementation**: `LocalArtifactRepository` in `internal/platform/repo/local.go`,
+backed by the `internal/platform/storage` package (SQLite + filesystem).
 
 **Future swap**: Implement the interface for Postgres + S3 and inject it via
 `service.Deps.Repo`. No service or handler code changes required.
@@ -150,7 +150,7 @@ Speaker profiles enable persistent cross-meeting voice identity:
 | Local (daemon) | Same machine, UDS socket | HTTP over Unix socket |
 | Remote | Remote server, TCP | HTTP over TCP with bearer token |
 
-The `notohost.Connect()` function handles discovery: checks `NOTO_API_URL` first,
+The `host.Connect()` function handles discovery: checks `NOTO_API_URL` first,
 then probes the local UDS, then starts an in-process server as last resort. The TUI
 and all CLI commands use the same `notoapi.Client` interface regardless of mode.
 
@@ -158,14 +158,14 @@ and all CLI commands use the same `notoapi.Client` interface regardless of mode.
 
 | Package | Responsibility |
 | --- | --- |
-| `internal/repo` | `ArtifactRepository` interface + `LocalArtifactRepository` |
-| `internal/storage` | Low-level filesystem R/W (used only by `repo`) |
-| `internal/service` | Business logic; uses `repo` interface, never `storage` directly |
-| `internal/server` | HTTP handlers; delegates to `service` |
-| `internal/notohost` | Server lifecycle, dep wiring, in-process vs remote dispatch |
-| `internal/apiclient` | HTTP and direct client implementations |
-| `internal/search` | SQLite FTS5 index |
-| `internal/providers` | AssemblyAI STT + OpenRouter LLM adapters |
+| `internal/platform/repo` | `ArtifactRepository` interface + `LocalArtifactRepository` |
+| `internal/platform/storage` | Low-level filesystem R/W (used only by `repo`) |
+| `internal/app/service` | Business logic; uses `repo` interface, never `storage` directly |
+| `internal/transport/server` | HTTP handlers; delegates to `service` |
+| `internal/app/host` | Server lifecycle, dep wiring, in-process vs remote dispatch |
+| `internal/transport/apiclient` | HTTP and direct client implementations |
+| `internal/platform/search` | SQLite FTS5 index |
+| `internal/platform/providers` | AssemblyAI STT + OpenRouter LLM adapters |
 | `internal/testutil` | `FakeRepo` and test helpers for unit tests |
 
 ## What Is Out of Scope

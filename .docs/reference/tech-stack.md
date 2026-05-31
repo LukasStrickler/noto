@@ -29,7 +29,7 @@ All three modes use the same `notoapi.Client` interface:
 - **No local model management.** Model selection is via `noto providers active-llm`.
 - **No distributed workers.** Single `noto serve` handles all jobs.
 - **No required hosted database for local use.** SQLite + filesystem, zero-config.
-- **Storage seam enforced.** `internal/service` imports `internal/repo` only, never `internal/storage`.
+- **Storage seam enforced.** `internal/app/service` imports `internal/platform/repo` only, never `internal/platform/storage`.
 
 ## Efficiency Rules
 

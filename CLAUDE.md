@@ -14,7 +14,7 @@ go test ./...
 
 ## TUI keybindings — single source of truth
 
-The TUI (`internal/tui`) follows one rule: **every key is defined once, and
+The TUI (`internal/ui/tui`) follows one rule: **every key is defined once, and
 every label shown in the UI is derived from that definition.** There are no
 hand-written key strings in the views — if you change a key, the chips, hint
 bars, help overlay, and command palette all update automatically.
@@ -22,7 +22,7 @@ bars, help overlay, and command palette all update automatically.
 ### Adding / renumbering a top-level screen (the 1/2/3 keys)
 
 Screen numbers are **auto-assigned** from one ordered table —
-`topScreens` in `internal/tui/screen.go`. A screen's number is its 1-based
+`topScreens` in `internal/ui/tui/screen.go`. A screen's number is its 1-based
 position in that slice, so the run can never develop a gap (the old 1/3/4 bug).
 
 To add a numbered screen:
@@ -32,7 +32,7 @@ To add a numbered screen:
    number to be**,
 3. that's it. The key binding, the global router's number handling
    (`screenNavTarget`), `buildScreen`, the command palette, and the help
-   overlay all derive from the table. `go test ./internal/tui/...` verifies
+   overlay all derive from the table. `go test ./internal/ui/tui/...` verifies
    the numbering.
 
 `screenReg` fields: `title` (short label), `palette` (long command-menu
@@ -45,7 +45,7 @@ them, and they get no number.
 
 ### Adding an action key (letters: delete, rename, jump, …)
 
-1. add a `key.Binding` field to `keys.Map` in `internal/tui/keys/keys.go`,
+1. add a `key.Binding` field to `keys.Map` in `internal/ui/tui/keys/keys.go`,
    with `key.WithKeys(...)` and `key.WithHelp(keyLabel, desc)`,
 2. handle it in the relevant screen with `key.Matches(msg, ctx.keys.Foo)` —
    never `msg.String() == "f"`,
@@ -60,7 +60,7 @@ handler and a chip so the test stays meaningful.
 
 ## TUI layout — one flex solver
 
-Pane and row/column sizing goes through **`layout.Split`** (`internal/tui/layout/layout.go`).
+Pane and row/column sizing goes through **`layout.Split`** (`internal/ui/tui/layout/layout.go`).
 Do **not** hand-roll `width/3`, `total - other - 1`, or `if h < min { h = min }`
 in a screen — describe the row as `Slot`s and let the solver do the math:
 
