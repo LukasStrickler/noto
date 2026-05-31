@@ -66,6 +66,10 @@ noto/
 └── .tools/            # local Go toolchain (gitignored)
 ```
 
+Each role group (`core`, `platform`, `app`, `transport`, `ui`) has its own
+`AGENTS.md` stating that layer's dependency rule, packages, and local
+anti-pattern — read the one for the subtree you're editing.
+
 ---
 
 ## KEY ARCHITECTURAL PATTERNS
