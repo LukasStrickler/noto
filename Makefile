@@ -16,7 +16,7 @@ GO ?= $(CURDIR)/scripts/go
 # scripts/go fallback). Keep in sync with scripts/go's GO_VERSION.
 GO_VERSION ?= 1.26.3
 HOST_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
-HOST_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/' -e 's/arm64/arm64/')
+HOST_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 
 BIN_DIR := $(CURDIR)/bin
 BIN := $(BIN_DIR)/noto

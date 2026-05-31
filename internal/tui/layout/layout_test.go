@@ -1,7 +1,11 @@
 package layout
 
 import (
+	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
+	"github.com/lukasstrickler/noto/internal/tui/theme"
 )
 
 func sum(xs []int) int {
@@ -97,6 +101,39 @@ func TestSplit_EmptyAndSingle(t *testing.T) {
 	}
 	if got := Split(50, 1, Flex(1)); len(got) != 1 || got[0] != 50 {
 		t.Fatalf("single flex = %v; want [50]", got)
+	}
+}
+
+// Panel must never exceed the cell budget the solver hands it: lipgloss
+// treats Height as a floor, so an over-tall or over-wide Body would otherwise
+// overflow the border and misalign sibling panels. Render must clip to exactly
+// Width x Height. (Pre-fix, a Height=6 panel with a 50-line body rendered 54
+// lines.) Guards the border-box clipping in Render.
+func TestPanel_RenderClipsToBudget(t *testing.T) {
+	st := theme.NewStyles()
+	tallBody := strings.TrimRight(strings.Repeat("line\n", 50), "\n")
+	wideBody := strings.Repeat("x", 200)
+
+	cases := []struct {
+		name         string
+		panel        Panel
+		wantW, wantH int
+	}{
+		{"over-tall body with title", Panel{Width: 24, Height: 6, Title: "T", Body: tallBody}, 24, 6},
+		{"over-tall body no title", Panel{Width: 24, Height: 6, Body: tallBody}, 24, 6},
+		{"over-wide body", Panel{Width: 24, Height: 5, Body: wideBody}, 24, 5},
+		{"fits exactly", Panel{Width: 24, Height: 5, Body: "a\nb"}, 24, 5},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := c.panel.Render(st)
+			if got := lipgloss.Width(out); got != c.wantW {
+				t.Errorf("rendered width = %d; want %d (must not overflow panel width)", got, c.wantW)
+			}
+			if got := lipgloss.Height(out); got != c.wantH {
+				t.Errorf("rendered height = %d; want %d (must not overflow panel height)", got, c.wantH)
+			}
+		})
 	}
 }
 

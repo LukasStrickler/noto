@@ -263,8 +263,25 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *rootModel) View() tea.View {
+	// v2 moves terminal feature flags from program options onto the View,
+	// and the renderer diffs them every frame — so they must be set on EVERY
+	// path View returns. We set them here, once, and let content() decide
+	// only *what* to draw. If a return path left these unset (as the
+	// too-small-terminal fallback used to), Bubble Tea would leave the
+	// alternate screen and disable the mouse on that frame, dumping the
+	// fallback into the user's scrollback until the next normal-sized frame.
+	v := tea.NewView(m.content())
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+// content renders the frame body. It returns only the string to draw; the
+// terminal feature flags are owned by View so they can't drift between the
+// normal and fallback paths.
+func (m *rootModel) content() string {
 	if m.width < 30 || m.height < 10 {
-		return tea.NewView(m.styles.Muted.Render("noto needs a wider terminal\n"))
+		return m.styles.Muted.Render("noto needs a wider terminal\n")
 	}
 	header := m.renderHeader()
 	body := m.top().view(m.screenCtx())
@@ -284,13 +301,7 @@ func (m *rootModel) View() tea.View {
 	if m.palette != nil {
 		content = m.palette.view(m.width, m.height, m.styles, content)
 	}
-
-	// v2 moves terminal feature flags onto the view (they were program
-	// options in v1). Declare alt-screen + cell-motion mouse here.
-	v := tea.NewView(content)
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
-	return v
+	return content
 }
 
 func (m *rootModel) renderHeader() string {

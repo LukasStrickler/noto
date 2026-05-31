@@ -22,6 +22,35 @@ func testRootModel() *rootModel {
 	}
 }
 
+// View must declare alt-screen + cell-motion mouse on EVERY frame, including
+// the too-small-terminal fallback. In v2 these are per-View flags the renderer
+// diffs each frame; a frame that left them unset (the old fallback did) would
+// make Bubble Tea exit the alternate screen and disable the mouse mid-session
+// — e.g. the instant the user shrinks the window below the minimum size, the
+// fallback message would spill into their scrollback. Regression guard.
+func TestViewKeepsTerminalModesAtEverySize(t *testing.T) {
+	sizes := []struct {
+		name string
+		w, h int
+	}{
+		{"normal", 100, 30},
+		{"too small", 20, 5},
+	}
+	for _, sz := range sizes {
+		t.Run(sz.name, func(t *testing.T) {
+			m := testRootModel()
+			m.width, m.height = sz.w, sz.h
+			v := m.View()
+			if !v.AltScreen {
+				t.Errorf("AltScreen = false at %dx%d; want alt-screen on every frame", sz.w, sz.h)
+			}
+			if v.MouseMode != tea.MouseModeCellMotion {
+				t.Errorf("MouseMode = %v at %dx%d; want MouseModeCellMotion on every frame", v.MouseMode, sz.w, sz.h)
+			}
+		})
+	}
+}
+
 func TestHelpOverlayEscapeCloses(t *testing.T) {
 	m := testRootModel()
 	m.helpOpen = true

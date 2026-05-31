@@ -79,7 +79,19 @@ func (p Panel) Render(s theme.Styles) string {
 	if boxH < 3 {
 		boxH = 3
 	}
-	return style.Width(p.Width).Height(boxH).Render(rendered)
+	// Clip the content to the inner height (box height minus the two border
+	// rows) so an over-tall Body can't push the panel past the height the
+	// layout solver handed it and misalign sibling panels — lipgloss treats
+	// Height as a floor, not a ceiling, so without this a tall Body overflows
+	// the border. MaxWidth/MaxHeight backstop any width-wrap expansion. All
+	// three are no-ops when the content already fits, so well-sized panels
+	// render byte-for-byte as before.
+	if innerH := boxH - 2; len(rendered) > 0 {
+		if lines := strings.Split(rendered, "\n"); len(lines) > innerH {
+			rendered = strings.Join(lines[:max(1, innerH)], "\n")
+		}
+	}
+	return style.Width(p.Width).Height(boxH).MaxWidth(p.Width).MaxHeight(boxH).Render(rendered)
 }
 
 // HStack lays children side-by-side with a single-cell gap. The gap here
