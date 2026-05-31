@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/keys"
@@ -96,7 +96,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// Help overlay takes everything.
 		if m.helpOpen {
 			if isEscapeKey(msg) || key.Matches(msg, m.keys.Help) || key.Matches(msg, m.keys.Back) || key.Matches(msg, m.keys.Quit) {
@@ -262,9 +262,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *rootModel) View() string {
+func (m *rootModel) View() tea.View {
 	if m.width < 30 || m.height < 10 {
-		return m.styles.Muted.Render("noto needs a wider terminal\n")
+		return tea.NewView(m.styles.Muted.Render("noto needs a wider terminal\n"))
 	}
 	header := m.renderHeader()
 	body := m.top().view(m.screenCtx())
@@ -277,14 +277,20 @@ func (m *rootModel) View() string {
 		row = m.renderBanner()
 	}
 
-	view := lipgloss.JoinVertical(lipgloss.Left, header, body, row, status)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, body, row, status)
 	if m.helpOpen {
-		view = m.renderHelpOverlay(view)
+		content = m.renderHelpOverlay(content)
 	}
 	if m.palette != nil {
-		view = m.palette.view(m.width, m.height, m.styles, view)
+		content = m.palette.view(m.width, m.height, m.styles, content)
 	}
-	return view
+
+	// v2 moves terminal feature flags onto the view (they were program
+	// options in v1). Declare alt-screen + cell-motion mouse here.
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
 }
 
 func (m *rootModel) renderHeader() string {
@@ -487,18 +493,19 @@ func def(s, d string) string {
 
 // --- helpers ---
 
-func isEscapeKey(msg tea.KeyMsg) bool {
-	return msg.Type == tea.KeyEsc || msg.String() == "esc" || msg.String() == "escape"
+func isEscapeKey(msg tea.KeyPressMsg) bool {
+	return msg.Code == tea.KeyEscape
 }
 
-// overlayCenter composites a box over a terminal-sized view by:
-//   - dimming the underlying view (ANSI-strip + faint muted re-render)
-//   - centering the box and pasting its rows over the dimmed under
-//     such that any cells outside the box keep the dimmed under text
+// overlayCenter composites a pre-styled box centered over a
+// terminal-sized view. The background is dimmed (ANSI-stripped, then
+// re-rendered faint) so the box reads as the foreground; the box keeps
+// its own border/colors.
 //
-// The box itself comes pre-styled (with its own border, colors, etc.)
-// and is rendered as-is so its content stays readable on top of the
-// muted background.
+// lipgloss v2 does the compositing: a Compositor positions the box layer
+// at (left, top) on top of the full-size background layer, drawn onto an
+// explicit w×h Canvas. (Canvas.Compose alone ignores a layer's X/Y — only
+// a Compositor applies per-layer offsets — so the box goes through one.)
 func overlayCenter(under, box string, w, h int) string {
 	bw := lipgloss.Width(box)
 	bh := lipgloss.Height(box)
@@ -512,31 +519,14 @@ func overlayCenter(under, box string, w, h int) string {
 	top := max(0, (h-bh)/2)
 
 	dimStyle := lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("#475569"))
-	boxLines := strings.Split(box, "\n")
-	underLines := strings.Split(under, "\n")
+	dimmed := dimStyle.Render(ansi.Strip(under))
 
-	out := make([]string, len(underLines))
-	for i, line := range underLines {
-		stripped := ansi.Strip(line)
-		// Pad to terminal width so cell math works.
-		if cw := lipgloss.Width(stripped); cw < w {
-			stripped += strings.Repeat(" ", w-cw)
-		}
-		dimmed := dimStyle.Render(stripped)
-		if i < top || i >= top+bh {
-			out[i] = dimmed
-			continue
-		}
-		// Box row: keep dimmed under on the sides, box content in the
-		// middle. ansi.Cut takes a cell range over a string that may
-		// contain ANSI.
-		boxRow := boxLines[i-top]
-		leftPart := dimStyle.Render(ansi.Cut(stripped, 0, left))
-		rightStart := left + bw
-		rightPart := dimStyle.Render(ansi.Cut(stripped, rightStart, w))
-		out[i] = leftPart + boxRow + rightPart
-	}
-	return strings.Join(out, "\n")
+	return lipgloss.NewCanvas(w, h).
+		Compose(lipgloss.NewCompositor(
+			lipgloss.NewLayer(dimmed),                  // z=0: dimmed background
+			lipgloss.NewLayer(box).X(left).Y(top).Z(1), // z=1: centered box on top
+		)).
+		Render()
 }
 
 // --- screen factory ---

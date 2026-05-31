@@ -3,22 +3,29 @@
 // color, strong borders, dim secondary text.
 package theme
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"image/color"
 
+	"charm.land/lipgloss/v2"
+)
+
+// Theme holds the color palette. In lipgloss v2, lipgloss.Color is a
+// constructor func returning the stdlib color.Color interface (not a string
+// type as in v1), so these palette fields hold color.Color values.
 type Theme struct {
-	Primary    lipgloss.Color
-	Secondary  lipgloss.Color
-	Muted      lipgloss.Color
-	Background lipgloss.Color
-	Surface    lipgloss.Color
-	Danger     lipgloss.Color
-	Warning    lipgloss.Color
-	Success    lipgloss.Color
-	Info       lipgloss.Color
+	Primary    color.Color
+	Secondary  color.Color
+	Muted      color.Color
+	Background color.Color
+	Surface    color.Color
+	Danger     color.Color
+	Warning    color.Color
+	Success    color.Color
+	Info       color.Color
 
-	SpeakerA lipgloss.Color
-	SpeakerB lipgloss.Color
-	SpeakerC lipgloss.Color
+	SpeakerA color.Color
+	SpeakerB color.Color
+	SpeakerC color.Color
 }
 
 // Dark is the default theme. Built for terminals that respect

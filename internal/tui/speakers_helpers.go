@@ -1,10 +1,11 @@
 package tui
 
 import (
+	"image/color"
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/layout"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
@@ -155,21 +156,21 @@ func shareBar(st theme.Styles, share float64, width, colorIdx int) string {
 	if filled < 1 && share > 0 {
 		filled = 1
 	}
-	color := speakerColorForIndex(st.T, colorIdx)
-	fillStyle := lipgloss.NewStyle().Foreground(color)
+	c := speakerColorForIndex(st.T, colorIdx)
+	fillStyle := lipgloss.NewStyle().Foreground(c)
 	return fillStyle.Render(strings.Repeat("█", filled)) + st.Muted.Render(strings.Repeat("·", width-filled))
 }
 
 // speakerExtra extends SpeakerA/B/C with three more identity hues for
 // meetings with 4–6 speakers. Picked to stay clear of the status
 // palette (info blue, success green, warning amber).
-var speakerExtra = []lipgloss.Color{
+var speakerExtra = []color.Color{
 	lipgloss.Color("#fda4af"), // rose-300, peachy pink
 	lipgloss.Color("#93c5fd"), // sky-300, pale blue distinct from Info
 	lipgloss.Color("#fde047"), // sand, distinct from Warning amber
 }
 
-func speakerColorForIndex(t theme.Theme, idx int) lipgloss.Color {
+func speakerColorForIndex(t theme.Theme, idx int) color.Color {
 	switch idx % 6 {
 	case 0:
 		return t.SpeakerA

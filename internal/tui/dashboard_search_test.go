@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/keys"
@@ -35,7 +35,7 @@ func TestSearchInputTabAdvancesWithinCurrentMeeting(t *testing.T) {
 	}
 	m.pane.setQuery("may")
 
-	_, _ = m.handleKey(testScreenCtx(), tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = m.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: tea.KeyTab})
 
 	if m.cursor != 0 {
 		t.Fatalf("cursor moved to meeting %d; want current meeting", m.cursor)
@@ -61,7 +61,7 @@ func TestSearchInputTabMovesToNextMeetingAfterLastMatch(t *testing.T) {
 	m.pane.setQuery("may")
 	m.pane.setActiveMatchSegmentID("s2")
 
-	_, _ = m.handleKey(testScreenCtx(), tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = m.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: tea.KeyTab})
 
 	if m.cursor != 1 {
 		t.Fatalf("cursor = %d; want next meeting", m.cursor)
@@ -82,7 +82,7 @@ func TestSearchInputEnterOpensPaneOnActiveTranscriptHit(t *testing.T) {
 	}
 	m.pane.setQuery("may")
 
-	_, _ = m.handleKey(testScreenCtx(), tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = m.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if m.inputFocus {
 		t.Fatal("inputFocus = true; want search input blurred")
@@ -101,7 +101,7 @@ func TestSearchInputEnterOpensPaneOnActiveTranscriptHit(t *testing.T) {
 func TestSearchInputEscapeReturnsToList(t *testing.T) {
 	m := dashboardWithSearchMatches()
 
-	_, _ = m.handleKey(testScreenCtx(), tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = m.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if m.inputFocus {
 		t.Fatal("inputFocus = true; want search input blurred")
@@ -204,10 +204,10 @@ func TestDetailPaneTKShortcutsSwitchTabs(t *testing.T) {
 	d := newDetailPane()
 	d.id_ = "m1"
 
-	if handled, _ := d.handleKey(testScreenCtx(), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")}); !handled || d.tab != tabTranscript {
+	if handled, _ := d.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: 't', Text: "t"}); !handled || d.tab != tabTranscript {
 		t.Fatalf("t: handled=%v tab=%v; want true / transcript", handled, d.tab)
 	}
-	if handled, _ := d.handleKey(testScreenCtx(), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")}); !handled || d.tab != tabSpeakers {
+	if handled, _ := d.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: 'k', Text: "k"}); !handled || d.tab != tabSpeakers {
 		t.Fatalf("k: handled=%v tab=%v; want true / speakers", handled, d.tab)
 	}
 }
@@ -219,7 +219,7 @@ func TestDetailPaneNumberKeysNoLongerSwitchTabs(t *testing.T) {
 	d := newDetailPane()
 	d.id_ = "m1"
 	for _, n := range []string{"1", "2", "3", "4", "5", "6", "7"} {
-		if handled, _ := d.handleKey(testScreenCtx(), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(n)}); handled {
+		if handled, _ := d.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: []rune(n)[0], Text: n}); handled {
 			t.Fatalf("pane handled number key %q; want it to fall through", n)
 		}
 	}
@@ -230,7 +230,7 @@ func TestDashboardListAgentHandoffPushesAgentScreen(t *testing.T) {
 	m.loading = false
 	m.all = []notoapi.Meeting{{ID: "m1", Title: "Planning"}}
 
-	_, cmd := m.handleKey(testScreenCtx(), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	_, cmd := m.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
 		t.Fatal("`a` produced no command; want a push to the agent screen")
 	}

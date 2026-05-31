@@ -5,10 +5,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/layout"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
@@ -209,13 +209,13 @@ func (m *dashboardScreen) update(ctx screenCtx, msg tea.Msg) (screen, tea.Cmd) {
 		// through the detail pane.
 		return m, m.pane.update(ctx, msg)
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(ctx, v)
 	}
 	return m, nil
 }
 
-func (m *dashboardScreen) handleKey(ctx screenCtx, v tea.KeyMsg) (screen, tea.Cmd) {
+func (m *dashboardScreen) handleKey(ctx screenCtx, v tea.KeyPressMsg) (screen, tea.Cmd) {
 	// Filter has focus: text input + a few escape-hatch keys.
 	if m.inputFocus {
 		switch v.String() {

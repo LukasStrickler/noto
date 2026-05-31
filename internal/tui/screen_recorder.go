@@ -2,12 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/layout"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
@@ -119,7 +120,7 @@ func (r *recorderScreen) update(ctx screenCtx, msg tea.Msg) (screen, tea.Cmd) {
 		case v.Event.Kind == notoapi.EventMeter && v.Event.Meter != nil:
 			r.pushSample(v.Event.Meter.MicDB, v.Event.Meter.ParticipantDB)
 		}
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if r.titleFocus {
 			switch v.String() {
 			case "esc", "enter":
@@ -317,20 +318,20 @@ func renderWaveLane(s theme.Styles, label string, current, peak int, clip bool, 
 		bars[pad+i] = rune(glyphs[bucket])
 	}
 
-	var color lipgloss.Color
+	var laneColor color.Color
 	switch channelIdx {
 	case 0:
-		color = s.T.Primary
+		laneColor = s.T.Primary
 	case 1:
-		color = s.T.Secondary
+		laneColor = s.T.Secondary
 	default:
-		color = s.T.Info
+		laneColor = s.T.Info
 	}
 	if current >= -6 {
-		color = s.T.Danger
+		laneColor = s.T.Danger
 	}
 
-	bar := lipgloss.NewStyle().Foreground(color).Render(string(bars))
+	bar := lipgloss.NewStyle().Foreground(laneColor).Render(string(bars))
 	level := s.Muted.Render(fmt.Sprintf("%+3d dB", current))
 	peakStr := s.Muted.Render(fmt.Sprintf("peak %+3d", peak))
 	readout := level + "  " + peakStr

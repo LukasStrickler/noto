@@ -3,8 +3,8 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
 )
@@ -37,7 +37,7 @@ func newPalette(_ notoapi.Client, entries []paletteEntry) *palette {
 
 func (p *palette) update(msg tea.Msg, _ theme.Styles) (*palette, tea.Cmd) {
 	switch m := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch m.String() {
 		case "esc":
 			return nil, nil

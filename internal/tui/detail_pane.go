@@ -3,13 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
 )
@@ -235,7 +236,7 @@ func (d *detailPane) update(ctx screenCtx, msg tea.Msg) tea.Cmd {
 
 // handleKey processes a key when the pane has focus. Returns (handled,
 // cmd) so the host can fall through to its own bindings when false.
-func (d *detailPane) handleKey(ctx screenCtx, k tea.KeyMsg) (bool, tea.Cmd) {
+func (d *detailPane) handleKey(ctx screenCtx, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	// Rename editor takes priority over every other key on the Speakers tab.
 	if d.editorOpen {
 		switch k.String() {
@@ -613,7 +614,7 @@ func (d *detailPane) colorizeSpeakerNames(s theme.Styles, text string) string {
 	}
 	type spName struct {
 		name  string
-		color lipgloss.Color
+		color color.Color
 	}
 	names := make([]spName, 0, len(d.speakers))
 	for _, sp := range d.speakers {

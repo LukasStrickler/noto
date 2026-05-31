@@ -5,7 +5,7 @@
 // label everywhere. There are no hand-written key strings in the views.
 package keys
 
-import "github.com/charmbracelet/bubbles/key"
+import "charm.land/bubbles/v2/key"
 
 type Map struct {
 	// Universal — available on every screen (unless a text input has

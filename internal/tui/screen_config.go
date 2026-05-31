@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/keys"
 	"github.com/lukasstrickler/noto/internal/tui/layout"
@@ -141,7 +141,7 @@ func (c *configScreen) update(ctx screenCtx, msg tea.Msg) (screen, tea.Cmd) {
 			ternary(v.Result.OK, "ok", "failed"),
 			v.Result.LatencyMS)
 		return c, func() tea.Msg { return bannerMsg{Kind: "info", Text: text} }
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if c.keyEdit {
 			return c.updateKeyInput(ctx, v)
 		}
@@ -150,7 +150,7 @@ func (c *configScreen) update(ctx screenCtx, msg tea.Msg) (screen, tea.Cmd) {
 	return c, nil
 }
 
-func (c *configScreen) updateKeyInput(ctx screenCtx, v tea.KeyMsg) (screen, tea.Cmd) {
+func (c *configScreen) updateKeyInput(ctx screenCtx, v tea.KeyPressMsg) (screen, tea.Cmd) {
 	switch v.String() {
 	case "esc":
 		c.keyEdit = false
@@ -169,7 +169,7 @@ func (c *configScreen) updateKeyInput(ctx screenCtx, v tea.KeyMsg) (screen, tea.
 	return c, cmd
 }
 
-func (c *configScreen) updateKey(ctx screenCtx, v tea.KeyMsg) (screen, tea.Cmd) {
+func (c *configScreen) updateKey(ctx screenCtx, v tea.KeyPressMsg) (screen, tea.Cmd) {
 	// Left/right + tab toggle pane focus. Up/down move within the
 	// focused pane.
 	switch {
@@ -231,7 +231,7 @@ func (c *configScreen) activeRouteRows() []routeRow {
 	}
 }
 
-func (c *configScreen) handleActiveKey(ctx screenCtx, v tea.KeyMsg) (screen, tea.Cmd) {
+func (c *configScreen) handleActiveKey(ctx screenCtx, v tea.KeyPressMsg) (screen, tea.Cmd) {
 	if !key.Matches(v, ctx.keys.Enter) {
 		return c, nil
 	}
@@ -311,7 +311,7 @@ func (c *configScreen) keyProviders() []notoapi.ProviderInfo {
 	return out
 }
 
-func (c *configScreen) handleAPIKeyKey(ctx screenCtx, v tea.KeyMsg) (screen, tea.Cmd) {
+func (c *configScreen) handleAPIKeyKey(ctx screenCtx, v tea.KeyPressMsg) (screen, tea.Cmd) {
 	rows := c.keyProviders()
 	if len(rows) == 0 {
 		return c, nil

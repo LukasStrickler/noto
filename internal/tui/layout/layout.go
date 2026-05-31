@@ -6,7 +6,7 @@ package layout
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
 )
 
@@ -71,11 +71,15 @@ func (p Panel) Render(s theme.Styles) string {
 		body = " "
 	}
 	rendered := header + body
-	h := p.Height - 2
-	if h < 1 {
-		h = 1
+	// lipgloss v2 uses a border-box model: Width/Height set the TOTAL
+	// rendered size, border and padding included (v1 added them outside
+	// the given size). So pass the full panel dimensions — the content
+	// area then works out to innerW (p.Width - 2 border - 2 padding).
+	boxH := p.Height
+	if boxH < 3 {
+		boxH = 3
 	}
-	return style.Width(p.Width - 2).Height(h).Render(rendered)
+	return style.Width(p.Width).Height(boxH).Render(rendered)
 }
 
 // HStack lays children side-by-side with a single-cell gap. The gap here

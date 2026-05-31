@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/lukasstrickler/noto/internal/tui/keys"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
@@ -26,7 +26,7 @@ func TestHelpOverlayEscapeCloses(t *testing.T) {
 	m := testRootModel()
 	m.helpOpen = true
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	got := updated.(*rootModel)
 
 	if got.helpOpen {
@@ -38,7 +38,7 @@ func TestPaletteEscapeCloses(t *testing.T) {
 	m := testRootModel()
 	m.palette = newPalette(nil, []paletteEntry{{Label: "Dashboard", Action: "goto", Param: string(sDashboard)}})
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	got := updated.(*rootModel)
 
 	if got.palette != nil {
@@ -52,7 +52,7 @@ func TestPaletteEscapeCloses(t *testing.T) {
 // its 1-based position in topScreens, and the router maps that key back
 // to the same screen.
 func TestScreenNavNumberingIsContiguous(t *testing.T) {
-	press := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+	press := func(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: []rune(s)[0], Text: s} }
 	for i, sc := range topScreens {
 		num := strconv.Itoa(i + 1)
 		b := sc.navBinding(i)
@@ -75,7 +75,7 @@ func TestScreenNavNumberingIsContiguous(t *testing.T) {
 func TestHelpOverlayDerivesKeysFromBindings(t *testing.T) {
 	m := testRootModel()
 	m.helpOpen = true
-	help := ansi.Strip(m.View())
+	help := ansi.Strip(m.View().Content)
 
 	bindings := append(screenNavBindings(),
 		m.keys.Record, m.keys.Stop, m.keys.Marker, m.keys.EditTitle,

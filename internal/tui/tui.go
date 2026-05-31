@@ -17,7 +17,7 @@ import (
 	"context"
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 )
 
@@ -28,10 +28,9 @@ func Run(ctx context.Context, client notoapi.Client) error {
 		return fmt.Errorf("tui: client is nil")
 	}
 	model := newRootModel(ctx, client)
-	prog := tea.NewProgram(model,
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
+	// v2: alt-screen and mouse mode are declared on the View
+	// (see rootModel.View), not as program options.
+	prog := tea.NewProgram(model)
 	go func() {
 		<-ctx.Done()
 		prog.Quit()

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"github.com/lukasstrickler/noto/internal/notoapi"
 	"github.com/lukasstrickler/noto/internal/tui/keys"
 	"github.com/lukasstrickler/noto/internal/tui/theme"
@@ -83,7 +83,7 @@ func screenNavBindings() []key.Binding {
 
 // screenNavTarget returns the numbered screen a key selects, or "" if the
 // key isn't a screen-nav key.
-func screenNavTarget(msg tea.KeyMsg) screenID {
+func screenNavTarget(msg tea.KeyPressMsg) screenID {
 	for i, sc := range topScreens {
 		if key.Matches(msg, sc.navBinding(i)) {
 			return sc.id
