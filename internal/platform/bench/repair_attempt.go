@@ -155,6 +155,7 @@ func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold 
 	}
 
 	var outcomes []corebench.RepairOutcome
+	var accepted []appliedRepair
 	attempted := 0
 	for _, span := range plan.Attempt {
 		repl, cost, err := dec.ReDecode(h.Key(), span.StartSec, span.EndSec, method)
@@ -162,10 +163,38 @@ func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold 
 			continue // a failed re-decode is skipped, never crashes the run (§B2.6)
 		}
 		attempted++
-		m := MeasureSplice(ref, h.Words, span.StartSec, span.EndSec, repl)
-		outcomes = append(outcomes, m.Outcome(span, method, cost))
+		// Decide accept/reject on the SPAN-LOCAL WER/cpWER (sensitive); a single-word
+		// fix moves whole-transcript WER by ~1/N and rounds to nothing (§10.4).
+		m := MeasureSpliceLocal(ref, h.Words, span.StartSec, span.EndSec, repl)
+		o := m.Outcome(span, method, cost)
+		outcomes = append(outcomes, o)
+		if o.Accepted {
+			accepted = append(accepted, appliedRepair{startSec: span.StartSec, endSec: span.EndSec, repl: repl})
+		}
 	}
-	return corebench.BuildRepairReport(plan, outcomes), attempted, true
+
+	rep := corebench.BuildRepairReport(plan, outcomes)
+	// The reported KPI delta is the TRUE whole-transcript move from applying EVERY
+	// accepted edit together and re-scoring once — not the sum of per-span local
+	// deltas (different denominators). This is the "with vs without repair" number.
+	if len(accepted) > 0 {
+		after := h.Words
+		for _, a := range accepted {
+			after = spliceHypWords(after, a.startSec, a.endSec, a.repl)
+		}
+		agg := measureWhole(ref, h.Words, after)
+		rep.NetWERDelta = agg.WERDelta
+		rep.NetEntityDelta = agg.CpWERDelta
+	}
+	return rep, attempted, true
+}
+
+// appliedRepair is one accepted span edit, kept so the meeting's whole-transcript KPI
+// delta is measured from all edits applied together rather than summed per span.
+type appliedRepair struct {
+	startSec float64
+	endSec   float64
+	repl     []HypWord
 }
 
 // loadRefMeeting loads a meeting's reference words + diarization turns into the shape

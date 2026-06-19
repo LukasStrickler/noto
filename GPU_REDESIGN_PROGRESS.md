@@ -115,15 +115,34 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     negative → **B7 gate correctly FAILS** ("no net improvement") because both runs share the identical
     greedy bf16 decode → identical spliced words → zero WER change. The machine is correct and does NOT
     fabricate a benefit. `repair_redecode_test.go` (3 tests). Full suite green, vet clean.
-  - **NEXT — ONE cheap alternate-decode GPU run to get the first POSITIVE number:** `noto bench run
-    --suite gate_ami --knob nemo_precision=fp32` (no confidence needed on the alt; baseline 2f6cc5 already
-    has it), then `noto bench repair-attempt --run 20260619T115608Z-2f6cc5 --alt-run <new-fp32-run>` →
-    first real WER delta on ES2011b's 103 spans. fp32 is the zero-risk, already-wired alternate;
-    EXPECTATION is the benefit is small (greedy TDT is near-deterministic across precision), which would
-    empirically justify the bigger lever: **add beam/maes decode to the parakeet STT server** (Python,
-    ~30-40 lines, guard-revert-to-greedy like the confidence path) as the real error-fixing alternate.
-    Then: overlap separation pass (same MeasureSplice on cpWER/DER), cheap production overlap detector, B8
-    production write behind the passing B7 gate.
+  - **DONE (this iter) — fp32 alternate GPU run + corrected the per-span measure + EMPIRICAL result.**
+    Ran `gate_ami --knob nemo_precision=fp32` → run `20260619T205305Z-ef90ba` ($/hr 0.0262, busy 57%).
+    `repair-attempt(2f6cc5, ef90ba)` → **0 accepted, net WER Δ 0** on ES2011b's 103 spans, targeted cost
+    $0.0002. Investigated: a positional diff suggested 2211/3955 words "differ" but that was a SHIFT
+    artifact from minor word-segmentation in the pre-reference 5–31s region; **in every ref-covered
+    low-conf span, bf16 and fp32 produce IDENTICAL text.** So the cheap same-model precision-alternate
+    buys **zero** — greedy TDT is deterministic on content across precision. (Earlier-iter claim that fp32
+    "differs substantially" was wrong; this is the correction.)
+  - **DONE (this iter) — fixed the real design flaw the GPU run exposed:** per-span accept/reject was
+    scored on WHOLE-transcript WER (`errors/RefLen` over ~3000 words → a 1-word fix moves it ~1/3000,
+    `round4`+0.0005-threshold → always a wash). New `MeasureSpliceLocal` scores the span-LOCAL WER/cpWER
+    (only ref+hyp words inside the span) for the DECISION — a 1-word fix in a 3-word span = WER Δ 0.33.
+    `attemptMeeting` now decides on local deltas but reports the TRUE whole-transcript aggregate
+    (`measureWhole`: apply EVERY accepted edit, re-score once) as NetWERDelta — the honest with/without
+    number, not a sum of differently-denominated per-span deltas. Tests: local-sensitivity vs whole
+    (200-word fixture), run-pair disk-load fixture. Verified the machine accepts a real correction
+    (unit test) and correctly washes identical input (the live fp32 result). Full suite green, vet clean.
+  - **NEXT — the only path to a POSITIVE number is a genuinely different DECODE, not a precision change:**
+    add **beam/maes decode** to the parakeet STT server (`scripts/parakeet_stt_server.py`, ~30-40 lines:
+    snapshot decoding cfg → `change_decoding_strategy(strategy="maes"|"beam", beam_size=N)` → transcribe →
+    revert, guarded like the confidence path so a TDT-beam failure degrades to greedy, never crashes).
+    Wire a `decode`/`redecode` knob (`modal_runner.go` knobLauncherEnv → `BENCH_PARAKEET_DECODE` →
+    `NOTO_PARAKEET_DECODE`). Then ONE `gate_ami --knob decode=beam` run → `repair-attempt(2f6cc5,
+    <beam-run>)` → first real positive WER delta (greedy→beam genuinely re-ranks hypotheses, so it CAN fix
+    the low-conf spans fp32 can't). RISK: NeMo TDT beam may be unsupported/slow — the revert-guard makes a
+    failed run degrade cleanly; validate offline-impossible, so write carefully then ONE bounded run.
+    After that: overlap separation pass (same MeasureSplice path on cpWER/DER), cheap production overlap
+    detector, B8 production write behind the passing B7 gate.
 
 ## Leads / findings (verify before acting)
 

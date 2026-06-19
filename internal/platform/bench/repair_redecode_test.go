@@ -1,7 +1,10 @@
 package bench
 
 import (
+	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 
 	corebench "github.com/lukasstrickler/noto/internal/core/bench"
@@ -39,6 +42,59 @@ func TestRunReDecoder_UnknownMeetingErrors(t *testing.T) {
 	dec := &runReDecoder{alt: map[string][]HypWord{"M": nil}}
 	if _, _, err := dec.ReDecode("OTHER", 0, 1, corebench.MethodAlternateDecode); err == nil {
 		t.Fatal("re-decoding a meeting the alternate run never saw must error, not return empty")
+	}
+}
+
+// newRunReDecoder loads an alternate run's hyps from disk and prices re-decode from
+// its trace_summary — the file-loading path the CLI actually exercises.
+func TestNewRunReDecoder_LoadsHypsAndSTTRateFromDisk(t *testing.T) {
+	dir := t.TempDir()
+	hypDir := filepath.Join(dir, "hyps")
+	if err := os.MkdirAll(hypDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSONFixture(t, filepath.Join(hypDir, "M.json"), MeetingHyp{
+		MeetingID: "M", AudioSec: 100,
+		Words: []HypWord{
+			{Text: "the", Start: 0, End: 1, Speaker: "A"},
+			{Text: "quick", Start: 1, End: 2, Speaker: "A"},
+			{Text: "fox", Start: 2, End: 3, Speaker: "A"},
+		},
+	})
+	// asr $0.05 over 100 audio-sec → $0.0005/audio-sec STT-only.
+	writeJSONFixture(t, filepath.Join(dir, "trace_summary.json"), corebench.TraceSummary{
+		PerMeeting: []corebench.PerMeetingTrace{
+			{MeetingID: "M", AudioSec: 100, USDByStage: map[string]float64{"asr": 0.05}},
+		},
+	})
+
+	dec, err := newRunReDecoder(dir)
+	if err != nil {
+		t.Fatalf("newRunReDecoder: %v", err)
+	}
+	if math.Abs(dec.sttCostPerAudioSec-0.0005) > 1e-9 {
+		t.Errorf("STT rate = %v, want 0.0005 (asr/audio)", dec.sttCostPerAudioSec)
+	}
+	words, cost, err := dec.ReDecode("M", 1, 2, corebench.MethodAlternateDecode)
+	if err != nil {
+		t.Fatalf("ReDecode: %v", err)
+	}
+	if len(words) != 1 || words[0].Text != "quick" {
+		t.Errorf("expected the one midpoint-in-span word, got %+v", words)
+	}
+	if math.Abs(cost-0.0005) > 1e-9 { // 1 audio-sec × rate
+		t.Errorf("cost = %v, want 0.0005", cost)
+	}
+}
+
+func writeJSONFixture(t *testing.T, path string, v any) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
