@@ -89,13 +89,18 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     run's $/audio-hr. **Live on the real 20-meeting run: hard-overlap 11.3% of speech, but 33% of all DER
     error is in those regions → targeted +5.7% of cost addresses a third of diarization error vs +50%
     blanket (8.8× cheaper).** That ratio greenlights building the separation pass.
-  - **NEXT:** (2) B7 transcription attempt+measure: re-decode bottom-decile spans (GPU), splice, score
-    BENCHMARK WER delta (not confidence) → real `RepairReport`. (3) the overlap separation pass itself
-    (GPU): separate+re-transcribe the flagged overlap regions, splice, measure BENCHMARK cpWER/DER delta —
-    accept only if it improves (same benchmark-gated discipline as B7). (4) cheap production overlap
-    DETECTOR (energy/VAD on the system channel) → what fires the separation pass live. Both (2) and (3)
-    need a greenlit GPU run; the GPU-free gates (calibration admissible, repair ceiling ~40%, overlap
-    addressable ~33%) all now say the accuracy is there to recover.
+  - **DONE (commit 108f7c0):** the benchmark-measured repair SPINE both GPU passes share —
+    `core/bench/splice.go` (`SpliceSpan` substitute-a-re-decode + `OutcomeFromDeltas` accept/wash/regress
+    rule) + `platform/bench/repair_measure.go` (`MeasureSplice`: real WER+cpWER before/after vs reference,
+    whole-transcript re-scored so seam errors are charged). Closes the B7 attempt+measure loop EXCEPT the
+    GPU re-decode: the loop is `plan.Attempt → re-decode(span) → MeasureSplice → .Outcome → BuildRepairReport
+    → PassesB7Gate`, all wired and tested offline.
+  - **NEXT (needs a greenlit GPU run):** (2) the re-decode call itself — a Modal STT path that
+    re-transcribes ONE span's audio with an alternate method (alternate decode / resample / bigger model)
+    and returns `[]HypWord`; wire it into the loop above for B7. (3) the overlap separation pass (separate
+    + re-transcribe flagged overlap regions, same `MeasureSplice` path on cpWER/DER). (4) cheap production
+    overlap DETECTOR (energy/VAD on the system channel) → fires the separation pass live. All GPU-free gates
+    (calibration admissible, repair ceiling ~40%, overlap addressable ~33%) say the accuracy is there.
 
 ## Leads / findings (verify before acting)
 
