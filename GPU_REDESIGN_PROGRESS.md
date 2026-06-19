@@ -141,13 +141,22 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     Wired `decode`/`beam_size` knobs (`modal_runner.go` knobLauncherEnv → `BENCH_PARAKEET_DECODE/BEAM_SIZE`;
     `modal_benchmark.py` KNOB_FORWARDS → `NOTO_PARAKEET_DECODE/BEAM_SIZE`), knob-mapping test added. Commit
     92c6c98. Python py_compile OK, full Go suite green, vet clean.
-  - **IN FLIGHT — ONE `gate_ami --knob decode=beam` validation run** (run `b2ygoc7xd`, background). When it
-    lands: `noto bench repair-attempt --run 20260619T115608Z-2f6cc5 --alt-run <beam-run>` → the first real
-    POSITIVE WER delta (beam genuinely re-ranks hypotheses, so it CAN fix the low-conf spans fp32 can't).
-    WATCH: (1) did beam preserve word timestamps? (if the beam hyps carry no words, ES2011b yields no
-    re-decode → pivot to alternate-MODEL: wire an `stt_model` knob → `NOTO_PARAKEET_MODEL`, run a bigger
-    parakeet as the alternate); (2) beam wall/cost vs greedy (keep beam_size small). After a positive
-    number: overlap separation pass (same MeasureSplice path on cpWER/DER), cheap production overlap
+  - **DONE — beam run (`20260619T211144Z-076ff4`) decoded BYTE-IDENTICAL to greedy** (0/3955 words differ).
+    Diagnosis: `NOTO_PARAKEET_DECODE=beam` DID reach the NeMo server (summary knobs confirm), but
+    `enable_beam_decode` set `decoding_cfg.compute_timestamps` — an UNKNOWN field → structured config
+    rejected → the guard silently reverted the whole beam switch to greedy. **Fixed (commit c14b05c):** set
+    only known fields (strategy, beam_size); timestamps come from `transcribe(timestamps=True)`. Whether
+    this NeMo build supports TDT `maes` beam AT ALL is still unverified — a future beam attempt must set
+    `BENCH_PARAKEET_SERVER_STDERR=1` to read the server log. Lesson: capture stderr on alternate-decode runs.
+  - **`stt_model` knob wired (commit 3390826)** — `--knob stt_model=<hf-id>` → `NOTO_PARAKEET_MODEL` (§10.5
+    alternate-ASR). Confirmed `nvidia/parakeet-tdt-1.1b` exists (TDT, ~2× the 0.6b-v3, same `timestamp['word']`
+    API). A different MODEL is GUARANTEED to produce different words (unlike fp32/failed-beam), so the repair
+    machine finally gets real signal; the accept gate keeps only edits that improve local WER.
+  - **IN FLIGHT — ONE `gate_ami --knob stt_model=nvidia/parakeet-tdt-1.1b` run** (`bx18ukpfx`, background;
+    first-time ~4.5GB model download + slower decode). When it lands: `noto bench repair-attempt --run
+    20260619T115608Z-2f6cc5 --alt-run <1.1b-run>` → the first real repair-vs-no-repair WER delta on ES2011b's
+    103 low-conf spans. EXPECT some accepts (1.1b disagrees with 0.6b-v3 on hard words; gate filters wins).
+    After the number: overlap separation pass (same MeasureSplice on cpWER/DER), cheap production overlap
     detector, B8 production write behind the passing B7 gate.
 
 ## Leads / findings (verify before acting)
