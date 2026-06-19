@@ -8,6 +8,7 @@ import (
 
 	corebench "github.com/lukasstrickler/noto/internal/core/bench"
 	platformbench "github.com/lukasstrickler/noto/internal/platform/bench"
+	"github.com/lukasstrickler/noto/internal/platform/providers/llm"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
 
@@ -558,6 +559,74 @@ func (s *Service) BenchRepairAttempt(ctx context.Context, runID, altRunID string
 		AcceptedSec:       a.Report.AcceptedSec,
 		GatePass:          a.GatePass,
 		GateReasons:       a.GateReasons,
+	}, nil
+}
+
+// BenchRepairCorrect runs the B7 attempt+measure loop using LLM/context correction
+// (§10.5) as the repair source: each low-confidence span is re-written by an LLM given
+// its surrounding transcript context, and the benchmark WER each edit moves is measured
+// against the reference. A genuinely different signal from the same-family acoustic
+// re-decode — language/grammar/entity priors, not acoustics — and it needs no GPU, only
+// a configured LLM provider. Dry-run: scores + the B7 gate, no production write.
+func (s *Service) BenchRepairCorrect(ctx context.Context, runID string) (notoapi.BenchRepairAttemptResult, error) {
+	if strings.TrimSpace(runID) == "" {
+		return notoapi.BenchRepairAttemptResult{}, notoapi.NewError(notoapi.CodeInvalidRequest, "run_id required", nil)
+	}
+	adapter, err := s.benchLLMAdapter(ctx)
+	if err != nil {
+		return notoapi.BenchRepairAttemptResult{}, err
+	}
+	corrector := platformbench.NewLLMSpanCorrector(adapter.CompleteText)
+	a, err := s.benchRunner().AttemptRepairsWithCorrector(ctx, runID, corrector, 0)
+	if err != nil {
+		return notoapi.BenchRepairAttemptResult{}, notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
+	}
+	return notoapi.BenchRepairAttemptResult{
+		SchemaVersion:     "bench_repair_attempt.v1",
+		RunID:             a.RunID,
+		Method:            a.Method,
+		MeetingsAttempted: a.MeetingsAttempted,
+		SpansAttempted:    a.SpansAttempted,
+		SpansDiffered:     a.SpansDiffered,
+		AcceptedRepairs:   a.AcceptedRepairs,
+		NegativeRepairs:   a.NegativeRepairs,
+		CostUSD:           a.CostUSD,
+		AcceptedPerUSD:    a.AcceptedPerUSD,
+		NegativeRate:      a.NegativeRate,
+		NetWERDelta:       a.NetWERDelta,
+		NetCpWERDelta:     a.NetCpWERDelta,
+		CeilingWERDelta:   a.CeilingWERDelta,
+		CeilingAccepted:   a.CeilingAccepted,
+		AcceptedSec:       a.Report.AcceptedSec,
+		GatePass:          a.GatePass,
+		GateReasons:       a.GateReasons,
+	}, nil
+}
+
+// benchLLMAdapter builds the OpenRouter adapter from the configured LLM provider +
+// secret — the same construction the summary pipeline uses (§ jobs_pipeline). Returns a
+// clear, actionable error when no provider or credential is configured, so
+// `repair-correct` guides the user instead of crashing on an empty key.
+func (s *Service) benchLLMAdapter(ctx context.Context) (*llm.OpenRouterAdapter, error) {
+	cfg := s.currentCfg()
+	providerID := cfg.Routing.LLMProvider
+	if providerID == "" {
+		providerID = "openrouter"
+	}
+	suite, ok := s.registry.Get(providerID)
+	if !ok || suite.CredentialRef == "" {
+		return nil, notoapi.NewError(notoapi.CodeInvalidRequest, "no LLM provider configured for repair-correct (set routing.llm_provider + its credential)", nil)
+	}
+	key, err := s.secrets.Get(ctx, suite.CredentialRef)
+	if err != nil || strings.TrimSpace(key) == "" {
+		return nil, notoapi.NewError(notoapi.CodeInvalidRequest, "LLM credential not set for "+providerID, nil)
+	}
+	return &llm.OpenRouterAdapter{
+		APIKey:             key,
+		ModelID:            cfg.Routing.LLMModel,
+		ZDR:                cfg.Routing.LLMPrivacy.ZDR,
+		DenyDataCollection: cfg.Routing.LLMPrivacy.DenyDataCollection,
+		RequireParameters:  cfg.Routing.LLMPrivacy.RequireParameters,
 	}, nil
 }
 

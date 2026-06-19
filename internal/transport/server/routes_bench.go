@@ -207,6 +207,19 @@ func (s *Server) handleBenchDiarRepairAttempt(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleBenchRepairCorrect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	out, err := s.svc.BenchRepairCorrect(r.Context(), r.URL.Query().Get("run_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleBenchAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -193,6 +193,10 @@ func (d *direct) BenchDiarRepairAttempt(ctx context.Context, runID, altRunID str
 	return d.svc.BenchDiarRepairAttempt(ctx, runID, altRunID)
 }
 
+func (d *direct) BenchRepairCorrect(ctx context.Context, runID string) (notoapi.BenchRepairAttemptResult, error) {
+	return d.svc.BenchRepairCorrect(ctx, runID)
+}
+
 func (d *direct) GetSystem(ctx context.Context) (notoapi.System, error) {
 	return d.svc.GetSystem(ctx)
 }

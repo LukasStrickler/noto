@@ -27,6 +27,7 @@ Usage:
   noto bench overlap --run <run_id> [--json]      # overlap repair: cost + addressable diarization error
   noto bench repair-attempt --run <id> --alt-run <id> [--json]  # B7: re-decode low-conf spans, measure real WER delta + cost
   noto bench diar-repair-attempt --run <id> --alt-run <id> [--json]  # B7 diar: re-diarize overlap regions, measure DER recovered
+  noto bench repair-correct --run <id> [--json]  # B7 §10.5: LLM-correct low-conf spans (no GPU), measure WER delta + cost
   noto bench estimate --suite <id> [--tier <tier>] [--json]
   noto bench run --suite <id> [--tier <tier>] [--mode <mode>] [--integration-only] [--json]
   noto bench preflight --suite <id> --tier <tier> --mode <mode> [--json]
@@ -54,6 +55,8 @@ Set NOTO_AGENT_ID for spend accounting on runs.
 		return a.runBenchRepairAttempt(args[1:])
 	case "diar-repair-attempt":
 		return a.runBenchDiarRepairAttempt(args[1:])
+	case "repair-correct":
+		return a.runBenchRepairCorrect(args[1:])
 	case "estimate":
 		return a.runBenchEstimate(args[1:])
 	case "run":
@@ -350,6 +353,73 @@ func (a *app) runBenchRepairAttempt(args []string) int {
 		fmt.Fprintf(a.out, "               (confidence over-selects / splice seams) — production needs a better selector\n")
 	}
 	fmt.Fprintf(a.out, "  cost:      $%.5f re-decode (STT-only)  →  %.1f accepted repairs/$\n",
+		res.CostUSD, res.AcceptedPerUSD)
+	gate := "PASS — repair beats do-nothing efficiently; eligible for B8 production write"
+	if !res.GatePass {
+		gate = "FAIL — not yet worth a production write"
+	}
+	fmt.Fprintf(a.out, "  B7 gate:   %s\n", gate)
+	for _, r := range res.GateReasons {
+		fmt.Fprintf(a.out, "    · %s\n", r)
+	}
+	return 0
+}
+
+// runBenchRepairCorrect runs the B7 attempt+measure loop with an LLM as the repair
+// source (§10.5 context correction): each low-confidence span is re-written by the
+// configured LLM given its surrounding transcript context, and the benchmark WER each
+// edit moves is measured against the reference. A genuinely different signal from the
+// acoustic re-decode — language/grammar/entity priors — and it needs NO GPU, only a
+// configured LLM provider. Dry-run: no transcript writes; the B7 gate says whether it
+// beat do-nothing efficiently enough to justify a production repair (B8).
+func (a *app) runBenchRepairCorrect(args []string) int {
+	fs := flag.NewFlagSet("bench repair-correct", flag.ContinueOnError)
+	run := fs.String("run", "", "run id with word confidence (required)")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return 64
+	}
+	if *run == "" {
+		fmt.Fprintln(a.errOut, "noto bench repair-correct --run <id>")
+		return 64
+	}
+	ctx := context.Background()
+	client, closeFn, code := a.connect(ctx)
+	if code != 0 {
+		return code
+	}
+	defer closeFn()
+	res, err := client.BenchRepairCorrect(ctx, *run)
+	if err != nil {
+		return a.errExit(err)
+	}
+	if *jsonOut {
+		return a.emitJSON(res)
+	}
+	fmt.Fprintf(a.out, "bench repair-correct (B7 §10.5 LLM, dry-run) — %s\n", res.RunID)
+	if res.MeetingsAttempted == 0 {
+		fmt.Fprintf(a.out, "  no spans attempted — the run has no low-confidence candidates (re-run with\n")
+		fmt.Fprintf(a.out, "  `--knob confidence=1`).\n")
+		return 0
+	}
+	if res.SpansDiffered == 0 {
+		fmt.Fprintf(a.out, "  attempted: %d spans across %d meetings — but the LLM returned every span UNCHANGED\n",
+			res.SpansAttempted, res.MeetingsAttempted)
+		fmt.Fprintf(a.out, "  (0 differed). The context offered no correction to try.\n")
+		return 0
+	}
+	fmt.Fprintf(a.out, "  attempted: %d spans across %d meetings — %d got a different correction (%.1fs accepted)\n",
+		res.SpansAttempted, res.MeetingsAttempted, res.SpansDiffered, res.AcceptedSec)
+	fmt.Fprintf(a.out, "  outcomes:  %d accepted · %d negative (rate %.4f)\n",
+		res.AcceptedRepairs, res.NegativeRepairs, res.NegativeRate)
+	fmt.Fprintf(a.out, "  accuracy:  net WER Δ %+.4f · net cpWER Δ %+.4f  (naive: apply every accepted edit)\n",
+		res.NetWERDelta, res.NetCpWERDelta)
+	fmt.Fprintf(a.out, "  ceiling:   WER Δ %+.4f keeping only the %d edits that help the whole transcript\n",
+		res.CeilingWERDelta, res.CeilingAccepted)
+	if res.CeilingWERDelta < res.NetWERDelta {
+		fmt.Fprintf(a.out, "             → the LLM DOES contain real fixes; the gap is selector headroom\n")
+	}
+	fmt.Fprintf(a.out, "  cost:      $%.5f LLM  →  %.1f accepted repairs/$\n",
 		res.CostUSD, res.AcceptedPerUSD)
 	gate := "PASS — repair beats do-nothing efficiently; eligible for B8 production write"
 	if !res.GatePass {
