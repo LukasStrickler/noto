@@ -257,6 +257,24 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     `bench overlap`. Both repair MACHINES (transcription + diarization) are built + validated; what remains
     is a genuinely-different repair SOURCE — the LLM corrector (above) is the first such source that needs
     no GPU; separation is the diar one that does.
+  - **DONE (this iter) — `noto bench repair-correct` LIVE end-to-end (commit 863b970).** Wired the §10.5
+    LLM-correction source so it is RUNNABLE on a real confidence run. (a) `llm`: extracted the shared
+    chat-completions transport into `post()`; `chat()` keeps the summary JSON schema, new `CompleteText()`
+    does a plain-text turn — summary behaviour unchanged, all llm tests green. (b) `bench`:
+    `llmSpanCorrector` builds a conservative context-grounded prompt + parses the reply to bare span text
+    (strip fences/labels, fall back to the span when unsure — the gate catches net-negative); the repair
+    core stays provider-free via an injected `CompleteFunc`. (c) `service`: `BenchRepairCorrect` builds the
+    OpenRouter adapter from the configured provider+secret (same as summaries), runs
+    `AttemptRepairsWithCorrector`, returns the same with/without KPI shape; clear "credential not set" error
+    when unconfigured (verified, no crash). (d) full transport + CLI plumbing mirroring `repair-attempt`.
+    5 corrector tests, full suite green, vet clean. **Verified:** command listed in usage; no-credential
+    path returns an actionable error JSON (this environment has NO LLM key in env, so the live ES2011b run
+    must be done where the OpenRouter credential is configured).
+  - **NEXT (this source):** run `noto bench repair-correct --run 20260619T115608Z-2f6cc5` in an env with the
+    OpenRouter credential set → the FIRST text-correction WER number. Per the validated pattern the machine
+    decides if it's a real positive KPI (language-predictable fixes the acoustic models can't make) or
+    another validated-weak source — either way it's measured on the reference and gated, not guessed. (The
+    user can run this directly; I can't, lacking the key here.)
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
