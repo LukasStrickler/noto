@@ -2,10 +2,38 @@ package bench
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/lukasstrickler/noto/benchmark/dataset"
+	corebench "github.com/lukasstrickler/noto/internal/core/bench"
 )
+
+// diarCostPerAudioSec derives the diar-only $/audio-sec as (total − asr) / audio, robust
+// to the per-stage attribution gap (the diar wall is sometimes left unsplit).
+func TestDiarCostPerAudioSec_DerivesDiarRateFromTrace(t *testing.T) {
+	dir := t.TempDir()
+	writeJSONFixture(t, filepath.Join(dir, "trace_summary.json"), corebench.TraceSummary{
+		PerMeeting: []corebench.PerMeetingTrace{
+			{MeetingID: "M1", AudioSec: 100, USD: 0.10, USDByStage: map[string]float64{"asr": 0.02}},
+			{MeetingID: "M2", AudioSec: 100, USD: 0.20, USDByStage: map[string]float64{"asr": 0.04}},
+		},
+	})
+	// diar = (0.10-0.02) + (0.20-0.04) = 0.24 over 200 audio-sec → 0.0012/sec.
+	rate, err := diarCostPerAudioSec(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rate < 0.00119 || rate > 0.00121 {
+		t.Errorf("diar rate = %v, want ~0.0012", rate)
+	}
+}
+
+func TestDiarCostPerAudioSec_ZeroWhenTraceMissing(t *testing.T) {
+	if rate, _ := diarCostPerAudioSec(t.TempDir()); rate != 0 {
+		t.Errorf("missing trace → rate 0, got %v", rate)
+	}
+}
 
 // fakeReDiarizer returns canned turns for every overlap span — enough to drive the
 // diar attempt loop deterministically without a GPU.

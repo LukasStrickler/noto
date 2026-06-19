@@ -25,9 +25,8 @@ import (
 // overload. A re-diarization is adopted only when it lowers DER.
 
 const (
-	diarB7MinAcceptedPerUSD = 50.0   // accepted re-diarizations per $ (§14)
-	diarB7MaxNegativeRate   = 0.005  // negative rate cap before any production write (§4.1)
-	diarSepCostPerSecUSD    = 0.0001 // placeholder marginal $/sec for separate-and-re-diarize
+	diarB7MinAcceptedPerUSD = 50.0  // accepted re-diarizations per $ (§14)
+	diarB7MaxNegativeRate   = 0.005 // negative rate cap before any production write (§4.1)
 )
 
 // ReDiarizer re-diarizes one overlap span of a meeting, returning corrected turns
@@ -233,7 +232,33 @@ func newRunReDiarizer(altDir string) (*runReDiarizer, error) {
 			alt[k] = h.Turns
 		}
 	}
-	return &runReDiarizer{alt: alt, costPerSec: diarSepCostPerSecUSD}, nil
+	rate, _ := diarCostPerAudioSec(altDir) // best-effort; 0 when no trace_summary
+	return &runReDiarizer{alt: alt, costPerSec: rate}, nil
+}
+
+// diarCostPerAudioSec reads a run's trace_summary.json and returns the DIARIZATION-only
+// marginal dollars per audio-second: (total − asr) summed over meetings, divided by total
+// audio. Using total−asr (rather than the diar stage keys) is robust to the per-stage
+// attribution gap where the diar wall is sometimes left unsplit (L1) — diarization is
+// simply everything that isn't STT. The diar analog of sttCostPerAudioSec; returns 0 (no
+// error) when the trace is missing or carries no audio, so the report still shows DER
+// deltas (only accepted-per-dollar can't be judged).
+func diarCostPerAudioSec(runDir string) (float64, error) {
+	var ts corebench.TraceSummary
+	if err := readJSON(filepath.Join(runDir, "trace_summary.json"), &ts); err != nil {
+		return 0, err
+	}
+	diar, audio := 0.0, 0.0
+	for _, m := range ts.PerMeeting {
+		if d := m.USD - m.USDByStage["asr"]; d > 0 {
+			diar += d
+		}
+		audio += m.AudioSec
+	}
+	if audio <= 0 {
+		return 0, nil
+	}
+	return diar / audio, nil
 }
 
 func (d *runReDiarizer) ReDiarize(meetingID string, startSec, endSec float64) ([]HypTurn, float64, error) {
