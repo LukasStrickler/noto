@@ -223,10 +223,24 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     wired end to end. 4 fake-driven tests. **Validated on real artifacts** (2f6cc5 × fc7b5f): 621 overlap
     regions / 5 meetings, **0 differed** (alt shares the same pyannote config → identical turns, the diar
     analog of the fp32/beam no-op) → gate correctly FAILS. Full suite green, vet clean.
+  - **DONE (this iter) — maintainability pass: unified the oracle-ceiling algorithm (commit 312ff4e).**
+    The transcription (WER/HypWord) and diarization (DER/HypTurn) attempt loops each carried a
+    byte-identical greedy keep-if-strictly-improves ceiling search that differed only in apply/score —
+    a real drift risk (a change to the keep-rule had to be made twice). Extracted `greedyCeiling[E,S]`
+    (`repair_ceiling.go`); `oracleCeiling`/`diarOracleCeiling` are now thin domain wrappers. No behaviour
+    change, full suite green, vet clean. Deliberately did NOT also merge the run-pair loaders (4 trivial
+    lines, different cost models) or the `*Differ` funcs (divergent domain logic) — that would be premature
+    DRY. The non-trivial *shared algorithm* was the right (and only) thing to de-duplicate.
   - **NEXT (diarization, the high-value half):** a real DER number needs a genuinely-DIFFERENT diarization
-    alternate — ONE GPU run with a different diar config (`--knob vad=on`, a different pyannote model, or a
-    separation pass), then `diar-repair-attempt(baseline, <alt>)` → the first real "DER recovered by
-    re-diarizing overlap" number. The ceiling (33% addressable) is known from `bench overlap`.
+    alternate. The validated lesson from the transcription side (cheap same-family alternates are weak
+    proxies) means a config-flip like `--knob vad=on` is likely ~null on AMI too — VAD trims silence, it
+    does not SEPARATE overlapping speakers, and AMI is dense. The genuinely-different overlap source is
+    pyannote's overlap-AWARE assignment (assign 2 labels where it detects ≥2 active) or a separation pass
+    on the system channel — an algorithmic difference in the overlap regions, not a silence trim. If/when a
+    GPU run is greenlit: produce that alternate diar run, then `diar-repair-attempt(baseline, <alt>)` → the
+    first real "DER recovered by re-diarizing overlap" number. Ceiling (33% addressable) known from
+    `bench overlap`. Both repair MACHINES (transcription + diarization) are built + validated; what remains
+    is a genuinely-different repair SOURCE, which is a real build/run decision for the user, not a knob.
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
