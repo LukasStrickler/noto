@@ -175,6 +175,63 @@ Adoption evidence must include:
 - guardrail result
 - estimated dollar spend
 
+## Accuracy repair (B6 / B7 / B8)
+
+Cost is the constraint; **accuracy is the product** — a cheap transcript nobody
+trusts is worthless. The repair system spends a *second pass* only on the spans
+that need it (low-confidence words; ≥2-speaker overlap regions), never the whole
+meeting, and proves on the benchmark that the second pass actually helps before
+anything ships.
+
+**Measurement spine.** Pure decision logic lives in `internal/core/bench`
+(`repair.go`, `splice.go`, `overlap.go`, `diar_splice.go` — no I/O, imports
+nothing from the harness); the run-artifact wiring lives in
+`internal/platform/bench` (`repair*.go`, `overlap.go`). Both halves share one
+accept/reject rule (`OutcomeFromDeltas`) and the oracle-ceiling idea.
+
+| Stage | What | Surfaced by |
+| --- | --- | --- |
+| **B6 calibration** | does confidence rank errors? (ECE/Brier, bottom-decile capture, admissibility) | `noto bench calibration --run <id>` |
+| **B7 dry-run preview** | which spans a second pass would attempt + projected cost | `noto bench repair --run <id>` |
+| **B7 attempt + measure** | actually re-decode the spans, measure the benchmark WER/cpWER each edit moves, gate it | `noto bench repair-attempt --run <baseline> --alt-run <alt>` |
+| **B8 production repair** | transcript v2 with provenance, behind a passing B7 gate | *(not built — gated)* |
+
+`repair-attempt` is DRY-RUN: it writes no production transcript, only scores
+against the reference. The alternate decode is a *second completed run* with a
+different config (a run-pair `ReDecoder`); the marginal cost it reports is
+STT-only (a second pass re-runs transcription, never diarization).
+
+**Two numbers, not one.** `net WER Δ` = apply *every* accepted edit (the naive
+selector — confidence over-selects and splice seams can make it *worse*).
+`ceiling WER Δ` = keep only the edits that lower the *whole-transcript* WER
+(reference-guided greedy) — the max the alternate could buy with perfect
+selection. The gap is **selector headroom**: the fixes exist; production needs a
+better selector than "apply every flagged span".
+
+**Repair sources — validated findings.** The hard part is producing a span
+hypothesis that is genuinely *different and better*:
+
+| Source | Result |
+| --- | --- |
+| same model, fp32 vs bf16 | byte-identical — greedy TDT is deterministic on content across precision |
+| same model, beam/maes | byte-identical — greedy is already beam-optimal for parakeet-tdt-0.6b-v3 |
+| different model (1.1b) | genuinely different but *weaker* (older than v3): regresses more spans than it fixes |
+| **audio perturbation** (`--knob perturb=speed:0.9`) | the lever: same *best* model, altered input → different output, no quality regression (test-time augmentation; timestamps rescaled back) |
+
+**Diarization half.** Symmetric to transcription but on overlap regions: noto
+captures two channels (your mic + all remote participants mixed on system
+audio), so you-over-room overlap is free; only ≥2 *remote* speakers overlapping
+within the system channel needs the expensive separate-and-re-diarize pass.
+`noto bench overlap` measures how much DER error lives in overlap regions
+(addressable headroom) and targeted-vs-blanket cost; `MeasureDiarSplice` scores
+the DER a re-diarization moves. DER is denominated in seconds, so whole-meeting
+DER is the per-span decision (no local measure — DER's speaker permutation makes
+a single-speaker-window DER spuriously zero).
+
+**Alt-run note.** A repair alternate run only needs the STT words, not its own
+diarization; raising STT memory (a bigger model, or slowed audio) can OOM the
+pyannote workers — run alt decodes with `BENCH_DIAR_WORKERS=2` to free VRAM.
+
 ## Current Validation
 
 Date: 2026-06-18  
