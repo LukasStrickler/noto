@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lukasstrickler/noto/internal/core/artifacts"
+	"github.com/lukasstrickler/noto/internal/core/entityrepair"
 	"github.com/lukasstrickler/noto/internal/core/speakers"
 	"github.com/lukasstrickler/noto/internal/platform/config"
 	"github.com/lukasstrickler/noto/internal/platform/providers"
@@ -138,6 +139,14 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 					} else {
 						transcript = normalized
 					}
+				}
+				// Entity repair: snap low-confidence words to the meeting's known
+				// vocabulary (participant names, product/jargon terms) — the same
+				// glossary the recognizer never sees. Conservative (near-miss only,
+				// confident words untouched) and a no-op without a glossary, so it
+				// only ever sharpens the product-critical "who/what" accuracy.
+				if reps := providers.RepairTranscriptEntities(transcript, s.contextBiasTerms(ctx, title), entityrepair.DefaultOptions()); len(reps) > 0 {
+					s.publishProgress(job, "entity repair", 0.55, fmt.Sprintf("%d term(s) corrected", len(reps)))
 				}
 			}
 		}
