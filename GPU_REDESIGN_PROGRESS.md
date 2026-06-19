@@ -152,12 +152,31 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     alternate-ASR). Confirmed `nvidia/parakeet-tdt-1.1b` exists (TDT, ~2× the 0.6b-v3, same `timestamp['word']`
     API). A different MODEL is GUARANTEED to produce different words (unlike fp32/failed-beam), so the repair
     machine finally gets real signal; the accept gate keeps only edits that improve local WER.
-  - **IN FLIGHT — ONE `gate_ami --knob stt_model=nvidia/parakeet-tdt-1.1b` run** (`bx18ukpfx`, background;
-    first-time ~4.5GB model download + slower decode). When it lands: `noto bench repair-attempt --run
-    20260619T115608Z-2f6cc5 --alt-run <1.1b-run>` → the first real repair-vs-no-repair WER delta on ES2011b's
-    103 low-conf spans. EXPECT some accepts (1.1b disagrees with 0.6b-v3 on hard words; gate filters wins).
-    After the number: overlap separation pass (same MeasureSplice on cpWER/DER), cheap production overlap
-    detector, B8 production write behind the passing B7 gate.
+  - **DEFINITIVE (conclusive beam run `20260619T212224Z-8b7d0a` with stderr capture):** the server log
+    confirms **"beam decode enabled (strategy=maes, beam_size=4)"** — beam ENGAGED (the compute_timestamps
+    bug was the earlier silent-revert) — yet the output is **byte-identical to greedy** (0/3955 words). So
+    NeMo TDT greedy is ALREADY beam-optimal for parakeet-tdt-0.6b-v3; beam finds no better path. Combined
+    with fp32 (also identical): **same-model alternates CANNOT produce a different hypothesis for this
+    model.** The cheap repair methods are a dead end FOR THIS MODEL — not a bug, a property. The ONLY lever
+    that yields a genuinely different decode is a DIFFERENT MODEL.
+  - **1.1b model run failed on VRAM, diagnosed + fixed:** `--knob stt_model=nvidia/parakeet-tdt-1.1b` (run
+    `bx18ukpfx`) crashed — NOT a model-incompat: the bigger STT model starved VRAM and the pyannote diar
+    server (10 workers) OOM-exited mid-request (`diarize: server exited mid-request`). Fix: `BENCH_DIAR_WORKERS=2`
+    (→ NOTO_PYANNOTE_WORKERS, a wired knob) frees VRAM; the alt run doesn't need its diar output anyway
+    (turns come from the baseline). Shell env forwards to the subprocess (`cmd.Env = append(os.Environ()…)`).
+  - **IN FLIGHT — conclusive 1.1b retry** (`bgudyj83v`): `BENCH_DIAR_WORKERS=2 BENCH_PARAKEET_SERVER_STDERR=1
+    noto bench run --knob stt_model=nvidia/parakeet-tdt-1.1b`. When it lands: `noto bench repair-attempt
+    --run 20260619T115608Z-2f6cc5 --alt-run <1.1b-run>` → the first real positive WER delta (different
+    weights GUARANTEE different words on the hard spans; the accept gate keeps only the wins).
+  - **DONE (this iter) — diarization repair MEASUREMENT spine** (the user-critical overlap/two-channel half),
+    GPU-free + tested: `core/bench/diar_splice.go` `SpliceTurns`/`TurnsInSpan` (pure turn-interval surgery,
+    the diar analog of SpliceSpan) + `platform/bench/repair_diar_measure.go` `MeasureDiarSplice` (DER
+    before/after a re-diarization, accept via shared OutcomeFromDeltas). KEY finding the tests caught: DER
+    does optimal speaker PERMUTATION, so a span-LOCAL DER is spuriously 0 (any single label maps perfectly)
+    — but it's unneeded: DER error is denominated in SECONDS, so a multi-second overlap fix moves
+    whole-meeting DER by ≈2/1500 > the accept floor (where a 1-word WER fix is 1/N and washes). So
+    whole-meeting DER is the diar decision measure. 6 tests. NEXT for diar: the overlap-span planner +
+    ReDiarizer (separate system channel → re-diarize) → diar attempt loop (mirror repair_attempt.go).
 
 ## Leads / findings (verify before acting)
 
