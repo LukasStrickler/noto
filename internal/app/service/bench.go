@@ -414,6 +414,35 @@ func (s *Service) BenchInsights(ctx context.Context, runID string) (notoapi.Benc
 	}, nil
 }
 
+// BenchRepair returns a run's B7 dry-run repair preview: low-confidence words
+// grouped into candidate spans and planned under a repair budget — the "how much
+// accuracy work is on the table, and what would it cost" view (§10.4). Read-only,
+// GPU-free; no production transcript writes.
+func (s *Service) BenchRepair(ctx context.Context, runID string) (notoapi.BenchRepairResult, error) {
+	_ = ctx
+	if strings.TrimSpace(runID) == "" {
+		return notoapi.BenchRepairResult{}, notoapi.NewError(notoapi.CodeInvalidRequest, "run_id required", nil)
+	}
+	prev, err := s.benchRunner().RepairPreview(runID, 0)
+	if err != nil {
+		return notoapi.BenchRepairResult{}, notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
+	}
+	return notoapi.BenchRepairResult{
+		SchemaVersion:       "bench_repair_preview.v1",
+		RunID:               prev.RunID,
+		HasConfidence:       prev.HasConfidence,
+		Meetings:            prev.Meetings,
+		TotalSpeechSec:      prev.TotalSpeechSec,
+		ConfidenceThreshold: prev.ConfidenceThreshold,
+		CandidateSpans:      prev.CandidateSpans,
+		CandidateSec:        prev.CandidateSec,
+		AttemptSec:          prev.AttemptSec,
+		SkippedBudgetSec:    prev.SkippedBudgetSec,
+		BudgetSec:           prev.BudgetSec,
+		ProjectedCostUSD:    prev.ProjectedCostUSD,
+	}, nil
+}
+
 func (s *Service) BenchAudit(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
 	_ = ctx
 	if strings.TrimSpace(runID) == "" {

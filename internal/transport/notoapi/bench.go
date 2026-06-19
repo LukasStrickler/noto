@@ -304,10 +304,32 @@ type BenchInsightsResult struct {
 	TargetReachableByScale       bool    `json:"target_reachable_by_scale,omitempty"`
 }
 
+// BenchRepairResult is a run's B7 dry-run repair PREVIEW (§10.4): the candidate
+// repair spans derived from stored word confidences, planned under budget — what a
+// second pass WOULD attempt and what it would cost, with no GPU and no transcript
+// writes. HasConfidence is false when the run carries no word confidence (re-run
+// with `--knob confidence=1`).
+type BenchRepairResult struct {
+	SchemaVersion       string  `json:"schema_version"`
+	RunID               string  `json:"run_id"`
+	HasConfidence       bool    `json:"has_confidence"`
+	Meetings            int     `json:"meetings"`
+	TotalSpeechSec      float64 `json:"total_speech_sec"`
+	ConfidenceThreshold float64 `json:"confidence_threshold"`
+	CandidateSpans      int     `json:"candidate_spans"`
+	CandidateSec        float64 `json:"candidate_sec"`
+	AttemptSec          float64 `json:"attempt_sec"`
+	SkippedBudgetSec    float64 `json:"skipped_budget_sec"`
+	BudgetSec           float64 `json:"budget_sec"`
+	ProjectedCostUSD    float64 `json:"projected_cost_usd"`
+}
+
 // BenchClient methods for measurement spine.
 type BenchClient interface {
 	// BenchInsights returns one run's full weighted-KPI snapshot (winner when runID empty).
 	BenchInsights(ctx context.Context, runID string) (BenchInsightsResult, error)
+	// BenchRepair returns a run's B7 dry-run repair preview (candidates + cost).
+	BenchRepair(ctx context.Context, runID string) (BenchRepairResult, error)
 	BenchEstimate(ctx context.Context, req BenchEstimateRequest) (BenchEstimateResult, error)
 	BenchPreflight(ctx context.Context, req BenchPreflightRequest) (BenchPreflightResult, error)
 	BenchRun(ctx context.Context, req BenchRunRequest) (BenchRunResult, error)

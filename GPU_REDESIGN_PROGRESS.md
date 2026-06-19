@@ -184,6 +184,45 @@ Don't add inert Go fields before step 1+2 produce the data — that's speculativ
     utilization/jobs (already 82% busy) and chasing $0.01-by-scale (unreachable). Realistic goal: beat
     $0.01633 modestly. Awaiting user's pick.
 
+- **Iter 8 (2026-06-19):** H6 experiment run + pushed + started the repair system (user: "push this, use
+  GPU to optimise, implement the self-repair + KPI system").
+  - **H6 emb_batch=64 → REJECTED** (gate compare: +45.8% cost, busy 53→31%; bigger batch serialized diar
+    on this corpus). One more lever crossed off for ~$0.04. Knob now wired (`--knob emb_batch/seg_batch`).
+  - **Pushed:** committed the full green working tree as a WIP checkpoint (`5dbd7b0`, 427 files) and
+    `git push -u origin refactor/codebase-layout` (was un-pushed; upstream now set).
+  - **Repair system B7 core (dry-run) — `internal/core/bench/repair.go` + tests (pure, GPU-free):**
+    `RepairSpan` (eligibility + `ExpectedValue` per §10.4), `RepairBudget` (§10.6 sec/dollar budget),
+    `PlanRepairs` (rank by EV, greedy-fill budget, record budget-skipped high-value seconds),
+    `RepairReport` + `PassesB7Gate` (accepted-per-$, negative-rate, net WER/entity delta — the "how good
+    is the accuracy gain and at what cost" answer). 5 tests. DRY-RUN ONLY — no production transcript writes
+    (§10.4), gated until B7 passes.
+
+- **Iter 9 (2026-06-19):** B7 wiring — confidence → candidate spans → preview, all GPU-free + tested:
+  - `core/bench/repair.go` `RepairWord` + **`SpansFromWords`** — group maximal runs of low-confidence
+    words into `RepairSpan`s (PError = riskiest word, ProductValue = max/entity). (Named `RepairWord`, not
+    `WordConfidence`, to avoid colliding with calibration's scoring type.) 2 tests.
+  - `platform/bench/repair.go` **`Runner.RepairPreview(runID, threshold)`** — loads a run's hyps, builds
+    spans, plans under a default budget (10% speech, 5-min cap) → preview (candidate spans, attempt/skipped
+    seconds, budget, projected cost). `HasConfidence=false` when the run lacks word confidence. 2 tests.
+  - So the full dry-run chain is now wired + tested: hyps → RepairWord → SpansFromWords → PlanRepairs →
+    RepairPreview / RepairReport → PassesB7Gate.
+
+## Repair + KPI system — roadmap (user directive: implement ALL items)
+
+Done: **B6 calibration** (scorers + CPU pipeline) · **B7 dry-run CORE** (repair.go) · **B7 wiring**
+(SpansFromWords + RepairPreview). Remaining, in order:
+1. **B6 confidence GPU run + CLI surface (next, paired):** run one Modal `gate_ami` with word confidence
+   enabled (the parakeet server's confidence path) to populate real per-word confidence, THEN add
+   `noto bench repair --run <id>` showing the RepairPreview (candidates, seconds, projected cost) — so the
+   "see + understand how good our KPIs are and at what cost" is demonstrable on REAL data. (CLI without a
+   confidence run shows "no confidence data", so they go together.) Need: how the bench forwards the STT
+   confidence flag (NOTO_PARAKEET_CONFIDENCE) — wire a `confidence` knob like emb_batch if not present.
+2. **B7 attempt + measure:** the actual same-model alternate re-decode of attempted spans + benchmark
+   delta scoring → `RepairReport` (the GPU step that fills accepted/negative/net-delta).
+3. **B8 production repair:** transcript v2 with provenance, behind a passing B7 gate. Extend
+   `contextBiasTerms()` for biasing — do NOT build a parallel rules engine (§10.5).
+Keep `go test ./...` green + vet clean. **No TUI.**
+
 ## (superseded) earlier next-step notes — #2 utilization
 
 The gate's **mean 50% / peak 100%** confirms the GPU is underfed on the subsample — so a utilization lever

@@ -304,6 +304,10 @@ var knobLauncherEnv = map[string]string{
 	"diar_workers": "BENCH_DIAR_WORKERS",
 	"diar_streams": "BENCH_DIAR_STREAMS",
 	"cuda_mps":     "BENCH_CUDA_MPS",
+	// confidence turns on NeMo word confidence (NOTO_PARAKEET_CONFIDENCE) so the
+	// run's hyps carry per-word P(correct) — the input B6 calibration and B7 repair
+	// candidate selection both need.
+	"confidence": "BENCH_PARAKEET_CONFIDENCE",
 }
 
 func knobEnv(knobs map[string]string) []string {

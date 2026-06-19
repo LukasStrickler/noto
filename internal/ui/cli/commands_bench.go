@@ -22,6 +22,7 @@ func (a *app) runBench(args []string) int {
 
 Usage:
   noto bench insights [--run <run_id>] [--json]   # one-command weighted-KPI snapshot
+  noto bench repair --run <run_id> [--json]       # B7 dry-run repair preview (candidates + cost)
   noto bench estimate --suite <id> [--tier <tier>] [--json]
   noto bench run --suite <id> [--tier <tier>] [--mode <mode>] [--integration-only] [--json]
   noto bench preflight --suite <id> --tier <tier> --mode <mode> [--json]
@@ -39,6 +40,8 @@ Set NOTO_AGENT_ID for spend accounting on runs.
 		return 0
 	case "insights":
 		return a.runBenchInsights(args[1:])
+	case "repair":
+		return a.runBenchRepair(args[1:])
 	case "estimate":
 		return a.runBenchEstimate(args[1:])
 	case "run":
@@ -133,6 +136,48 @@ func (a *app) runBenchInsights(args []string) int {
 	for _, n := range res.Notes {
 		fmt.Fprintf(a.out, "  • %s\n", n)
 	}
+	return 0
+}
+
+// runBenchRepair shows the B7 dry-run repair preview for a run: low-confidence
+// words grouped into candidate spans, planned under a repair budget — what a second
+// pass would attempt and what it would cost. Read-only; no transcript writes.
+func (a *app) runBenchRepair(args []string) int {
+	fs := flag.NewFlagSet("bench repair", flag.ContinueOnError)
+	run := fs.String("run", "", "run id (required)")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return 64
+	}
+	if *run == "" {
+		fmt.Fprintln(a.errOut, "noto bench repair --run <run_id>")
+		return 64
+	}
+	ctx := context.Background()
+	client, closeFn, code := a.connect(ctx)
+	if code != 0 {
+		return code
+	}
+	defer closeFn()
+	res, err := client.BenchRepair(ctx, *run)
+	if err != nil {
+		return a.errExit(err)
+	}
+	if *jsonOut {
+		return a.emitJSON(res)
+	}
+	fmt.Fprintf(a.out, "bench repair (dry-run preview) — %s\n", res.RunID)
+	if !res.HasConfidence {
+		fmt.Fprintf(a.out, "  no word confidence on this run — re-run with `--knob confidence=1` so repair\n")
+		fmt.Fprintf(a.out, "  has per-word P(correct) to select candidates from.\n")
+		return 0
+	}
+	fmt.Fprintf(a.out, "  %d meetings · %.0fs speech · confidence<%.2f flagged\n",
+		res.Meetings, res.TotalSpeechSec, res.ConfidenceThreshold)
+	fmt.Fprintf(a.out, "  candidates: %d spans (%.1fs)   budget %.1fs   attempt %.1fs   skipped(budget) %.1fs\n",
+		res.CandidateSpans, res.CandidateSec, res.BudgetSec, res.AttemptSec, res.SkippedBudgetSec)
+	fmt.Fprintf(a.out, "  projected re-decode cost: $%.5f  (dry-run only — no transcript writes until B7 gate passes)\n",
+		res.ProjectedCostUSD)
 	return 0
 }
 

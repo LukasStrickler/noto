@@ -26,6 +26,15 @@ func TestKnobEnv_EmbBatchMapsToLauncherVar(t *testing.T) {
 	}
 }
 
+func TestKnobEnv_ConfidenceMapsToLauncherVar(t *testing.T) {
+	// `--knob confidence=1` turns on NeMo word confidence; it must reach the
+	// launcher as BENCH_PARAKEET_CONFIDENCE (forwarded to NOTO_PARAKEET_CONFIDENCE).
+	env := bench.KnobEnv(map[string]string{"confidence": "1"})
+	if len(env) != 1 || env[0] != "BENCH_PARAKEET_CONFIDENCE=1" {
+		t.Fatalf("confidence knob env=%v want [BENCH_PARAKEET_CONFIDENCE=1]", env)
+	}
+}
+
 func TestKnobEnv_UnknownKnobKeepsNotoPrefix(t *testing.T) {
 	env := bench.KnobEnv(map[string]string{"custom_flag": "1"})
 	if len(env) != 1 || env[0] != "NOTO_CUSTOM_FLAG=1" {

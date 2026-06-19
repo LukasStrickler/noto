@@ -156,6 +156,9 @@ KNOB_FORWARDS: list[tuple[str, str, str]] = [
     # static fp16 ONNX export that derailed the encoder.
     ("BENCH_NEMO_PRECISION", "NOTO_PARAKEET_PRECISION", ""),
     ("BENCH_NEMO_BATCH", "NOTO_PARAKEET_BATCH", ""),
+    # NeMo word confidence (opt-in) → hyps carry per-word P(correct) for B6
+    # calibration + B7 repair candidate selection.
+    ("BENCH_PARAKEET_CONFIDENCE", "NOTO_PARAKEET_CONFIDENCE", ""),
     # Silero-VAD silence trimming in BOTH warm servers (TODO-7): GPU cost is
     # linear in audio-seconds, so feed only speech — the servers condense each
     # input to its (padded) speech regions and remap timestamps back to the

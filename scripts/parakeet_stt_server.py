@@ -145,8 +145,13 @@ def enable_word_confidence(model) -> bool:
             ConfidenceMethodConfig,
         )
 
+        # Preserve only WORD confidence — the single signal we read
+        # (hyp.word_confidence). Per-FRAME preservation keeps a value for every
+        # encoder frame of the whole meeting; on long audio that array is the
+        # memory/compute hog with no payoff here (we never read it), so it is off.
+        # Token confidence is kept as the input the per-word min() aggregation needs.
         conf_cfg = ConfidenceConfig(
-            preserve_frame_confidence=True,
+            preserve_frame_confidence=False,
             preserve_token_confidence=True,
             preserve_word_confidence=True,
             aggregation="min",
