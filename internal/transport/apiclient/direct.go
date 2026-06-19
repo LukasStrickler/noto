@@ -177,6 +177,10 @@ func (d *direct) BenchRepair(ctx context.Context, runID string) (notoapi.BenchRe
 	return d.svc.BenchRepair(ctx, runID)
 }
 
+func (d *direct) BenchCalibration(ctx context.Context, runID string) (notoapi.BenchCalibrationResult, error) {
+	return d.svc.BenchCalibration(ctx, runID)
+}
+
 func (d *direct) GetSystem(ctx context.Context) (notoapi.System, error) {
 	return d.svc.GetSystem(ctx)
 }

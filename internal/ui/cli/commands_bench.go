@@ -23,6 +23,7 @@ func (a *app) runBench(args []string) int {
 Usage:
   noto bench insights [--run <run_id>] [--json]   # one-command weighted-KPI snapshot
   noto bench repair --run <run_id> [--json]       # B7 dry-run repair preview (candidates + cost)
+  noto bench calibration --run <run_id> [--json]  # B6 confidence calibration (ECE, capture, admissibility)
   noto bench estimate --suite <id> [--tier <tier>] [--json]
   noto bench run --suite <id> [--tier <tier>] [--mode <mode>] [--integration-only] [--json]
   noto bench preflight --suite <id> --tier <tier> --mode <mode> [--json]
@@ -42,6 +43,8 @@ Set NOTO_AGENT_ID for spend accounting on runs.
 		return a.runBenchInsights(args[1:])
 	case "repair":
 		return a.runBenchRepair(args[1:])
+	case "calibration":
+		return a.runBenchCalibration(args[1:])
 	case "estimate":
 		return a.runBenchEstimate(args[1:])
 	case "run":
@@ -178,6 +181,54 @@ func (a *app) runBenchRepair(args []string) int {
 		res.CandidateSpans, res.CandidateSec, res.BudgetSec, res.AttemptSec, res.SkippedBudgetSec)
 	fmt.Fprintf(a.out, "  projected re-decode cost: $%.5f  (dry-run only — no transcript writes until B7 gate passes)\n",
 		res.ProjectedCostUSD)
+	return 0
+}
+
+// runBenchCalibration scores a run's word-confidence calibration (B6): how well the
+// model's confidence predicts its own errors, and whether that signal is good
+// enough to drive repair spend (the admissibility gate). Read-only, GPU-free.
+func (a *app) runBenchCalibration(args []string) int {
+	fs := flag.NewFlagSet("bench calibration", flag.ContinueOnError)
+	run := fs.String("run", "", "run id (required)")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return 64
+	}
+	if *run == "" {
+		fmt.Fprintln(a.errOut, "noto bench calibration --run <run_id>")
+		return 64
+	}
+	ctx := context.Background()
+	client, closeFn, code := a.connect(ctx)
+	if code != 0 {
+		return code
+	}
+	defer closeFn()
+	res, err := client.BenchCalibration(ctx, *run)
+	if err != nil {
+		return a.errExit(err)
+	}
+	if *jsonOut {
+		return a.emitJSON(res)
+	}
+	fmt.Fprintf(a.out, "bench calibration (B6) — %s\n", res.RunID)
+	if !res.HasConfidence {
+		fmt.Fprintf(a.out, "  no word confidence on this run — re-run with `--knob confidence=1`.\n")
+		return 0
+	}
+	admit := "ADMISSIBLE"
+	if !res.SignalAdmissible {
+		admit = "NOT admissible"
+	}
+	fmt.Fprintf(a.out, "  %d scored words (%d errors)\n", res.Words, res.Errors)
+	fmt.Fprintf(a.out, "  ECE %.4f · Brier %.4f · risk-coverage AUC %.4f\n", res.ECE, res.Brier, res.RiskCoverageAUC)
+	fmt.Fprintf(a.out, "  bottom-decile capture %.3f (random %.2f, lift %+.3f) — does low confidence find errors?\n",
+		res.BottomDecileCapture, 0.10, res.CaptureLiftOverRandom)
+	fmt.Fprintf(a.out, "  high-confidence error rate %.4f\n", res.HighConfErrorRate)
+	fmt.Fprintf(a.out, "  signal for repair spend: %s\n", admit)
+	for _, r := range res.Reasons {
+		fmt.Fprintf(a.out, "    · %s\n", r)
+	}
 	return 0
 }
 

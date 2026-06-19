@@ -66,6 +66,7 @@ type Client interface {
 	BenchScale(ctx context.Context, req BenchScaleRequest) (BenchScaleResult, error)
 	BenchInsights(ctx context.Context, runID string) (BenchInsightsResult, error)
 	BenchRepair(ctx context.Context, runID string) (BenchRepairResult, error)
+	BenchCalibration(ctx context.Context, runID string) (BenchCalibrationResult, error)
 
 	// Storage
 	GetStorage(ctx context.Context) (Storage, error)

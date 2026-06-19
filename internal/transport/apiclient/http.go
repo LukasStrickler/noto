@@ -492,6 +492,14 @@ func (c *httpClient) BenchRepair(ctx context.Context, runID string) (notoapi.Ben
 	return out, err
 }
 
+func (c *httpClient) BenchCalibration(ctx context.Context, runID string) (notoapi.BenchCalibrationResult, error) {
+	var out notoapi.BenchCalibrationResult
+	q := url.Values{}
+	q.Set("run_id", runID)
+	err := c.do(ctx, http.MethodGet, "/v1/bench/calibration?"+q.Encode(), nil, &out)
+	return out, err
+}
+
 func (c *httpClient) GetSystem(ctx context.Context) (notoapi.System, error) {
 	var out notoapi.System
 	err := c.do(ctx, http.MethodGet, "/v1/system", nil, &out)

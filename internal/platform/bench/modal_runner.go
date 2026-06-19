@@ -167,6 +167,13 @@ func (m *ModalRunner) Run(ctx context.Context, req RunRequest) (RunResponse, err
 	if err := m.Store.PersistRun(manifest.RunID, audit, trace, metrics); err != nil {
 		return RunResponse{}, err
 	}
+	// Score word-confidence calibration (B6) when the run emitted confidence.
+	// Best-effort: the metrics + trace are the run's contract; a calibration
+	// scoring failure must never fail the run, and a no-confidence run simply
+	// leaves no calibration.json.
+	if words, cerr := scoreCalibration(hyps, ScoreOptionsForRepo(m.RepoRoot, ResolveSuite(manifest.SuiteID))); cerr == nil && len(words) > 0 {
+		_ = m.Store.WriteJSON(manifest.RunID, "calibration.json", corebench.BuildCalibrationReport(words))
+	}
 	if rawDir != "" {
 		_ = m.copyOptionalRaw(manifest.RunID, rawDir)
 	}

@@ -443,6 +443,46 @@ func (s *Service) BenchRepair(ctx context.Context, runID string) (notoapi.BenchR
 	}, nil
 }
 
+// BenchCalibration scores a run's word-confidence calibration (B6, §10.3) against
+// local references — GPU-free, retroactive. It writes calibration.json and returns
+// the report + admissibility gate (whether the confidence signal is good enough to
+// drive repair spend). HasConfidence is false when the run emitted none.
+func (s *Service) BenchCalibration(ctx context.Context, runID string) (notoapi.BenchCalibrationResult, error) {
+	_ = ctx
+	if strings.TrimSpace(runID) == "" {
+		return notoapi.BenchCalibrationResult{}, notoapi.NewError(notoapi.CodeInvalidRequest, "run_id required", nil)
+	}
+	r := s.benchRunner()
+	root, err := platformbench.RepoRoot()
+	if err != nil {
+		return notoapi.BenchCalibrationResult{}, notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
+	}
+	var suiteID string
+	if b, e := r.Store.LoadRunBundle(runID); e == nil {
+		suiteID = b.Manifest.SuiteID
+	}
+	opts := platformbench.ScoreOptionsForRepo(root, platformbench.ResolveSuite(suiteID))
+	rep, written, err := r.CalibrateRun(runID, opts)
+	if err != nil {
+		return notoapi.BenchCalibrationResult{}, notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
+	}
+	res := notoapi.BenchCalibrationResult{SchemaVersion: "bench_calibration.v1", RunID: runID, HasConfidence: written}
+	if written {
+		gate := corebench.EvaluateCalibrationGate(rep, 0)
+		res.Words = rep.Words
+		res.Errors = rep.Errors
+		res.ECE = rep.ECEBySlice["default"]
+		res.Brier = rep.BrierBySlice["default"]
+		res.BottomDecileCapture = rep.BottomDecileCapture
+		res.RiskCoverageAUC = rep.RiskCoverageAUC
+		res.HighConfErrorRate = rep.HighConfErrorRate
+		res.CaptureLiftOverRandom = gate.CaptureLiftOverRandom
+		res.SignalAdmissible = gate.SignalAdmissible
+		res.Reasons = gate.Reasons
+	}
+	return res, nil
+}
+
 func (s *Service) BenchAudit(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
 	_ = ctx
 	if strings.TrimSpace(runID) == "" {

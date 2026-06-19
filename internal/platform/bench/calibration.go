@@ -1,8 +1,12 @@
 package bench
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"sort"
 
+	"github.com/lukasstrickler/noto/benchmark/dataset"
 	"github.com/lukasstrickler/noto/benchmark/metrics"
 	corebench "github.com/lukasstrickler/noto/internal/core/bench"
 )
@@ -69,6 +73,47 @@ func BuildWordConfidences(refTokens []string, words []HypWord, slice string) []c
 		out = append(out, corebench.WordConfidence{Confidence: meta[i].conf, Correct: ok, Slice: slice})
 	}
 	return out
+}
+
+// scoreCalibration aligns every meeting's confident hyp words to its reference and
+// returns the run's scored word-confidence records (empty when the run carries no
+// word confidence). Meetings whose reference is absent are skipped — the same
+// tolerance the quality scorer applies — so a partial-confidence run (e.g. only
+// some meetings emitted NeMo confidence) still scores what it has.
+func scoreCalibration(hyps []MeetingHyp, opts ScoreOptions) ([]corebench.WordConfidence, error) {
+	var words []corebench.WordConfidence
+	for _, h := range hyps {
+		id := h.Key()
+		if id == "" {
+			continue
+		}
+		refWords, err := dataset.LoadWords(filepath.Join(opts.WordsDir, id+".words.json"))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		ref := dataset.Meeting{ID: id, Words: refWords}
+		words = append(words, BuildWordConfidences(ref.Reference(), h.Words, "")...)
+	}
+	return words, nil
+}
+
+// CalibrateRun scores a COMPLETED run's stored hyps against local references and
+// writes calibration.json — retroactive, GPU-free (the same scoring the run flow
+// runs inline, runnable after the fact on any confidence-bearing run). Returns
+// (report, false, nil) when the run carries no word confidence to score.
+func (r *Runner) CalibrateRun(runID string, opts ScoreOptions) (corebench.CalibrationReport, bool, error) {
+	hyps, err := loadMeetingHyps(filepath.Join(r.Store.RunDir(runID), "hyps"))
+	if err != nil {
+		return corebench.CalibrationReport{}, false, err
+	}
+	words, err := scoreCalibration(hyps, opts)
+	if err != nil {
+		return corebench.CalibrationReport{}, false, err
+	}
+	return r.WriteCalibration(runID, words)
 }
 
 // WriteCalibration builds the calibration.v1 report from all scored words and

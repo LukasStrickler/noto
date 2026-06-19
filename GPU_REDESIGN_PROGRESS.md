@@ -221,12 +221,26 @@ Don't add inert Go fields before step 1+2 produce the data — that's speculativ
     with stderr visible) BEFORE spending more GPU. Repair system + CLI + knob are all ready; only the
     confidence-DATA population is blocked.
 
+- **Iter 11 (2026-06-19):** **UNBLOCKED B6 confidence** — diagnosed GPU-free, fixed, demonstrated live.
+  - Diagnosed the `confidence=1` capture crash from a FAILED run's box logs (`/tmp/noto-bench-out-*/…/raw.jsonl`)
+    — **no extra GPU**: `stt/parakeet: Something went wrong with word-level confidence aggregation` — NeMo's
+    **TDT** (`parakeet-tdt-0.6b-v3`) word-confidence aggregation raises on some inputs; the server propagated
+    it → crashed capture (violating the "degrade, never crash" contract).
+  - Fix (`parakeet_stt_server.py`): snapshot plain decoding cfg; on a confidence-decode failure, revert +
+    retry plain (one-way). **Confidence gate now SUCCEEDS** ($/hr 0.0269). Plus `NOTO_PARAKEET_SERVER_STDERR`
+    passthrough + 16KiB tail (the diagnostic switch).
+  - Fixed a real budget bug (`RepairPreview` fell back to audio_sec when speech_sec absent → budget was 0).
+  - **`noto bench repair` now works on REAL data:** run `20260619T115608Z-2f6cc5` → 459 candidate spans
+    (1100s), budget 300s, attempt 299.9s, projected $0.015. Committed `93c3f2c`, pushed.
+  - NOTE: only 1/5 meetings emitted confidence (ES2011b, 3443 words) — the global revert means once any
+    meeting hits the TDT fault, the rest decode plain. Fine for first B6 data; a per-request revert/restore
+    would raise coverage (enhancement).
+
 ## Repair + KPI system — roadmap (user directive: implement ALL items)
 
 Done: **B6 calibration** (scorers + CPU pipeline) · **B7 dry-run CORE** (repair.go) · **B7 wiring**
-(SpansFromWords + RepairPreview) · **`noto bench repair` CLI** + **confidence knob**. Remaining, in order:
-0. **UNBLOCK B6 confidence (do FIRST, but cheaply):** diagnose the `confidence=1` capture crash WITHOUT a
-   full gate run — get the parakeet stderr (server-stderr capture, or a 1-meeting repro). Only then re-run.
+(SpansFromWords + RepairPreview) · **`noto bench repair` CLI** + **confidence knob** · **B6 confidence
+UNBLOCKED** (TDT degrade-not-crash, repair preview demonstrated on real data). Remaining, in order:
 1. **B6 confidence GPU run + CLI surface (next, paired):** run one Modal `gate_ami` with word confidence
    enabled (the parakeet server's confidence path) to populate real per-word confidence, THEN add
    `noto bench repair --run <id>` showing the RepairPreview (candidates, seconds, projected cost) — so the

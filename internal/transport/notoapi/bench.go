@@ -324,12 +324,35 @@ type BenchRepairResult struct {
 	ProjectedCostUSD    float64 `json:"projected_cost_usd"`
 }
 
+// BenchCalibrationResult is a run's B6 confidence-calibration report (§10.3): how
+// well the model's word confidence predicts its own errors. SignalAdmissible is the
+// gate — confidence may drive repair spend only when it beats the do-nothing
+// baseline (bottom-decile capture > random) without a high-confidence error spike.
+// HasConfidence is false when the run carried no word confidence to score.
+type BenchCalibrationResult struct {
+	SchemaVersion         string   `json:"schema_version"`
+	RunID                 string   `json:"run_id"`
+	HasConfidence         bool     `json:"has_confidence"`
+	Words                 int      `json:"words"`
+	Errors                int      `json:"errors"`
+	ECE                   float64  `json:"ece"`
+	Brier                 float64  `json:"brier,omitempty"`
+	BottomDecileCapture   float64  `json:"bottom_decile_capture"`
+	RiskCoverageAUC       float64  `json:"risk_coverage_auc,omitempty"`
+	HighConfErrorRate     float64  `json:"high_conf_error_rate"`
+	CaptureLiftOverRandom float64  `json:"capture_lift_over_random"`
+	SignalAdmissible      bool     `json:"signal_admissible"`
+	Reasons               []string `json:"reasons,omitempty"`
+}
+
 // BenchClient methods for measurement spine.
 type BenchClient interface {
 	// BenchInsights returns one run's full weighted-KPI snapshot (winner when runID empty).
 	BenchInsights(ctx context.Context, runID string) (BenchInsightsResult, error)
 	// BenchRepair returns a run's B7 dry-run repair preview (candidates + cost).
 	BenchRepair(ctx context.Context, runID string) (BenchRepairResult, error)
+	// BenchCalibration scores a run's word-confidence calibration (B6).
+	BenchCalibration(ctx context.Context, runID string) (BenchCalibrationResult, error)
 	BenchEstimate(ctx context.Context, req BenchEstimateRequest) (BenchEstimateResult, error)
 	BenchPreflight(ctx context.Context, req BenchPreflightRequest) (BenchPreflightResult, error)
 	BenchRun(ctx context.Context, req BenchRunRequest) (BenchRunResult, error)
