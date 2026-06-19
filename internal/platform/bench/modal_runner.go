@@ -322,6 +322,11 @@ var knobLauncherEnv = map[string]string{
 	// is the lever that can actually fix low-confidence spans).
 	"decode":    "BENCH_PARAKEET_DECODE",
 	"beam_size": "BENCH_PARAKEET_BEAM_SIZE",
+	// perturb re-decodes the SAME model on ALTERED audio (speed:0.9 | speed:1.1 |
+	// noise:0.005) — a test-time augmentation that produces a genuinely different
+	// hypothesis WITHOUT a weaker model, the repair lever when same-model decode
+	// config is byte-identical. speed warps time (timestamps rescaled back).
+	"perturb": "BENCH_PARAKEET_PERTURB",
 	// stt_model swaps the NeMo STT weights (NOTO_PARAKEET_MODEL) — the §10.5
 	// alternate-ASR repair method: re-decode low-confidence spans with a different
 	// (e.g. larger) parakeet, the genuine-quality alternate when same-model beam

@@ -48,6 +48,16 @@ func TestKnobEnv_DecodeAndBeamSizeMapToLauncherVars(t *testing.T) {
 	}
 }
 
+func TestKnobEnv_PerturbMapsToLauncherVar(t *testing.T) {
+	// `--knob perturb=speed:0.9` re-decodes the same model on time-warped audio (the
+	// test-time-augmentation repair lever); it must reach the launcher as
+	// BENCH_PARAKEET_PERTURB (forwarded to NOTO_PARAKEET_PERTURB).
+	env := bench.KnobEnv(map[string]string{"perturb": "speed:0.9"})
+	if len(env) != 1 || env[0] != "BENCH_PARAKEET_PERTURB=speed:0.9" {
+		t.Fatalf("perturb knob env=%v want [BENCH_PARAKEET_PERTURB=speed:0.9]", env)
+	}
+}
+
 func TestKnobEnv_STTModelMapsToLauncherVar(t *testing.T) {
 	// `--knob stt_model=<hf-id>` is the §10.5 alternate-ASR lever; it must reach the
 	// launcher as BENCH_PARAKEET_MODEL (forwarded to NOTO_PARAKEET_MODEL, which the

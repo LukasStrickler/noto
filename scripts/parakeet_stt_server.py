@@ -60,6 +60,11 @@ Env:
                             greedy, never crashes.
   NOTO_PARAKEET_BEAM_SIZE   beam width when NOTO_PARAKEET_DECODE is a beam
                             strategy (default 4)
+  NOTO_PARAKEET_PERTURB     test-time AUDIO augmentation re-decoded by the SAME
+                            model — the repair lever when same-model decode
+                            config is byte-identical. speed:0.9 / speed:1.1
+                            (resample time-warp, timestamps rescaled back) or
+                            noise:0.005 (additive gaussian). Empty = unperturbed.
   NOTO_PARAKEET_FAKE        1 = no-NeMo protocol selftest (deterministic fake
                             words from the WAV header; for $0 local testing)
 
@@ -270,6 +275,17 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
         strat = "maes" if decode_mode == "beam" else decode_mode
         alt["beam"] = enable_beam_decode(model, beam_size, strat)
 
+    # Audio perturbation is opt-in (NOTO_PARAKEET_PERTURB=speed:0.9 | speed:1.1 |
+    # noise:0.005) — a TEST-TIME augmentation that re-decodes the SAME model on ALTERED
+    # audio, the repair lever for when a same-model decode config is byte-identical
+    # (greedy TDT is deterministic on identical input) and a different model is weaker.
+    # `speed` warps the time axis by resampling (timestamps are rescaled back to the
+    # original timeline); `noise` adds gaussian noise without warping time. The default
+    # (empty) path is the validated unperturbed decode, byte-identical to before.
+    perturb_spec = os.getenv("NOTO_PARAKEET_PERTURB", "").strip().lower()
+    if perturb_spec:
+        log(f"audio perturbation enabled: {perturb_spec}")
+
     # Pass optional kwargs only when this NeMo version's transcribe() has them,
     # so a signature drift degrades to defaults instead of crashing the server.
     sig = inspect.signature(model.transcribe).parameters
@@ -281,7 +297,7 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
     except Exception:
         frame_sec = 0.08
 
-    def words_of(hyp) -> dict:
+    def words_of(hyp, time_scale: float = 1.0) -> dict:
         if isinstance(hyp, list):  # n-best shape → best hypothesis
             hyp = hyp[0] if hyp else ""
         if isinstance(hyp, str):  # no timestamp support → let Go fall back
@@ -304,7 +320,9 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
                 start = float(w.get("start_offset", 0)) * frame_sec
             if end is None:
                 end = float(w.get("end_offset", 0)) * frame_sec
-            words.append((word, float(start), float(end)))
+            # Map perturbed-timeline stamps back to the original audio (speed warp);
+            # time_scale is 1.0 for unperturbed / non-time-warping perturbations.
+            words.append((word, float(start) * time_scale, float(end) * time_scale))
             # Prefer a per-word confidence carried on the timestamp dict; else the
             # parallel hyp.word_confidence list; else this word drops out of the
             # confidence stream (so a partial list never misaligns the rest).
@@ -340,10 +358,55 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
         log(f"downmixed {info.channels}-channel input {os.path.basename(path)} → mono")
         return tmp.name
 
+    def perturb_audio(path: str, scratch: list[str]) -> tuple[str, float]:
+        """Apply NOTO_PARAKEET_PERTURB to one wav before decode. Returns the (possibly
+        new) path and the factor word timestamps must be multiplied by to map back to
+        the ORIGINAL timeline (1.0 when time isn't warped). Best-effort: any failure
+        returns the original audio unperturbed — perturbation never breaks a decode."""
+        if not perturb_spec:
+            return path, 1.0
+        try:
+            import numpy as np
+            import soundfile as sf
+
+            kind, _, val = perturb_spec.partition(":")
+            data, sr = sf.read(path, dtype="float32")
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            scale = 1.0
+            if kind == "speed":
+                rate = float(val or "1.0")
+                if rate <= 0 or rate == 1.0:
+                    return path, 1.0
+                # Resample to len/rate samples: at the same sr the content plays `rate`×
+                # faster (rate>1) or slower (rate<1). A perturbed-time stamp × rate maps
+                # back to the original timeline.
+                n = max(1, int(round(len(data) / rate)))
+                data = np.interp(np.linspace(0.0, len(data) - 1, n), np.arange(len(data)), data).astype("float32")
+                scale = rate
+            elif kind == "noise":
+                amp_db = float(val or "0.005")
+                data = (data + np.random.normal(0.0, amp_db, len(data)).astype("float32"))
+            else:
+                return path, 1.0
+            import tempfile
+
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            sf.write(tmp.name, data, sr)
+            scratch.append(tmp.name)
+            return tmp.name, scale
+        except Exception as exc:
+            log(f"perturb failed ({exc}); using original audio")
+            return path, 1.0
+
     def transcribe(paths: list[str]) -> list[dict]:
         scratch: list[str] = []
         amp = torch.autocast("cuda", dtype=torch.bfloat16) if use_bf16 else contextlib.nullcontext()
-        wavs = [mono_path(p, scratch) for p in paths]
+        mono = [mono_path(p, scratch) for p in paths]
+        perturbed = [perturb_audio(p, scratch) for p in mono]
+        wavs = [w for w, _ in perturbed]
+        # All inputs share one NOTO_PARAKEET_PERTURB → one time-scale for the batch.
+        time_scale = perturbed[0][1] if perturbed else 1.0
 
         def _decode():
             with torch.inference_mode(), amp:
@@ -379,7 +442,7 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
             hyps = hyps[0]
         if len(hyps) != len(paths):
             raise RuntimeError(f"transcribe returned {len(hyps)} results for {len(paths)} inputs")
-        return [words_of(h) for h in hyps]
+        return [words_of(h, time_scale) for h in hyps]
 
     return transcribe
 

@@ -165,6 +165,10 @@ KNOB_FORWARDS: list[tuple[str, str, str]] = [
     # STRATEGY is the lever that can actually fix errors, not fp32).
     ("BENCH_PARAKEET_DECODE", "NOTO_PARAKEET_DECODE", ""),
     ("BENCH_PARAKEET_BEAM_SIZE", "NOTO_PARAKEET_BEAM_SIZE", ""),
+    # Audio perturbation (speed:R | noise:A) → re-decode the SAME model on altered
+    # audio: the test-time-augmentation repair lever (a different hypothesis with no
+    # weaker model). speed warps time; the server rescales timestamps back.
+    ("BENCH_PARAKEET_PERTURB", "NOTO_PARAKEET_PERTURB", ""),
     # Swap the NeMo STT weights (HF repo or .nemo path) → §10.5 alternate-ASR
     # repair method: re-decode low-confidence spans with a different/larger parakeet.
     # The model resolves from the HF cache the same way the default does (downloads
