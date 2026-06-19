@@ -95,12 +95,20 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     whole-transcript re-scored so seam errors are charged). Closes the B7 attempt+measure loop EXCEPT the
     GPU re-decode: the loop is `plan.Attempt → re-decode(span) → MeasureSplice → .Outcome → BuildRepairReport
     → PassesB7Gate`, all wired and tested offline.
-  - **NEXT (needs a greenlit GPU run):** (2) the re-decode call itself — a Modal STT path that
-    re-transcribes ONE span's audio with an alternate method (alternate decode / resample / bigger model)
-    and returns `[]HypWord`; wire it into the loop above for B7. (3) the overlap separation pass (separate
-    + re-transcribe flagged overlap regions, same `MeasureSplice` path on cpWER/DER). (4) cheap production
-    overlap DETECTOR (energy/VAD on the system channel) → fires the separation pass live. All GPU-free gates
-    (calibration admissible, repair ceiling ~40%, overlap addressable ~33%) say the accuracy is there.
+  - **DONE (commit 45650bf):** the B7 attempt+measure LOOP — `platform/bench/repair_attempt.go`
+    `AttemptRepairs`/`attemptMeeting`: per meeting, plan low-conf spans → re-decode via an injected
+    `ReDecoder` → `MeasureSplice` → fold into a run-level `RepairReport` + B7 gate (accepted-per-USD,
+    negative-rate). DRY-RUN, no production writes. `ReDecoder` is the ONLY GPU seam — the whole loop is
+    tested offline with a fake (oracle→accepted+WER drops; corrupting→negative; failed→skipped, no crash).
+    Core `MergeRepairReports`; factored `repairWordsOf` + `loadRefMeeting`.
+  - **NEXT — the ONE remaining seam is GPU:** build the Modal-backed `ReDecoder`. Cheapest first method
+    (`MethodAlternateDecode`): re-transcribe the meeting audio via the existing STT path with an ALTERNATE
+    decode config (confidence/beam), cache it, and return the span's words sliced from it — no new
+    audio-slicing infra. Wire `noto bench repair-attempt --run <id>` (CLI) + the Modal impl together, then
+    ONE bounded validation run produces the first real `RepairReport` (accepted-per-$ + benchmark WER
+    delta). After that: span-targeted slicing (production-efficient), then the overlap separation pass
+    (same `MeasureSplice` path on cpWER/DER) + the cheap production overlap detector. The whole offline
+    chain (plan→splice→measure→gate) is complete and green; the next commit is the first GPU spend.
 
 ## Leads / findings (verify before acting)
 
