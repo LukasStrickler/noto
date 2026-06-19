@@ -330,12 +330,25 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     `noto bench repair-attempt` (run-pair re-decode) + `noto bench diar-repair-attempt` (run-pair re-diarize).
     The deterministic CPU glossary entity-repair (`core/entityrepair`) was KEPT — it's a local pass, not an
     LLM API call.
-  - **NEXT (GPU repair / cost only):** the repair direction is now GPU re-decode/re-diarize + GPU/cost
-    optimization. The transcription GPU-repair win needs a genuinely-stronger GPU decode source (the validated
-    same-family sources are weak; a different/bigger ASR model is the lever — `--knob stt_model`); the
-    diarization GPU-repair win is overlap separation, still gated on system-audio capture
-    ([[capture-is-mic-only]]). Cost frontier on AMI is largely exhausted ($0.01633 winner). All non-GPU,
-    non-OpenRouter levers (entity-repair) are shipped + hardened; stay on GPU.
+  - **★ FIRST REAL GPU DIAR-REPAIR KPI — from existing data, ZERO new spend (this iter).** Found an existing
+    VAD-on run (`20260619T065343Z-e976ad`, gate_ami `--knob vad=on`) — VAD trims silence and remaps turns, so
+    its diarization GENUINELY differs from the no-VAD runs (unlike the same-config no-op before). Ran
+    `diar-repair-attempt(no-vad baseline × VAD alt)` on the shared 5 meetings: **621 overlap regions, 101 got
+    a different re-diarization → net DER Δ −0.0034** (the machine applies the 4 re-diarizations that help and
+    rejects the 3 that regress; naive == ceiling, so the diar accept-rule is well-calibrated — no seam cost
+    like transcription). Reproducible across two baselines (b7f531, 79098d → identical, since scored vs the
+    reference). **B7 gate correctly FAILS** on negative-rate: 3 of 7 differing regions regress, and the accept
+    decision uses the REFERENCE — in production (no reference) you couldn't pick the 4 winners from this
+    source. So −0.0034 is a reference-guided CEILING, and VAD is a weak overlap-repair source (it trims
+    silence, doesn't separate overlap). **This validates the GPU diar-repair machine end-to-end on real
+    differing data and is the first positive "DER recovered by re-diarizing overlap" number.** The strong
+    source (separation) for the 33% headroom remains gated on system-audio capture ([[capture-is-mic-only]]).
+    NOTE: cost shows $0 for this run — the VAD run's trace has the L1 diar-attribution gap (total≈asr), so
+    the (now trace-derived) diar rate is 0; honest, not fabricated.
+  - **NEXT (GPU repair / cost only):** transcription GPU-repair needs a genuinely-stronger GPU decode source
+    (same-family is validated-weak; a different/bigger ASR is the lever — `--knob stt_model`); diarization
+    GPU-repair needs overlap separation (gated on capture). Cost frontier on AMI largely exhausted ($0.01633
+    winner). All non-GPU, non-OpenRouter levers (entity-repair) are shipped + hardened; stay on GPU.
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
