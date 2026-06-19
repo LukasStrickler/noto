@@ -165,6 +165,11 @@ KNOB_FORWARDS: list[tuple[str, str, str]] = [
     # STRATEGY is the lever that can actually fix errors, not fp32).
     ("BENCH_PARAKEET_DECODE", "NOTO_PARAKEET_DECODE", ""),
     ("BENCH_PARAKEET_BEAM_SIZE", "NOTO_PARAKEET_BEAM_SIZE", ""),
+    # Swap the NeMo STT weights (HF repo or .nemo path) → §10.5 alternate-ASR
+    # repair method: re-decode low-confidence spans with a different/larger parakeet.
+    # The model resolves from the HF cache the same way the default does (downloads
+    # once into the model volume), so the only marginal cost is the alt decode itself.
+    ("BENCH_PARAKEET_MODEL", "NOTO_PARAKEET_MODEL", ""),
     # Stream the parakeet server's full stderr to the box stdout (diagnostic) so a
     # NeMo fault surfaces in the run output instead of a truncated tail.
     ("BENCH_PARAKEET_SERVER_STDERR", "NOTO_PARAKEET_SERVER_STDERR", ""),

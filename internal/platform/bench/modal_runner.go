@@ -322,6 +322,11 @@ var knobLauncherEnv = map[string]string{
 	// is the lever that can actually fix low-confidence spans).
 	"decode":    "BENCH_PARAKEET_DECODE",
 	"beam_size": "BENCH_PARAKEET_BEAM_SIZE",
+	// stt_model swaps the NeMo STT weights (NOTO_PARAKEET_MODEL) — the §10.5
+	// alternate-ASR repair method: re-decode low-confidence spans with a different
+	// (e.g. larger) parakeet, the genuine-quality alternate when same-model beam
+	// isn't enough. Same word-timestamp output shape, so the repair loop is unchanged.
+	"stt_model": "BENCH_PARAKEET_MODEL",
 }
 
 func knobEnv(knobs map[string]string) []string {

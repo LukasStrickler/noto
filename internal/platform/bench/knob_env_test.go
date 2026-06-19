@@ -48,6 +48,16 @@ func TestKnobEnv_DecodeAndBeamSizeMapToLauncherVars(t *testing.T) {
 	}
 }
 
+func TestKnobEnv_STTModelMapsToLauncherVar(t *testing.T) {
+	// `--knob stt_model=<hf-id>` is the §10.5 alternate-ASR lever; it must reach the
+	// launcher as BENCH_PARAKEET_MODEL (forwarded to NOTO_PARAKEET_MODEL, which the
+	// NeMo server resolves from the HF cache). A bare NOTO_STT_MODEL would be ignored.
+	env := bench.KnobEnv(map[string]string{"stt_model": "nvidia/parakeet-tdt-1.1b"})
+	if len(env) != 1 || env[0] != "BENCH_PARAKEET_MODEL=nvidia/parakeet-tdt-1.1b" {
+		t.Fatalf("stt_model knob env=%v want [BENCH_PARAKEET_MODEL=nvidia/parakeet-tdt-1.1b]", env)
+	}
+}
+
 func TestKnobEnv_UnknownKnobKeepsNotoPrefix(t *testing.T) {
 	env := bench.KnobEnv(map[string]string{"custom_flag": "1"})
 	if len(env) != 1 || env[0] != "NOTO_CUSTOM_FLAG=1" {
