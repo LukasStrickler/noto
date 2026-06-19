@@ -307,13 +307,19 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     ("yeah", "mm-hm"), NOT errors. So smoothing/flicker-removal would delete real turns and RAISE DER.
     Avoided shipping a regression — the "validate a valid step, not brute force" check working. Ref overlap is
     10.2% of speech, and the hyp misses most of it → the 33% addressable DER is overlap (needs separation).
-  - **NEXT (real optimization):** (transcription) optionally forward `ContextBias` to the parakeet server as
-    true decode-time biasing (NeMo context-biasing — GPU, bigger); the entity-repair pass covers the
-    GPU-free win now (equal-length + split-merge). (diarization) the real overlap win needs **system-audio
-    capture** ([[capture-is-mic-only]] — the mic-only stub is the blocker); once two channels exist,
-    per-channel diarization makes you-vs-remote separation free and only the system channel needs
-    multi-speaker diar. That capture work is macOS/ScreenCaptureKit. GPU-free diar post-processing (smoothing)
-    is now ruled out as invalid on this data.
+  - **DONE (this iter) — bias terms now include standalone speaker name PARTS (commit 459908a).** The
+    entity-repair is only as good as its term list; `contextBiasTerms` previously fed only FULL names
+    ("Lukas Strickler"), so a first/last name spoken alone ("lucas") never matched the 2-token term —
+    yet standalone participant names are the most common meeting entity and the core of "who". Extracted a
+    pure `biasTermsFromNames`: each multi-word name also contributes its parts ("Lukas","Strickler"),
+    particles <4 chars dropped, all dedup'd, title added whole (not split). 5 tests, green. Benefits both the
+    entity-repair and the future ASR decode-time biasing (same term source).
+  - **NEXT (real optimization):** (transcription) the GPU-free entity-repair lever now covers misspelled
+    (equal-length), split-compound (merge), and standalone-name-part errors against a richer term list; the
+    remaining transcription win is true decode-time biasing (forward `ContextBias` to the parakeet server →
+    NeMo context-biasing, GPU) or the live LLM `repair-correct` (needs creds). (diarization) the real overlap
+    win needs **system-audio capture** ([[capture-is-mic-only]] — the mic-only stub is the blocker); GPU-free
+    diar post-processing (smoothing) is ruled out as invalid on AMI (reference has the same short turns).
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
