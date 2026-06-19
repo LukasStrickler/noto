@@ -96,6 +96,32 @@ func TestAttemptMeeting_FailedReDecodeSkipsCleanly(t *testing.T) {
 	}
 }
 
+// The oracle ceiling commits only the edits that lower the WHOLE-transcript WER,
+// dropping a locally-promising one that worsens it (the seam cost the 1.1b run
+// exposed: 25 locally-accepted netted +0.006, but a 4-edit subset netted -0.0008).
+func TestOracleCeiling_KeepsOnlyWholeTranscriptImprovers(t *testing.T) {
+	ref := spliceRef() // "the quick brown fox"
+	base := []HypWord{
+		{Text: "the", Start: 0, End: 1, Speaker: "A"},
+		{Text: "kwik", Start: 1, End: 2, Speaker: "A"},  // wrong — fixable
+		{Text: "brown", Start: 2, End: 3, Speaker: "A"}, // already correct
+		{Text: "fox", Start: 3, End: 4, Speaker: "A"},
+	}
+	cands := []appliedRepair{
+		// A genuine fix: kwik -> quick lowers whole-transcript WER.
+		{startSec: 1, endSec: 2, repl: []HypWord{{Text: "quick", Start: 1, End: 2, Speaker: "A"}}, localWERDelta: -1},
+		// A seam/regression: replacing the already-correct "brown" raises whole WER.
+		{startSec: 2, endSec: 3, repl: []HypWord{{Text: "green", Start: 2, End: 3, Speaker: "A"}}, localWERDelta: -0.5},
+	}
+	delta, committed := oracleCeiling(ref, base, cands)
+	if committed != 1 {
+		t.Errorf("only the genuine fix should be committed, got %d", committed)
+	}
+	if delta >= 0 {
+		t.Errorf("the ceiling must improve whole-transcript WER, got %v", delta)
+	}
+}
+
 func TestMergeRepairReports_SumsFields(t *testing.T) {
 	a := corebench.RepairReport{AcceptedRepairs: 2, NegativeRepairs: 1, CostUSD: 0.01, NetWERDelta: -0.1, AcceptedSec: 5}
 	b := corebench.RepairReport{AcceptedRepairs: 3, NegativeRepairs: 0, CostUSD: 0.02, NetWERDelta: -0.2, AcceptedSec: 7}

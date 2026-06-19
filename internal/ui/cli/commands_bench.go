@@ -338,8 +338,14 @@ func (a *app) runBenchRepairAttempt(args []string) int {
 		res.SpansAttempted, res.MeetingsAttempted, res.SpansDiffered, res.AcceptedSec)
 	fmt.Fprintf(a.out, "  outcomes:  %d accepted · %d negative (rate %.4f)\n",
 		res.AcceptedRepairs, res.NegativeRepairs, res.NegativeRate)
-	fmt.Fprintf(a.out, "  accuracy:  net WER Δ %+.4f · net cpWER Δ %+.4f  (negative = improvement vs no repair)\n",
+	fmt.Fprintf(a.out, "  accuracy:  net WER Δ %+.4f · net cpWER Δ %+.4f  (naive: apply every accepted edit)\n",
 		res.NetWERDelta, res.NetCpWERDelta)
+	fmt.Fprintf(a.out, "  ceiling:   WER Δ %+.4f keeping only the %d edits that help the whole transcript\n",
+		res.CeilingWERDelta, res.CeilingAccepted)
+	if res.CeilingWERDelta < res.NetWERDelta {
+		fmt.Fprintf(a.out, "             → this alternate DOES contain real fixes; the gap is selector headroom\n")
+		fmt.Fprintf(a.out, "               (confidence over-selects / splice seams) — production needs a better selector\n")
+	}
 	fmt.Fprintf(a.out, "  cost:      $%.5f re-decode (STT-only)  →  %.1f accepted repairs/$\n",
 		res.CostUSD, res.AcceptedPerUSD)
 	gate := "PASS — repair beats do-nothing efficiently; eligible for B8 production write"

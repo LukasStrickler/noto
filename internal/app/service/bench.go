@@ -553,6 +553,8 @@ func (s *Service) BenchRepairAttempt(ctx context.Context, runID, altRunID string
 		NegativeRate:      a.NegativeRate,
 		NetWERDelta:       a.NetWERDelta,
 		NetCpWERDelta:     a.NetCpWERDelta,
+		CeilingWERDelta:   a.CeilingWERDelta,
+		CeilingAccepted:   a.CeilingAccepted,
 		AcceptedSec:       a.Report.AcceptedSec,
 		GatePass:          a.GatePass,
 		GateReasons:       a.GateReasons,

@@ -273,10 +273,17 @@ type RepairReport struct {
 	AcceptedSec         float64
 	SkippedHighValueSec float64
 	CostUSD             float64
-	NetWERDelta         float64 // sum of accepted WER deltas (negative = net improvement)
+	NetWERDelta         float64 // naive selector: apply EVERY accepted edit (negative = net improvement)
 	NetEntityDelta      float64
 	AcceptedRepairs     int
 	NegativeRepairs     int
+	// Oracle ceiling: the whole-transcript WER delta from keeping ONLY the accepted
+	// edits that actually lower it (reference-guided greedy), and how many that is —
+	// the MAX accuracy this alternate could buy with perfect selection, <= 0 by
+	// construction. The gap to NetWERDelta is "selector headroom": when confidence
+	// over-selects or splice seams hurt, the naive number is worse than this ceiling.
+	CeilingWERDelta float64
+	CeilingAccepted int
 }
 
 // BuildRepairReport folds a plan + its measured outcomes into the report.
@@ -318,6 +325,8 @@ func MergeRepairReports(a, b RepairReport) RepairReport {
 		NetEntityDelta:      a.NetEntityDelta + b.NetEntityDelta,
 		AcceptedRepairs:     a.AcceptedRepairs + b.AcceptedRepairs,
 		NegativeRepairs:     a.NegativeRepairs + b.NegativeRepairs,
+		CeilingWERDelta:     a.CeilingWERDelta + b.CeilingWERDelta,
+		CeilingAccepted:     a.CeilingAccepted + b.CeilingAccepted,
 	}
 }
 

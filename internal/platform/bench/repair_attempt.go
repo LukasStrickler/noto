@@ -2,8 +2,10 @@ package bench
 
 import (
 	"path/filepath"
+	"sort"
 
 	"github.com/lukasstrickler/noto/benchmark/dataset"
+	"github.com/lukasstrickler/noto/benchmark/metrics"
 	corebench "github.com/lukasstrickler/noto/internal/core/bench"
 )
 
@@ -52,6 +54,8 @@ type RepairAttemptResult struct {
 	NegativeRate      float64                `json:"negative_rate"`
 	NetWERDelta       float64                `json:"net_wer_delta"`
 	NetCpWERDelta     float64                `json:"net_cpwer_delta"`
+	CeilingWERDelta   float64                `json:"ceiling_wer_delta"`
+	CeilingAccepted   int                    `json:"ceiling_accepted"`
 	GatePass          bool                   `json:"gate_pass"`
 	GateReasons       []string               `json:"gate_reasons,omitempty"`
 	Report            corebench.RepairReport `json:"report"`
@@ -114,6 +118,8 @@ func (r *Runner) AttemptRepairs(runID string, dec ReDecoder, threshold float64, 
 	res.NegativeRate = round4(agg.NegativeRate())
 	res.NetWERDelta = round4(agg.NetWERDelta)
 	res.NetCpWERDelta = round4(agg.NetEntityDelta)
+	res.CeilingWERDelta = round4(agg.CeilingWERDelta)
+	res.CeilingAccepted = agg.CeilingAccepted
 	res.GatePass, res.GateReasons = agg.PassesB7Gate(b7MinAcceptedPerUSD, b7MaxNegativeRate)
 	return res, nil
 }
@@ -177,15 +183,16 @@ func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold 
 		o := m.Outcome(span, method, cost)
 		outcomes = append(outcomes, o)
 		if o.Accepted {
-			accepted = append(accepted, appliedRepair{startSec: span.StartSec, endSec: span.EndSec, repl: repl})
+			accepted = append(accepted, appliedRepair{startSec: span.StartSec, endSec: span.EndSec, repl: repl, localWERDelta: m.WERDelta})
 		}
 	}
 
 	rep := corebench.BuildRepairReport(plan, outcomes)
-	// The reported KPI delta is the TRUE whole-transcript move from applying EVERY
-	// accepted edit together and re-scoring once — not the sum of per-span local
-	// deltas (different denominators). This is the "with vs without repair" number.
 	if len(accepted) > 0 {
+		// Naive selector: apply EVERY locally-accepted edit and re-score once — the
+		// "with vs without repair" number if we shipped every confidence-flagged
+		// improvement. Confidence over-selection + splice seams can make this WORSE
+		// than do-nothing (validated: a 1.1b alternate netted +0.006 WER here).
 		after := h.Words
 		for _, a := range accepted {
 			after = spliceHypWords(after, a.startSec, a.endSec, a.repl)
@@ -193,16 +200,52 @@ func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold 
 		agg := measureWhole(ref, h.Words, after)
 		rep.NetWERDelta = agg.WERDelta
 		rep.NetEntityDelta = agg.CpWERDelta
+		// Oracle ceiling: keep ONLY the edits that lower the whole-transcript WER —
+		// the max this alternate could buy with perfect selection; the gap to the
+		// naive number above is the selector headroom (seam cost + over-selection).
+		rep.CeilingWERDelta, rep.CeilingAccepted = oracleCeiling(ref, h.Words, accepted)
 	}
 	return rep, attempted, differed, true
 }
 
-// appliedRepair is one accepted span edit, kept so the meeting's whole-transcript KPI
-// delta is measured from all edits applied together rather than summed per span.
+// appliedRepair is one accepted span edit. localWERDelta is its span-local WER delta
+// (negative = improvement), used to order the oracle-ceiling greedy commit; repl is
+// kept so the meeting's whole-transcript delta is measured from edits applied together.
 type appliedRepair struct {
-	startSec float64
-	endSec   float64
-	repl     []HypWord
+	startSec      float64
+	endSec        float64
+	repl          []HypWord
+	localWERDelta float64
+}
+
+// oracleCeiling greedily commits the locally-accepted edits — strongest local
+// improvement first — keeping each only when it strictly lowers the WHOLE-transcript
+// WER. It returns that best subset's whole-transcript WER delta (<= 0) and its size:
+// the max accuracy the alternate could buy if selection were perfect, with the seam
+// cost neutralized (a locally-good splice that shifts boundaries and hurts the whole
+// transcript is dropped). Reference-guided, so it is a CEILING, not the production
+// number (production must approximate the selection from confidence, not the truth).
+func oracleCeiling(ref dataset.Meeting, base []HypWord, cands []appliedRepair) (float64, int) {
+	ordered := append([]appliedRepair(nil), cands...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].localWERDelta < ordered[j].localWERDelta })
+	baseWER := wholeWER(ref, base)
+	running := base
+	curWER := baseWER
+	committed := 0
+	for _, c := range ordered {
+		trial := spliceHypWords(running, c.startSec, c.endSec, c.repl)
+		if tw := wholeWER(ref, trial); tw < curWER {
+			running = trial
+			curWER = tw
+			committed++
+		}
+	}
+	return round4(curWER - baseWER), committed
+}
+
+// wholeWER is the whole-transcript WER of a hyp word list against the reference.
+func wholeWER(ref dataset.Meeting, words []HypWord) float64 {
+	return werRate(metrics.WER(ref.Reference(), hypWordTokens(words)))
 }
 
 // spanTextDiffers reports whether the re-decode produced a DIFFERENT word sequence in

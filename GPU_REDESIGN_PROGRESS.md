@@ -183,12 +183,23 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     distinguishing "the alternate produced no different hypothesis" (fp32/beam: 0–1 differed → a same-model
     dead end) from "the different words didn't help" (1.1b: 96 differed, net-negative). The exact ambiguity
     that cost diagnosis time across the fp32/beam/1.1b runs is now one line in the tool.
-  - **NEXT (transcription):** the machine is done + validated; a POSITIVE number needs a repair source that's
-    actually better than 0.6b-v3 on hard spans (canary-1b is a candidate but different arch/API; or an
-    aggregate-guarded accept that only keeps edits improving the WHOLE-transcript WER, neutralizing the seam
-    cost). NEXT (diarization): the overlap-span planner + ReDiarizer → diar attempt loop (mirror
-    repair_attempt.go) on the validated MeasureDiarSplice spine. Cost discipline: ~$0.30 GPU spent this
-    session building+validating the whole repair system — be sparing now; the machine is proven.
+  - **★ FIRST POSITIVE NUMBER — from EXISTING GPU data, zero new spend (oracle ceiling).** The seam-cost
+    finding was addressable offline: added `oracleCeiling` (core RepairReport `CeilingWERDelta`/`Accepted`)
+    — greedily commit only the locally-accepted edits that strictly lower the WHOLE-transcript WER. On the
+    1.1b data: **naive (apply all 25) = +0.0060 (worse), oracle ceiling (keep the 4 that help) = -0.0008
+    (better).** So even a WEAK alternate (1.1b) contains 4 genuine whole-transcript fixes the machine
+    extracts; the ceiling is small precisely because 1.1b is a weak source. The gap (0.006 → -0.0008) is
+    quantified **selector headroom** — confidence over-selects + splice seams; production needs a better
+    selector than "apply every confidence-flagged span". `repair-attempt` now prints both numbers + the
+    headroom note. NOTE: the ceiling is REFERENCE-guided (an upper bound), not the production number — it
+    answers "how much could this alternate buy with perfect selection", the right "is it worth it" signal.
+    Commit pending. Tests: oracleCeiling drops a seam-regressing candidate. Full suite green, vet clean.
+  - **NEXT (transcription):** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER than
+    0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
+    The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
+    planner + ReDiarizer → diar attempt loop (mirror repair_attempt.go) on the validated MeasureDiarSplice
+    spine. Cost discipline: ~$0.30 GPU this session built+validated the whole repair system AND surfaced a
+    real positive ceiling with NO further spend — be sparing; the machine is proven.
   - **DONE (this iter) — diarization repair MEASUREMENT spine** (the user-critical overlap/two-channel half),
     GPU-free + tested: `core/bench/diar_splice.go` `SpliceTurns`/`TurnsInSpan` (pure turn-interval surgery,
     the diar analog of SpliceSpan) + `platform/bench/repair_diar_measure.go` `MeasureDiarSplice` (DER

@@ -405,6 +405,8 @@ type BenchRepairAttemptResult struct {
 	NegativeRate      float64  `json:"negative_rate"`
 	NetWERDelta       float64  `json:"net_wer_delta"`
 	NetCpWERDelta     float64  `json:"net_cpwer_delta"`
+	CeilingWERDelta   float64  `json:"ceiling_wer_delta"`
+	CeilingAccepted   int      `json:"ceiling_accepted"`
 	AcceptedSec       float64  `json:"accepted_sec"`
 	GatePass          bool     `json:"gate_pass"`
 	GateReasons       []string `json:"gate_reasons,omitempty"`
