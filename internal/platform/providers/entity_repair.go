@@ -28,10 +28,17 @@ func RepairTranscriptEntities(t *artifacts.Transcript, terms []string, opts enti
 
 	// Apply the corrected texts; a "" output marks a word merged away (a split entity
 	// rejoined), which we drop after extending the kept word to cover its span so the
-	// timeline stays gapless.
+	// timeline stays gapless. A repair that spans a segment boundary is SKIPPED — merging
+	// across segments could empty one segment and desync its text from its words; an
+	// entity split across two diarized segments is an edge case not worth that risk.
 	drop := make([]bool, len(t.Words))
 	touched := make(map[string]bool)
+	applied := reps[:0:0]
 	for _, r := range reps {
+		if !withinOneSegment(t.Words, r.Index, r.Length) {
+			continue
+		}
+		applied = append(applied, r)
 		lastKept := r.Index
 		for k := 0; k < r.Length; k++ {
 			idx := r.Index + k
@@ -49,6 +56,9 @@ func RepairTranscriptEntities(t *artifacts.Transcript, terms []string, opts enti
 			t.Words[lastKept].EndSeconds = t.Words[end].EndSeconds
 		}
 	}
+	if len(applied) == 0 {
+		return nil
+	}
 
 	if anyTrue(drop) {
 		kept := t.Words[:0:0]
@@ -60,7 +70,22 @@ func RepairTranscriptEntities(t *artifacts.Transcript, terms []string, opts enti
 		t.Words = kept
 	}
 	rebuildTouchedSegments(t, touched)
-	return reps
+	return applied
+}
+
+// withinOneSegment reports whether all words in [start,start+length) share one segment,
+// so a repair never crosses a segment boundary.
+func withinOneSegment(ws []artifacts.Word, start, length int) bool {
+	if length <= 1 {
+		return true
+	}
+	sid := ws[start].SegmentID
+	for k := 1; k < length; k++ {
+		if ws[start+k].SegmentID != sid {
+			return false
+		}
+	}
+	return true
 }
 
 func anyTrue(b []bool) bool {

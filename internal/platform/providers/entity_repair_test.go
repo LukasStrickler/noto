@@ -68,6 +68,33 @@ func TestRepairTranscriptEntities_MergesSplitEntityAndRebuilds(t *testing.T) {
 	}
 }
 
+func TestRepairTranscriptEntities_SkipsCrossSegmentMerge(t *testing.T) {
+	// "data" and "dog" landed in different diarized segments — a merge here would drop
+	// w2 and empty s2. The repair must be skipped, leaving everything intact.
+	tr := &artifacts.Transcript{
+		Segments: []artifacts.Segment{
+			{ID: "s1", Text: "use data", WordIDs: []string{"w1", "w2"}},
+			{ID: "s2", Text: "dog now", WordIDs: []string{"w3", "w4"}},
+		},
+		Words: []artifacts.Word{
+			{ID: "w1", SegmentID: "s1", Text: "use", StartSeconds: 0, EndSeconds: 1},
+			{ID: "w2", SegmentID: "s1", Text: "data", StartSeconds: 1, EndSeconds: 2},
+			{ID: "w3", SegmentID: "s2", Text: "dog", StartSeconds: 2, EndSeconds: 3},
+			{ID: "w4", SegmentID: "s2", Text: "now", StartSeconds: 3, EndSeconds: 4},
+		},
+	}
+	reps := RepairTranscriptEntities(tr, []string{"Datadog"}, entityrepair.DefaultOptions())
+	if len(reps) != 0 {
+		t.Errorf("a cross-segment merge must be skipped, got %+v", reps)
+	}
+	if len(tr.Words) != 4 {
+		t.Errorf("no word should be dropped, got %d", len(tr.Words))
+	}
+	if tr.Segments[0].Text != "use data" || tr.Segments[1].Text != "dog now" {
+		t.Errorf("segments must be untouched: %q / %q", tr.Segments[0].Text, tr.Segments[1].Text)
+	}
+}
+
 func TestRepairTranscriptEntities_NoOpWithoutTermsOrWords(t *testing.T) {
 	tr := &artifacts.Transcript{Words: []artifacts.Word{{Text: "kubernates"}}}
 	if reps := RepairTranscriptEntities(tr, nil, entityrepair.DefaultOptions()); reps != nil {
