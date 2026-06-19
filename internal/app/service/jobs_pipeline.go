@@ -207,6 +207,29 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 // meeting title. Generic placeholder names ("spk_…", "Speaker …", "Participants")
 // are skipped — they bias nothing useful. Best-effort: any error yields no bias.
 func (s *Service) contextBiasTerms(ctx context.Context, title string) []string {
+	var names []string
+	if s.speakerProfiles != nil {
+		if profiles, err := s.speakerProfiles.List(ctx); err == nil {
+			for _, p := range profiles {
+				name := strings.TrimSpace(p.DisplayName)
+				if name == "" || name == "Participants" ||
+					strings.HasPrefix(name, "spk_") || strings.HasPrefix(name, "Speaker ") {
+					continue
+				}
+				names = append(names, name)
+			}
+		}
+	}
+	return biasTermsFromNames(title, names)
+}
+
+// biasTermsFromNames builds the dedup'd context-bias term list from the meeting title and
+// the known speaker display names. Each multi-word name contributes BOTH its full form
+// ("Lukas Strickler") AND its individual parts ("Lukas", "Strickler"): participant first
+// and last names are spoken standalone far more often than in full, and those standalone
+// mentions are the product-critical "who". Short parts (<4 chars) are dropped — they'd
+// match too loosely. The title is added whole, never split (its words aren't entities).
+func biasTermsFromNames(title string, displayNames []string) []string {
 	seen := map[string]bool{}
 	var terms []string
 	add := func(t string) {
@@ -220,15 +243,13 @@ func (s *Service) contextBiasTerms(ctx context.Context, title string) []string {
 	if title != "" && title != "Untitled meeting" {
 		add(title)
 	}
-	if s.speakerProfiles != nil {
-		if profiles, err := s.speakerProfiles.List(ctx); err == nil {
-			for _, p := range profiles {
-				name := strings.TrimSpace(p.DisplayName)
-				if name == "" || name == "Participants" ||
-					strings.HasPrefix(name, "spk_") || strings.HasPrefix(name, "Speaker ") {
-					continue
+	for _, name := range displayNames {
+		add(name)
+		if parts := strings.Fields(name); len(parts) > 1 {
+			for _, p := range parts {
+				if len([]rune(p)) >= 4 {
+					add(p)
 				}
-				add(name)
 			}
 		}
 	}
