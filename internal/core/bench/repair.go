@@ -359,7 +359,11 @@ func (r RepairReport) PassesB7Gate(minAcceptedPerUSD, maxNegativeRate float64) (
 	if r.NegativeRate() > maxNegativeRate {
 		reasons = append(reasons, "negative-repair rate over cap")
 	}
-	if r.AcceptedPerUSD() < minAcceptedPerUSD {
+	// Only judge efficiency when the cost is actually known. A zero CostUSD means the
+	// marginal cost couldn't be derived (e.g. a run whose trace lacks the stage
+	// attribution), not that the repair is infinitely inefficient — penalizing it there
+	// would be a false signal. The quality + negative-rate gates still apply.
+	if r.CostUSD > 0 && r.AcceptedPerUSD() < minAcceptedPerUSD {
 		reasons = append(reasons, "accepted-repairs-per-dollar below threshold")
 	}
 	return len(reasons) == 0, reasons

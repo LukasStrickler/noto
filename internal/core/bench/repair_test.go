@@ -215,3 +215,27 @@ func TestRepairReport_PassesWhenItBeatsDoNothing(t *testing.T) {
 		t.Errorf("a clean net-improving dry-run should pass: %v", reasons)
 	}
 }
+
+func TestRepairReport_UnknownCostDoesNotFailEfficiency(t *testing.T) {
+	// CostUSD 0 = cost couldn't be derived (e.g. trace lacks stage attribution), not
+	// "infinitely inefficient" — the efficiency gate must not fire on a missing signal.
+	r := bench.RepairReport{AcceptedRepairs: 4, NegativeRepairs: 0, CostUSD: 0, NetWERDelta: -0.0034}
+	_, reasons := r.PassesB7Gate(50, 0.005)
+	for _, reason := range reasons {
+		if reason == "accepted-repairs-per-dollar below threshold" {
+			t.Errorf("unknown cost must not trip the efficiency gate: %v", reasons)
+		}
+	}
+	// But a KNOWN, genuinely inefficient cost still fails.
+	r2 := bench.RepairReport{AcceptedRepairs: 1, NegativeRepairs: 0, CostUSD: 1.0, NetWERDelta: -0.01}
+	_, reasons2 := r2.PassesB7Gate(50, 0.005)
+	found := false
+	for _, reason := range reasons2 {
+		if reason == "accepted-repairs-per-dollar below threshold" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a known inefficient cost (1 accepted/$1) must still fail: %v", reasons2)
+	}
+}
