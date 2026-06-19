@@ -561,6 +561,37 @@ func (s *Service) BenchRepairAttempt(ctx context.Context, runID, altRunID string
 	}, nil
 }
 
+// BenchDiarRepairAttempt runs the diarization B7 loop (§10): re-diarize runID's
+// overlap regions using altRunID (a second diarization run with a different config)
+// and measure the DER recovered against the reference — the diarization with/without-
+// repair KPI. Dry-run: writes no production diarization.
+func (s *Service) BenchDiarRepairAttempt(ctx context.Context, runID, altRunID string) (notoapi.BenchDiarRepairAttemptResult, error) {
+	_ = ctx
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(altRunID) == "" {
+		return notoapi.BenchDiarRepairAttemptResult{}, notoapi.NewError(notoapi.CodeInvalidRequest, "run_id and alt_run_id required", nil)
+	}
+	a, err := s.benchRunner().AttemptDiarRepairs(runID, altRunID)
+	if err != nil {
+		return notoapi.BenchDiarRepairAttemptResult{}, notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
+	}
+	return notoapi.BenchDiarRepairAttemptResult{
+		SchemaVersion:     "bench_diar_repair_attempt.v1",
+		RunID:             a.RunID,
+		AltRunID:          a.AltRunID,
+		MeetingsAttempted: a.MeetingsAttempted,
+		RegionsAttempted:  a.RegionsAttempted,
+		RegionsDiffered:   a.RegionsDiffered,
+		AcceptedRepairs:   a.AcceptedRepairs,
+		NegativeRepairs:   a.NegativeRepairs,
+		CostUSD:           a.CostUSD,
+		NetDERDelta:       a.NetDERDelta,
+		CeilingDERDelta:   a.CeilingDERDelta,
+		CeilingAccepted:   a.CeilingAccepted,
+		GatePass:          a.GatePass,
+		GateReasons:       a.GateReasons,
+	}, nil
+}
+
 func (s *Service) BenchAudit(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
 	_ = ctx
 	if strings.TrimSpace(runID) == "" {

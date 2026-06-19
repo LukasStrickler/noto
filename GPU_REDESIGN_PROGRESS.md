@@ -214,6 +214,19 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     addressable in overlap regions (validated by `bench overlap`), a FAR bigger headroom than the <0.5%
     transcription-repair ceiling.** The diar measurement spine (SpliceTurns + MeasureDiarSplice) is built;
     the diar attempt loop is the highest-value next build.
+  - **DONE (this iter) — DIARIZATION repair attempt loop, full vertical, mirroring the validated
+    transcription pattern.** `platform/bench/repair_diar_attempt.go`: `AttemptDiarRepairs`/`attemptDiarMeeting`
+    plans the reference OVERLAP regions, re-diarizes each via a `ReDiarizer`, measures DER before/after
+    (`MeasureDiarSplice`), accepts on DER, reports naive vs `diarOracleCeiling` + the B7 gate. `runReDiarizer`
+    = run-pair seam. Reuses corebench.RepairReport/gate (primary delta carries DER); user-facing
+    `DiarAttemptResult` renames it NetDERDelta. Full CLI `noto bench diar-repair-attempt --run --alt-run`
+    wired end to end. 4 fake-driven tests. **Validated on real artifacts** (2f6cc5 × fc7b5f): 621 overlap
+    regions / 5 meetings, **0 differed** (alt shares the same pyannote config → identical turns, the diar
+    analog of the fp32/beam no-op) → gate correctly FAILS. Full suite green, vet clean.
+  - **NEXT (diarization, the high-value half):** a real DER number needs a genuinely-DIFFERENT diarization
+    alternate — ONE GPU run with a different diar config (`--knob vad=on`, a different pyannote model, or a
+    separation pass), then `diar-repair-attempt(baseline, <alt>)` → the first real "DER recovered by
+    re-diarizing overlap" number. The ceiling (33% addressable) is known from `bench overlap`.
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span

@@ -26,6 +26,7 @@ Usage:
   noto bench calibration --run <run_id> [--json]  # B6 confidence calibration (ECE, capture, admissibility)
   noto bench overlap --run <run_id> [--json]      # overlap repair: cost + addressable diarization error
   noto bench repair-attempt --run <id> --alt-run <id> [--json]  # B7: re-decode low-conf spans, measure real WER delta + cost
+  noto bench diar-repair-attempt --run <id> --alt-run <id> [--json]  # B7 diar: re-diarize overlap regions, measure DER recovered
   noto bench estimate --suite <id> [--tier <tier>] [--json]
   noto bench run --suite <id> [--tier <tier>] [--mode <mode>] [--integration-only] [--json]
   noto bench preflight --suite <id> --tier <tier> --mode <mode> [--json]
@@ -51,6 +52,8 @@ Set NOTO_AGENT_ID for spend accounting on runs.
 		return a.runBenchOverlap(args[1:])
 	case "repair-attempt":
 		return a.runBenchRepairAttempt(args[1:])
+	case "diar-repair-attempt":
+		return a.runBenchDiarRepairAttempt(args[1:])
 	case "estimate":
 		return a.runBenchEstimate(args[1:])
 	case "run":
@@ -349,6 +352,64 @@ func (a *app) runBenchRepairAttempt(args []string) int {
 	fmt.Fprintf(a.out, "  cost:      $%.5f re-decode (STT-only)  →  %.1f accepted repairs/$\n",
 		res.CostUSD, res.AcceptedPerUSD)
 	gate := "PASS — repair beats do-nothing efficiently; eligible for B8 production write"
+	if !res.GatePass {
+		gate = "FAIL — not yet worth a production write"
+	}
+	fmt.Fprintf(a.out, "  B7 gate:   %s\n", gate)
+	for _, r := range res.GateReasons {
+		fmt.Fprintf(a.out, "    · %s\n", r)
+	}
+	return 0
+}
+
+// runBenchDiarRepairAttempt re-diarizes a run's overlap regions using a second
+// diarization run (--alt-run) and measures the BENCHMARK DER each re-diarization
+// recovers — the diarization with/without-repair number, scored against the RTTM
+// reference. Dry-run: no production diarization. The diarization half of the repair
+// system (the higher-headroom one: ~33% of DER error lives in overlap regions).
+func (a *app) runBenchDiarRepairAttempt(args []string) int {
+	fs := flag.NewFlagSet("bench diar-repair-attempt", flag.ContinueOnError)
+	run := fs.String("run", "", "baseline run id (required)")
+	altRun := fs.String("alt-run", "", "alternate-diarization run id (required)")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return 64
+	}
+	if *run == "" || *altRun == "" {
+		fmt.Fprintln(a.errOut, "noto bench diar-repair-attempt --run <id> --alt-run <id>")
+		return 64
+	}
+	ctx := context.Background()
+	client, closeFn, code := a.connect(ctx)
+	if code != 0 {
+		return code
+	}
+	defer closeFn()
+	res, err := client.BenchDiarRepairAttempt(ctx, *run, *altRun)
+	if err != nil {
+		return a.errExit(err)
+	}
+	if *jsonOut {
+		return a.emitJSON(res)
+	}
+	fmt.Fprintf(a.out, "bench diar-repair-attempt (B7, dry-run) — %s\n", res.RunID)
+	fmt.Fprintf(a.out, "  alternate diarization: %s\n", res.AltRunID)
+	if res.MeetingsAttempted == 0 {
+		fmt.Fprintf(a.out, "  no overlap regions attempted — references have no >=2-speaker overlap, or the\n")
+		fmt.Fprintf(a.out, "  alternate run shares no diarized meetings with the baseline.\n")
+		return 0
+	}
+	fmt.Fprintf(a.out, "  attempted: %d overlap regions across %d meetings — %d got a different re-diarization\n",
+		res.RegionsAttempted, res.MeetingsAttempted, res.RegionsDiffered)
+	fmt.Fprintf(a.out, "  outcomes:  %d accepted · %d negative\n", res.AcceptedRepairs, res.NegativeRepairs)
+	fmt.Fprintf(a.out, "  accuracy:  net DER Δ %+.4f  (naive: apply every accepted re-diarization)\n", res.NetDERDelta)
+	fmt.Fprintf(a.out, "  ceiling:   DER Δ %+.4f keeping only the %d re-diarizations that help\n",
+		res.CeilingDERDelta, res.CeilingAccepted)
+	if res.CeilingDERDelta < res.NetDERDelta {
+		fmt.Fprintf(a.out, "             → real fixes exist; the gap is selector headroom (production needs a better selector)\n")
+	}
+	fmt.Fprintf(a.out, "  cost:      $%.5f re-diarize\n", res.CostUSD)
+	gate := "PASS — re-diarization beats do-nothing; eligible for production"
 	if !res.GatePass {
 		gate = "FAIL — not yet worth a production write"
 	}

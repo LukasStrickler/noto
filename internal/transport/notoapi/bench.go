@@ -412,6 +412,27 @@ type BenchRepairAttemptResult struct {
 	GateReasons       []string `json:"gate_reasons,omitempty"`
 }
 
+// BenchDiarRepairAttemptResult is the diarization counterpart: how much DER a targeted
+// re-diarization of the overlap regions recovered (naive apply-all vs the oracle
+// ceiling) + the B7 gate. RunID is the baseline; AltRunID is the second diarization
+// run (different config) supplying the corrected turns. Negative deltas are improvements.
+type BenchDiarRepairAttemptResult struct {
+	SchemaVersion     string   `json:"schema_version"`
+	RunID             string   `json:"run_id"`
+	AltRunID          string   `json:"alt_run_id"`
+	MeetingsAttempted int      `json:"meetings_attempted"`
+	RegionsAttempted  int      `json:"regions_attempted"`
+	RegionsDiffered   int      `json:"regions_differed"`
+	AcceptedRepairs   int      `json:"accepted_repairs"`
+	NegativeRepairs   int      `json:"negative_repairs"`
+	CostUSD           float64  `json:"cost_usd"`
+	NetDERDelta       float64  `json:"net_der_delta"`
+	CeilingDERDelta   float64  `json:"ceiling_der_delta"`
+	CeilingAccepted   int      `json:"ceiling_accepted"`
+	GatePass          bool     `json:"gate_pass"`
+	GateReasons       []string `json:"gate_reasons,omitempty"`
+}
+
 // BenchClient methods for measurement spine.
 type BenchClient interface {
 	// BenchInsights returns one run's full weighted-KPI snapshot (winner when runID empty).
@@ -425,6 +446,9 @@ type BenchClient interface {
 	// BenchRepairAttempt re-decodes a run's low-confidence spans from a second run and
 	// measures the benchmark accuracy delta + B7 gate (the real with/without-repair KPI).
 	BenchRepairAttempt(ctx context.Context, runID, altRunID string) (BenchRepairAttemptResult, error)
+	// BenchDiarRepairAttempt re-diarizes a run's overlap regions from a second run and
+	// measures the DER recovered + B7 gate (the diarization with/without-repair KPI).
+	BenchDiarRepairAttempt(ctx context.Context, runID, altRunID string) (BenchDiarRepairAttemptResult, error)
 	BenchEstimate(ctx context.Context, req BenchEstimateRequest) (BenchEstimateResult, error)
 	BenchPreflight(ctx context.Context, req BenchPreflightRequest) (BenchPreflightResult, error)
 	BenchRun(ctx context.Context, req BenchRunRequest) (BenchRunResult, error)
