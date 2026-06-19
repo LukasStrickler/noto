@@ -195,9 +195,11 @@ def enable_beam_decode(model, beam_size: int, strategy: str) -> bool:
             decoding_cfg.strategy = strategy
             if "beam" in decoding_cfg:
                 decoding_cfg.beam.beam_size = beam_size
-            # Keep word timestamps available under beam where supported; a build
-            # that ignores these simply yields no word stamps (graceful fallback).
-            decoding_cfg.compute_timestamps = True
+        # Word timestamps come from transcribe(timestamps=True) (the `opt` dict),
+        # NOT a decoding-cfg field — setting an unknown `compute_timestamps` here
+        # gets the structured config REJECTED, silently reverting the whole beam
+        # switch to greedy (the first beam run decoded byte-identically to greedy
+        # for exactly this reason). Touch only known fields (strategy, beam_size).
         model.change_decoding_strategy(decoding_cfg)
         log(f"beam decode enabled (strategy={strategy}, beam_size={beam_size})")
         return True
