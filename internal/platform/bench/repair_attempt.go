@@ -44,6 +44,7 @@ type RepairAttemptResult struct {
 	Method            string                 `json:"method"`
 	MeetingsAttempted int                    `json:"meetings_attempted"`
 	SpansAttempted    int                    `json:"spans_attempted"`
+	SpansDiffered     int                    `json:"spans_differed"`
 	AcceptedRepairs   int                    `json:"accepted_repairs"`
 	NegativeRepairs   int                    `json:"negative_repairs"`
 	CostUSD           float64                `json:"cost_usd"`
@@ -95,12 +96,13 @@ func (r *Runner) AttemptRepairs(runID string, dec ReDecoder, threshold float64, 
 		if err != nil {
 			continue
 		}
-		rep, spans, attempted := attemptMeeting(ref, h, dec, threshold, method)
+		rep, spans, differed, attempted := attemptMeeting(ref, h, dec, threshold, method)
 		if !attempted {
 			continue
 		}
 		res.MeetingsAttempted++
 		res.SpansAttempted += spans
+		res.SpansDiffered += differed
 		agg = corebench.MergeRepairReports(agg, rep)
 	}
 
@@ -135,9 +137,12 @@ func (r *Runner) AttemptRepairsFromRun(runID, altRunID string, threshold float64
 }
 
 // attemptMeeting plans and attempts one meeting's repairs, returning the report, the
-// number of spans attempted, and whether any were. Takes the reference + hyp directly
-// (no disk), so the full attempt+measure loop is unit-testable with a fake ReDecoder.
-func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold float64, method corebench.RepairMethod) (corebench.RepairReport, int, bool) {
+// number of spans attempted, how many got a re-decode that actually DIFFERED from the
+// baseline, and whether any were attempted. The differed count separates "the
+// alternate produced no different words to try" (a same-model dead end) from "the
+// different words didn't help" — two very different zero-accept outcomes. Takes the
+// reference + hyp directly (no disk), so the loop is unit-testable with a fake.
+func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold float64, method corebench.RepairMethod) (corebench.RepairReport, int, int, bool) {
 	words, _ := repairWordsOf(h)
 	spans := corebench.SpansFromWords(words, threshold, repairSuccessPrior, true)
 	speech := h.SpeechSec
@@ -151,18 +156,21 @@ func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold 
 		CostPerSecUSD: repairCostPerSecUSD,
 	}, repairValuePerUSD)
 	if len(plan.Attempt) == 0 {
-		return corebench.RepairReport{}, 0, false
+		return corebench.RepairReport{}, 0, 0, false
 	}
 
 	var outcomes []corebench.RepairOutcome
 	var accepted []appliedRepair
-	attempted := 0
+	attempted, differed := 0, 0
 	for _, span := range plan.Attempt {
 		repl, cost, err := dec.ReDecode(h.Key(), span.StartSec, span.EndSec, method)
 		if err != nil {
 			continue // a failed re-decode is skipped, never crashes the run (§B2.6)
 		}
 		attempted++
+		if spanTextDiffers(h.Words, span.StartSec, span.EndSec, repl) {
+			differed++
+		}
 		// Decide accept/reject on the SPAN-LOCAL WER/cpWER (sensitive); a single-word
 		// fix moves whole-transcript WER by ~1/N and rounds to nothing (§10.4).
 		m := MeasureSpliceLocal(ref, h.Words, span.StartSec, span.EndSec, repl)
@@ -186,7 +194,7 @@ func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold 
 		rep.NetWERDelta = agg.WERDelta
 		rep.NetEntityDelta = agg.CpWERDelta
 	}
-	return rep, attempted, true
+	return rep, attempted, differed, true
 }
 
 // appliedRepair is one accepted span edit, kept so the meeting's whole-transcript KPI
@@ -195,6 +203,24 @@ type appliedRepair struct {
 	startSec float64
 	endSec   float64
 	repl     []HypWord
+}
+
+// spanTextDiffers reports whether the re-decode produced a DIFFERENT word sequence in
+// the span than the baseline already had — the signal that separates "no different
+// hypothesis to try" (a same-model alternate on a deterministic decoder) from "the
+// different words didn't help". Compares the in-span baseline word texts to the
+// replacement word texts in order.
+func spanTextDiffers(baseline []HypWord, startSec, endSec float64, repl []HypWord) bool {
+	before := hypWordsInSpan(baseline, startSec, endSec)
+	if len(before) != len(repl) {
+		return true
+	}
+	for i := range before {
+		if before[i].Text != repl[i].Text {
+			return true
+		}
+	}
+	return false
 }
 
 // loadRefMeeting loads a meeting's reference words + diarization turns into the shape

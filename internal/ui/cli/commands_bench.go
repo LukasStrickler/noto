@@ -325,8 +325,17 @@ func (a *app) runBenchRepairAttempt(args []string) int {
 		fmt.Fprintf(a.out, "  `--knob confidence=1`) or the alternate run shares no meetings with it.\n")
 		return 0
 	}
-	fmt.Fprintf(a.out, "  attempted: %d spans across %d meetings (%.1fs accepted)\n",
-		res.SpansAttempted, res.MeetingsAttempted, res.AcceptedSec)
+	if res.SpansDiffered == 0 {
+		// The alternate decoded identically to the baseline in every span, so there
+		// was nothing to evaluate — distinct from "the different words didn't help".
+		fmt.Fprintf(a.out, "  attempted: %d spans across %d meetings — but the alternate decoded IDENTICALLY in\n",
+			res.SpansAttempted, res.MeetingsAttempted)
+		fmt.Fprintf(a.out, "  every span (0 differed). A same-model alternate (precision/beam) is deterministic on\n")
+		fmt.Fprintf(a.out, "  content for this decoder — use a DIFFERENT model: --alt-run from a `--knob stt_model=…` run.\n")
+		return 0
+	}
+	fmt.Fprintf(a.out, "  attempted: %d spans across %d meetings — %d got a different re-decode (%.1fs accepted)\n",
+		res.SpansAttempted, res.MeetingsAttempted, res.SpansDiffered, res.AcceptedSec)
 	fmt.Fprintf(a.out, "  outcomes:  %d accepted · %d negative (rate %.4f)\n",
 		res.AcceptedRepairs, res.NegativeRepairs, res.NegativeRate)
 	fmt.Fprintf(a.out, "  accuracy:  net WER Δ %+.4f · net cpWER Δ %+.4f  (negative = improvement vs no repair)\n",

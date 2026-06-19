@@ -397,6 +397,7 @@ type BenchRepairAttemptResult struct {
 	Method            string   `json:"method"`
 	MeetingsAttempted int      `json:"meetings_attempted"`
 	SpansAttempted    int      `json:"spans_attempted"`
+	SpansDiffered     int      `json:"spans_differed"`
 	AcceptedRepairs   int      `json:"accepted_repairs"`
 	NegativeRepairs   int      `json:"negative_repairs"`
 	CostUSD           float64  `json:"cost_usd"`

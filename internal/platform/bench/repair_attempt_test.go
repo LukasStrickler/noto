@@ -48,9 +48,12 @@ func TestAttemptMeeting_OracleReDecodeIsAcceptedAndImprovesWER(t *testing.T) {
 		{Text: "brown", Start: 2, End: 3, Speaker: "A"},
 	}, cost: 0.0001}
 
-	rep, spans, attempted := attemptMeeting(ref, hyp, oracle, 0.5, corebench.MethodAlternateDecode)
+	rep, spans, differed, attempted := attemptMeeting(ref, hyp, oracle, 0.5, corebench.MethodAlternateDecode)
 	if !attempted || spans != 1 {
 		t.Fatalf("expected 1 attempted span, got attempted=%v spans=%d", attempted, spans)
+	}
+	if differed != 1 {
+		t.Errorf("the oracle words (quick/brown) differ from baseline (kwik/braun) → differed=1, got %d", differed)
 	}
 	if rep.AcceptedRepairs != 1 || rep.NegativeRepairs != 0 {
 		t.Errorf("oracle re-decode should be accepted: %+v", rep)
@@ -70,7 +73,7 @@ func TestAttemptMeeting_BadReDecodeIsNegativeNotAccepted(t *testing.T) {
 		{Text: "green", Start: 2, End: 3, Speaker: "A"},
 	}, cost: 0.0001}
 
-	rep, _, attempted := attemptMeeting(ref, hyp, bad, 0.5, corebench.MethodAlternateDecode)
+	rep, _, _, attempted := attemptMeeting(ref, hyp, bad, 0.5, corebench.MethodAlternateDecode)
 	if !attempted {
 		t.Fatal("span should have been attempted")
 	}
@@ -82,7 +85,7 @@ func TestAttemptMeeting_BadReDecodeIsNegativeNotAccepted(t *testing.T) {
 func TestAttemptMeeting_FailedReDecodeSkipsCleanly(t *testing.T) {
 	ref := spliceRef()
 	hyp := attemptHyp([2]string{"kwik", "braun"})
-	rep, _, attempted := attemptMeeting(ref, hyp, fakeReDecoder{fail: true}, 0.5, corebench.MethodAlternateDecode)
+	rep, _, _, attempted := attemptMeeting(ref, hyp, fakeReDecoder{fail: true}, 0.5, corebench.MethodAlternateDecode)
 	// The plan still had a candidate (attempted=true), but the failed re-decode
 	// produces no outcome — never a crash, never a phantom accept.
 	if !attempted {

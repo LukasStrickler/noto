@@ -545,6 +545,7 @@ func (s *Service) BenchRepairAttempt(ctx context.Context, runID, altRunID string
 		Method:            a.Method,
 		MeetingsAttempted: a.MeetingsAttempted,
 		SpansAttempted:    a.SpansAttempted,
+		SpansDiffered:     a.SpansDiffered,
 		AcceptedRepairs:   a.AcceptedRepairs,
 		NegativeRepairs:   a.NegativeRepairs,
 		CostUSD:           a.CostUSD,

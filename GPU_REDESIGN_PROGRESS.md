@@ -164,10 +164,31 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     server (10 workers) OOM-exited mid-request (`diarize: server exited mid-request`). Fix: `BENCH_DIAR_WORKERS=2`
     (→ NOTO_PYANNOTE_WORKERS, a wired knob) frees VRAM; the alt run doesn't need its diar output anyway
     (turns come from the baseline). Shell env forwards to the subprocess (`cmd.Env = append(os.Environ()…)`).
-  - **IN FLIGHT — conclusive 1.1b retry** (`bgudyj83v`): `BENCH_DIAR_WORKERS=2 BENCH_PARAKEET_SERVER_STDERR=1
-    noto bench run --knob stt_model=nvidia/parakeet-tdt-1.1b`. When it lands: `noto bench repair-attempt
-    --run 20260619T115608Z-2f6cc5 --alt-run <1.1b-run>` → the first real positive WER delta (different
-    weights GUARANTEE different words on the hard spans; the accept gate keeps only the wins).
+  - **★ THE MACHINE IS VALIDATED END-TO-END ON GPU DATA (run `20260619T212713Z-fc7b5f`, 1.1b alternate).**
+    1.1b finally produced a GENUINELY different decode (3501 vs 3955 words, 96/103 spans differed).
+    `repair-attempt(2f6cc5, fc7b5f)`: **25 accepted · 39 negative · net WER Δ +0.0060 (WORSE) → B7 gate
+    correctly FAILS** ("no net improvement, negative rate over cap"). The honest verdict: **parakeet-tdt-1.1b
+    is OLDER/WEAKER than 0.6b-v3, so as a repair source it regresses more spans (39) than it fixes (25), and
+    the net benchmark effect is negative** — the system tried a plausible repair, measured it on the
+    reference, found it net-negative, and REFUSED to ship it. That is exactly the safety property the user
+    asked for ("don't make it worse"). The full chain (accept real fixes, catch real regressions, measure
+    the true whole-transcript aggregate, gate) now provably works on real data.
+  - **Two product insights from the real run:** (1) a repair model must be genuinely BETTER than the
+    baseline on the hard spans, not just different — a bigger-but-older model is net-negative; the right
+    source is a newer/stronger model, an ensemble, or more-context re-decode. (2) **Seam cost:**
+    locally-accepted edits don't always aggregate to a whole-transcript win when the alternate has different
+    word SEGMENTATION (1.1b: 3501 vs 3955 words) — splicing shifts boundaries; the gate's whole-transcript
+    aggregate correctly catches this (the local-accept decision alone is optimistic).
+  - **Added `SpansDiffered` (commit pending)** — `repair-attempt` now reports "N got a different re-decode",
+    distinguishing "the alternate produced no different hypothesis" (fp32/beam: 0–1 differed → a same-model
+    dead end) from "the different words didn't help" (1.1b: 96 differed, net-negative). The exact ambiguity
+    that cost diagnosis time across the fp32/beam/1.1b runs is now one line in the tool.
+  - **NEXT (transcription):** the machine is done + validated; a POSITIVE number needs a repair source that's
+    actually better than 0.6b-v3 on hard spans (canary-1b is a candidate but different arch/API; or an
+    aggregate-guarded accept that only keeps edits improving the WHOLE-transcript WER, neutralizing the seam
+    cost). NEXT (diarization): the overlap-span planner + ReDiarizer → diar attempt loop (mirror
+    repair_attempt.go) on the validated MeasureDiarSplice spine. Cost discipline: ~$0.30 GPU spent this
+    session building+validating the whole repair system — be sparing now; the machine is proven.
   - **DONE (this iter) — diarization repair MEASUREMENT spine** (the user-critical overlap/two-channel half),
     GPU-free + tested: `core/bench/diar_splice.go` `SpliceTurns`/`TurnsInSpan` (pure turn-interval surgery,
     the diar analog of SpliceSpan) + `platform/bench/repair_diar_measure.go` `MeasureDiarSplice` (DER

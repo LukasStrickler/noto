@@ -115,7 +115,7 @@ func TestAttemptMeeting_WithRunReDecoder_AcceptsCorrection(t *testing.T) {
 		sttCostPerAudioSec: 0.0001,
 	}
 
-	rep, spans, attempted := attemptMeeting(ref, hyp, dec, 0.5, corebench.MethodAlternateDecode)
+	rep, spans, _, attempted := attemptMeeting(ref, hyp, dec, 0.5, corebench.MethodAlternateDecode)
 	if !attempted || spans != 1 {
 		t.Fatalf("expected 1 attempted span, got attempted=%v spans=%d", attempted, spans)
 	}
