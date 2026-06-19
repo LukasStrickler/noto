@@ -1,0 +1,164 @@
+package bench
+
+import (
+	"path/filepath"
+
+	"github.com/lukasstrickler/noto/benchmark/dataset"
+	corebench "github.com/lukasstrickler/noto/internal/core/bench"
+)
+
+// repair_attempt.go is the B7 attempt+measure loop (§10.4, DRY-RUN): it actually
+// re-decodes the planned low-confidence spans, measures the benchmark WER/cpWER each
+// edit moves, and folds the result into the B7 gate — the answer to "how much
+// accuracy did repair buy, and at what cost", measured on the REFERENCE, not on
+// confidence. It writes NO production transcript; this is exploration + a gate.
+//
+// Every step is pure and tested offline (planning, splicing, scoring, the gate); the
+// ONLY GPU-coupled seam is the ReDecoder, injected so the whole loop runs against a
+// fake in tests and against the STT server in a real run.
+
+const (
+	// b7MinAcceptedPerUSD: a passing dry-run must land at least this many accepted
+	// edits per dollar of repair compute (§14 efficiency gate).
+	b7MinAcceptedPerUSD = 50.0
+	// b7MaxNegativeRate: negative repairs must stay below this share of accepted
+	// edits before any production write is considered (§4.1).
+	b7MaxNegativeRate = 0.005
+)
+
+// ReDecoder re-transcribes one audio span of a meeting with an alternate method,
+// returning the replacement words (timestamps in ABSOLUTE meeting time) and the
+// marginal compute cost in USD. The real implementation calls the STT server on the
+// span (GPU); a fake drives the loop in tests. This is the single GPU seam in B7.
+type ReDecoder interface {
+	ReDecode(meetingID string, startSec, endSec float64, method corebench.RepairMethod) (words []HypWord, costUSD float64, err error)
+}
+
+// RepairAttemptResult is the run-level B7 attempt+measure report. NetCpWERDelta is the
+// speaker-attributed axis (carried in the report's secondary slot); negative deltas
+// are improvements. GatePass answers whether the dry-run beat do-nothing efficiently
+// enough to justify a production repair (B8) — never auto-applied here.
+type RepairAttemptResult struct {
+	RunID             string                 `json:"run_id"`
+	Method            string                 `json:"method"`
+	MeetingsAttempted int                    `json:"meetings_attempted"`
+	SpansAttempted    int                    `json:"spans_attempted"`
+	AcceptedRepairs   int                    `json:"accepted_repairs"`
+	NegativeRepairs   int                    `json:"negative_repairs"`
+	CostUSD           float64                `json:"cost_usd"`
+	AcceptedPerUSD    float64                `json:"accepted_per_usd"`
+	NegativeRate      float64                `json:"negative_rate"`
+	NetWERDelta       float64                `json:"net_wer_delta"`
+	NetCpWERDelta     float64                `json:"net_cpwer_delta"`
+	GatePass          bool                   `json:"gate_pass"`
+	GateReasons       []string               `json:"gate_reasons,omitempty"`
+	Report            corebench.RepairReport `json:"report"`
+}
+
+// AttemptRepairs runs the B7 attempt+measure loop over a run: per meeting, plan the
+// low-confidence spans under a repair budget, re-decode each via dec, measure the
+// benchmark delta, and fold into a run-level report + gate. method defaults to the
+// cheap same-model alternate decode; threshold<=0 uses the default confidence floor.
+func (r *Runner) AttemptRepairs(runID string, dec ReDecoder, threshold float64, method corebench.RepairMethod) (RepairAttemptResult, error) {
+	if threshold <= 0 {
+		threshold = DefaultRepairThreshold
+	}
+	if method == "" {
+		method = corebench.MethodAlternateDecode
+	}
+	res := RepairAttemptResult{RunID: runID, Method: string(method)}
+
+	repoRoot, err := RepoRoot()
+	if err != nil {
+		return res, err
+	}
+	dir := r.Store.RunDir(runID)
+	var manifest corebench.RunManifest
+	if err := readJSON(filepath.Join(dir, "manifest.json"), &manifest); err != nil {
+		return res, err
+	}
+	opts := ScoreOptionsForRepo(repoRoot, ResolveSuite(manifest.SuiteID))
+
+	hyps, err := loadMeetingHyps(filepath.Join(dir, "hyps"))
+	if err != nil {
+		return res, err
+	}
+
+	var agg corebench.RepairReport
+	for _, h := range hyps {
+		id := h.Key()
+		if id == "" {
+			continue
+		}
+		ref, err := loadRefMeeting(id, opts)
+		if err != nil {
+			continue
+		}
+		rep, spans, attempted := attemptMeeting(ref, h, dec, threshold, method)
+		if !attempted {
+			continue
+		}
+		res.MeetingsAttempted++
+		res.SpansAttempted += spans
+		agg = corebench.MergeRepairReports(agg, rep)
+	}
+
+	res.Report = agg
+	res.AcceptedRepairs = agg.AcceptedRepairs
+	res.NegativeRepairs = agg.NegativeRepairs
+	res.CostUSD = round4(agg.CostUSD)
+	res.AcceptedPerUSD = round4(agg.AcceptedPerUSD())
+	res.NegativeRate = round4(agg.NegativeRate())
+	res.NetWERDelta = round4(agg.NetWERDelta)
+	res.NetCpWERDelta = round4(agg.NetEntityDelta)
+	res.GatePass, res.GateReasons = agg.PassesB7Gate(b7MinAcceptedPerUSD, b7MaxNegativeRate)
+	return res, nil
+}
+
+// attemptMeeting plans and attempts one meeting's repairs, returning the report, the
+// number of spans attempted, and whether any were. Takes the reference + hyp directly
+// (no disk), so the full attempt+measure loop is unit-testable with a fake ReDecoder.
+func attemptMeeting(ref dataset.Meeting, h MeetingHyp, dec ReDecoder, threshold float64, method corebench.RepairMethod) (corebench.RepairReport, int, bool) {
+	words, _ := repairWordsOf(h)
+	spans := corebench.SpansFromWords(words, threshold, repairSuccessPrior, true)
+	speech := h.SpeechSec
+	if speech <= 0 {
+		speech = h.AudioSec
+	}
+	plan := corebench.PlanRepairs(spans, corebench.RepairBudget{
+		SpeechSec:     speech,
+		Ratio:         0.10,
+		CapSec:        300,
+		CostPerSecUSD: repairCostPerSecUSD,
+	}, repairValuePerUSD)
+	if len(plan.Attempt) == 0 {
+		return corebench.RepairReport{}, 0, false
+	}
+
+	var outcomes []corebench.RepairOutcome
+	attempted := 0
+	for _, span := range plan.Attempt {
+		repl, cost, err := dec.ReDecode(h.Key(), span.StartSec, span.EndSec, method)
+		if err != nil {
+			continue // a failed re-decode is skipped, never crashes the run (§B2.6)
+		}
+		attempted++
+		m := MeasureSplice(ref, h.Words, span.StartSec, span.EndSec, repl)
+		outcomes = append(outcomes, m.Outcome(span, method, cost))
+	}
+	return corebench.BuildRepairReport(plan, outcomes), attempted, true
+}
+
+// loadRefMeeting loads a meeting's reference words + diarization turns into the shape
+// the scorers want. Mirrors scoreMeetingHyp's reference loading, factored for reuse.
+func loadRefMeeting(id string, opts ScoreOptions) (dataset.Meeting, error) {
+	refWords, err := dataset.LoadWords(filepath.Join(opts.WordsDir, id+".words.json"))
+	if err != nil {
+		return dataset.Meeting{}, err
+	}
+	refTurns, err := dataset.LoadRTTM(filepath.Join(opts.RTTMDir, id+".rttm"))
+	if err != nil {
+		return dataset.Meeting{}, err
+	}
+	return dataset.Meeting{ID: id, Words: refWords, Turns: refTurns}, nil
+}

@@ -65,15 +65,9 @@ func (r *Runner) RepairPreview(runID string, threshold float64) (RepairPreviewRe
 			speech = h.AudioSec
 		}
 		res.TotalSpeechSec += speech
-		words := make([]corebench.RepairWord, 0, len(h.Words))
-		for _, w := range h.Words {
-			rw := corebench.RepairWord{StartSec: w.Start, EndSec: w.End, ProductValue: 1}
-			if w.Confidence != nil {
-				rw.Confidence = *w.Confidence
-				rw.HasConfidence = true
-				res.HasConfidence = true
-			}
-			words = append(words, rw)
+		words, hasConf := repairWordsOf(h)
+		if hasConf {
+			res.HasConfidence = true
 		}
 		spans = append(spans, corebench.SpansFromWords(words, threshold, repairSuccessPrior, true)...)
 	}
@@ -97,4 +91,22 @@ func (r *Runner) RepairPreview(runID string, threshold float64) (RepairPreviewRe
 		res.SkippedBudgetSec += s.DurationSec()
 	}
 	return res, nil
+}
+
+// repairWordsOf converts a meeting's hypothesis words into the repair-span signal:
+// timing + confidence (when the engine emitted it). hasConf reports whether ANY word
+// carried confidence — false means this run can't drive confidence-guided repair.
+// Shared by the dry-run preview and the attempt+measure loop.
+func repairWordsOf(h MeetingHyp) (words []corebench.RepairWord, hasConf bool) {
+	words = make([]corebench.RepairWord, 0, len(h.Words))
+	for _, w := range h.Words {
+		rw := corebench.RepairWord{StartSec: w.Start, EndSec: w.End, ProductValue: 1}
+		if w.Confidence != nil {
+			rw.Confidence = *w.Confidence
+			rw.HasConfidence = true
+			hasConf = true
+		}
+		words = append(words, rw)
+	}
+	return words, hasConf
 }

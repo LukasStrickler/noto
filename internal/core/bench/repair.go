@@ -304,6 +304,23 @@ func BuildRepairReport(plan RepairPlan, outcomes []RepairOutcome) RepairReport {
 	return r
 }
 
+// MergeRepairReports sums per-meeting reports into a run-level total — the attempt
+// loop scores each meeting against its own reference, then folds them here so the B7
+// gate sees the whole run's accepted-per-dollar and negative rate. Pure accumulation.
+func MergeRepairReports(a, b RepairReport) RepairReport {
+	return RepairReport{
+		CandidateSec:        a.CandidateSec + b.CandidateSec,
+		AttemptedSec:        a.AttemptedSec + b.AttemptedSec,
+		AcceptedSec:         a.AcceptedSec + b.AcceptedSec,
+		SkippedHighValueSec: a.SkippedHighValueSec + b.SkippedHighValueSec,
+		CostUSD:             a.CostUSD + b.CostUSD,
+		NetWERDelta:         a.NetWERDelta + b.NetWERDelta,
+		NetEntityDelta:      a.NetEntityDelta + b.NetEntityDelta,
+		AcceptedRepairs:     a.AcceptedRepairs + b.AcceptedRepairs,
+		NegativeRepairs:     a.NegativeRepairs + b.NegativeRepairs,
+	}
+}
+
 // AcceptedPerUSD is accepted repairs per dollar — the B7 efficiency gate (§14).
 func (r RepairReport) AcceptedPerUSD() float64 {
 	if r.CostUSD <= 0 {
