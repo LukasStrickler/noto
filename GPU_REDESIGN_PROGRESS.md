@@ -294,11 +294,26 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     `jobs_pipeline` after normalization, fed by the existing glossary (its presence is the gate → only ever
     sharpens product-critical cpWER, no-op otherwise). Full suite green, vet clean. This makes the meeting's
     known vocabulary actually reach the transcript — the inert biasing, fixed, GPU-free.
+  - **DONE (this iter) — entity-repair now recovers SPLIT compound entities (commit 114b99c).** Extended the
+    glossary repair with a conservative MERGE fallback: when no equal-length window matches, try +1/+2 extra
+    adjacent words and compare concatenated punctuation-free forms, so "data dog"→"Datadog", "git hub"→
+    "GitHub", "open ai"→"OpenAI" rejoin to canonical. Split compounds are one of the most common real entity
+    errors for product/company names. Safety preserved (exact left alone, equal-count wins ties, high bar +
+    distinctive gate). Merged word dropped, kept word's end extended (gapless), touched segment text+word-ids
+    rebuilt; `Transcript.Validate` doesn't cross-check word-ids so it stays in-contract. +4 tests. Green.
+  - **DONE (this iter) — DATA-DRIVEN diar finding (no code): turn-smoothing is an INVALID repair on AMI.**
+    Compared hyp vs reference RTTM (ES2007b): hyp 340 turns / 108 short(<0.5s) / 79 A-B-A flickers vs
+    reference 321 / 81 / 74. The reference has ~the same short turns and flickers — they're real backchannels
+    ("yeah", "mm-hm"), NOT errors. So smoothing/flicker-removal would delete real turns and RAISE DER.
+    Avoided shipping a regression — the "validate a valid step, not brute force" check working. Ref overlap is
+    10.2% of speech, and the hyp misses most of it → the 33% addressable DER is overlap (needs separation).
   - **NEXT (real optimization):** (transcription) optionally forward `ContextBias` to the parakeet server as
     true decode-time biasing (NeMo context-biasing — GPU, bigger); the entity-repair pass covers the
-    GPU-free win now. (diarization) the real overlap win needs **system-audio capture** (the mic-only stub
-    is the blocker) — once two channels exist, per-channel diarization makes you-vs-remote separation free
-    and only the system channel needs multi-speaker diar. That capture work is macOS/ScreenCaptureKit.
+    GPU-free win now (equal-length + split-merge). (diarization) the real overlap win needs **system-audio
+    capture** ([[capture-is-mic-only]] — the mic-only stub is the blocker); once two channels exist,
+    per-channel diarization makes you-vs-remote separation free and only the system channel needs
+    multi-speaker diar. That capture work is macOS/ScreenCaptureKit. GPU-free diar post-processing (smoothing)
+    is now ruled out as invalid on this data.
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
