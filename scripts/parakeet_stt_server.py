@@ -52,6 +52,14 @@ Env:
                             an effective batch of 32)
   NOTO_PARAKEET_PROVIDER    cuda | cpu (default cpu; set by the Go engine;
                             cuda FAILS FAST without a CUDA device)
+  NOTO_PARAKEET_DECODE      greedy (default) | beam | maes | alsd | tsd — the
+                            decode SEARCH. Default greedy is the validated path;
+                            a beam strategy is the §10.5 same-model alternate
+                            decode the B7 repair loop re-runs low-confidence spans
+                            with. Best-effort: an unsupported strategy degrades to
+                            greedy, never crashes.
+  NOTO_PARAKEET_BEAM_SIZE   beam width when NOTO_PARAKEET_DECODE is a beam
+                            strategy (default 4)
   NOTO_PARAKEET_FAKE        1 = no-NeMo protocol selftest (deterministic fake
                             words from the WAV header; for $0 local testing)
 
@@ -168,6 +176,36 @@ def enable_word_confidence(model) -> bool:
         return False
 
 
+def enable_beam_decode(model, beam_size: int, strategy: str) -> bool:
+    """Best-effort: switch TDT/RNNT decoding from greedy to a beam search so a
+    RE-DECODE explores hypotheses the greedy pass committed away from — the §10.5
+    same-model alternate decode the B7 repair loop re-runs low-confidence spans
+    with. Guarded exactly like enable_word_confidence: any failure (TDT-beam
+    unsupported in this NeMo build, config drift, rejected field) degrades to the
+    validated greedy path and never crashes. Word timestamps are requested under
+    beam where the version supports them; if they're dropped, words_of() emits
+    text-only and the Go side falls back — the run still completes. Only ever
+    called when NOTO_PARAKEET_DECODE selects a beam strategy, so the default
+    (validated greedy) decode is byte-identical to before."""
+    try:
+        from omegaconf import open_dict
+
+        decoding_cfg = model.cfg.decoding
+        with open_dict(decoding_cfg):
+            decoding_cfg.strategy = strategy
+            if "beam" in decoding_cfg:
+                decoding_cfg.beam.beam_size = beam_size
+            # Keep word timestamps available under beam where supported; a build
+            # that ignores these simply yields no word stamps (graceful fallback).
+            decoding_cfg.compute_timestamps = True
+        model.change_decoding_strategy(decoding_cfg)
+        log(f"beam decode enabled (strategy={strategy}, beam_size={beam_size})")
+        return True
+    except Exception as exc:  # unsupported strategy, config drift, rejection
+        log(f"beam decode unavailable, staying greedy: {exc}")
+        return False
+
+
 def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: str):
     import contextlib
     import inspect
@@ -217,6 +255,18 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
 
     base_decoding_cfg = _copy.deepcopy(model.cfg.decoding)
     conf = {"on": os.getenv("NOTO_PARAKEET_CONFIDENCE", "") == "1" and enable_word_confidence(model)}
+
+    # Alternate beam decode is opt-in (NOTO_PARAKEET_DECODE=beam|maes|alsd|tsd) so
+    # the validated greedy default is untouched. Applied AFTER confidence on the
+    # same decoding cfg, so the two compose when both are requested. `alt` is a
+    # mutable cell so a beam decode-time failure can revert to base greedy and stay
+    # reverted for the rest of the process, exactly like the confidence path.
+    decode_mode = os.getenv("NOTO_PARAKEET_DECODE", "").strip().lower()
+    alt = {"beam": False}
+    if decode_mode in ("beam", "maes", "alsd", "tsd"):
+        beam_size = max(1, int(os.getenv("NOTO_PARAKEET_BEAM_SIZE", "4") or 4))
+        strat = "maes" if decode_mode == "beam" else decode_mode
+        alt["beam"] = enable_beam_decode(model, beam_size, strat)
 
     # Pass optional kwargs only when this NeMo version's transcribe() has them,
     # so a signature drift degrades to defaults instead of crashing the server.
@@ -301,18 +351,21 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
             try:
                 hyps = _decode()
             except Exception as exc:
-                # Confidence is best-effort: NeMo's TDT word-confidence aggregation
-                # raises on some inputs. Revert to the validated plain decode and
-                # retry rather than erroring the request (§B2.6). One-way for the
-                # rest of this process — a later request never re-hits the same fault.
-                if not conf["on"]:
+                # Confidence and beam decode are both best-effort: NeMo's TDT
+                # word-confidence aggregation raises on some inputs, and a beam
+                # strategy may be unsupported/unstable in this build. Either way,
+                # revert to the validated plain greedy decode and retry rather than
+                # erroring the request (§B2.6). One-way for the rest of this process
+                # — a later request never re-hits the same fault.
+                if not conf["on"] and not alt["beam"]:
                     raise
-                log(f"word-confidence decode failed ({exc}); reverting to plain decode")
+                log(f"alternate decode failed ({exc}); reverting to plain greedy decode")
                 try:
                     model.change_decoding_strategy(base_decoding_cfg)
                 except Exception:
                     pass
                 conf["on"] = False
+                alt["beam"] = False
                 hyps = _decode()
         finally:
             for p in scratch:

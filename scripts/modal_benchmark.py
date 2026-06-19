@@ -159,6 +159,12 @@ KNOB_FORWARDS: list[tuple[str, str, str]] = [
     # NeMo word confidence (opt-in) → hyps carry per-word P(correct) for B6
     # calibration + B7 repair candidate selection.
     ("BENCH_PARAKEET_CONFIDENCE", "NOTO_PARAKEET_CONFIDENCE", ""),
+    # NeMo decode SEARCH (greedy default | beam | maes | …) + beam width: the §10.5
+    # same-model alternate decode the B7 repair loop re-decodes low-confidence spans
+    # with (greedy is deterministic on content across precision, so an alternate
+    # STRATEGY is the lever that can actually fix errors, not fp32).
+    ("BENCH_PARAKEET_DECODE", "NOTO_PARAKEET_DECODE", ""),
+    ("BENCH_PARAKEET_BEAM_SIZE", "NOTO_PARAKEET_BEAM_SIZE", ""),
     # Stream the parakeet server's full stderr to the box stdout (diagnostic) so a
     # NeMo fault surfaces in the run output instead of a truncated tail.
     ("BENCH_PARAKEET_SERVER_STDERR", "NOTO_PARAKEET_SERVER_STDERR", ""),

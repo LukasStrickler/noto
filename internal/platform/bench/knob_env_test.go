@@ -35,6 +35,19 @@ func TestKnobEnv_ConfidenceMapsToLauncherVar(t *testing.T) {
 	}
 }
 
+func TestKnobEnv_DecodeAndBeamSizeMapToLauncherVars(t *testing.T) {
+	// `--knob decode=beam` selects the NeMo beam search — the §10.5 same-model
+	// alternate decode for B7 repair; it must reach the launcher as
+	// BENCH_PARAKEET_DECODE (forwarded to NOTO_PARAKEET_DECODE), and beam_size as
+	// BENCH_PARAKEET_BEAM_SIZE. A bare NOTO_DECODE would be ignored by the server.
+	if env := bench.KnobEnv(map[string]string{"decode": "beam"}); len(env) != 1 || env[0] != "BENCH_PARAKEET_DECODE=beam" {
+		t.Fatalf("decode knob env=%v want [BENCH_PARAKEET_DECODE=beam]", env)
+	}
+	if env := bench.KnobEnv(map[string]string{"beam_size": "4"}); len(env) != 1 || env[0] != "BENCH_PARAKEET_BEAM_SIZE=4" {
+		t.Fatalf("beam_size knob env=%v want [BENCH_PARAKEET_BEAM_SIZE=4]", env)
+	}
+}
+
 func TestKnobEnv_UnknownKnobKeepsNotoPrefix(t *testing.T) {
 	env := bench.KnobEnv(map[string]string{"custom_flag": "1"})
 	if len(env) != 1 || env[0] != "NOTO_CUSTOM_FLAG=1" {

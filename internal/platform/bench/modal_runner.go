@@ -315,6 +315,13 @@ var knobLauncherEnv = map[string]string{
 	// run's hyps carry per-word P(correct) — the input B6 calibration and B7 repair
 	// candidate selection both need.
 	"confidence": "BENCH_PARAKEET_CONFIDENCE",
+	// decode selects the NeMo decode SEARCH (greedy default | beam | maes | …) and
+	// beam_size its width — the §10.5 same-model alternate decode that produces a
+	// genuinely different hypothesis for the B7 repair re-decode (greedy across
+	// precision is deterministic on content, so an alternate STRATEGY, not fp32,
+	// is the lever that can actually fix low-confidence spans).
+	"decode":    "BENCH_PARAKEET_DECODE",
+	"beam_size": "BENCH_PARAKEET_BEAM_SIZE",
 }
 
 func knobEnv(knobs map[string]string) []string {
