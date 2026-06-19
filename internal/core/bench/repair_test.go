@@ -31,6 +31,51 @@ func TestRepairSpan_EligibleAndEV(t *testing.T) {
 	}
 }
 
+func TestRepairCeiling_HeadroomFromLowConfidenceErrors(t *testing.T) {
+	// 10 words: the 2 lowest-confidence are errors, plus 1 high-confidence error.
+	// Oracle-repairing the bottom 20% (2 words) fixes 2 of 3 errors.
+	words := []bench.WordConfidence{
+		{Confidence: 0.05, Correct: false}, // low-conf error (fixable)
+		{Confidence: 0.10, Correct: false}, // low-conf error (fixable)
+		{Confidence: 0.30, Correct: true},
+		{Confidence: 0.40, Correct: true},
+		{Confidence: 0.50, Correct: true},
+		{Confidence: 0.60, Correct: true},
+		{Confidence: 0.70, Correct: true},
+		{Confidence: 0.80, Correct: true},
+		{Confidence: 0.90, Correct: true},
+		{Confidence: 0.95, Correct: false}, // high-conf error (NOT in bottom 20%)
+	}
+	c := bench.RepairCeiling(words, 0.20)
+	if c.TotalErrors != 3 {
+		t.Fatalf("total errors = %d, want 3", c.TotalErrors)
+	}
+	if c.WordsRepaired != 2 || c.FixableErrors != 2 {
+		t.Errorf("bottom-20%% should repair 2 words / fix 2 errors, got %d/%d", c.WordsRepaired, c.FixableErrors)
+	}
+	if c.CurrentErrorRate != 0.30 {
+		t.Errorf("current error rate = %v, want 0.30", c.CurrentErrorRate)
+	}
+	if c.CeilingErrorRate != 0.10 {
+		t.Errorf("ceiling error rate = %v, want 0.10 (only the high-conf error remains)", c.CeilingErrorRate)
+	}
+}
+
+func TestRepairCeiling_FlatWhenErrorsAreHighConfidence(t *testing.T) {
+	// If errors hide in HIGH-confidence words, repairing low-confidence buys
+	// nothing — the ceiling equals the current rate, so repair is not worth it.
+	words := []bench.WordConfidence{
+		{Confidence: 0.10, Correct: true},
+		{Confidence: 0.20, Correct: true},
+		{Confidence: 0.90, Correct: false},
+		{Confidence: 0.95, Correct: false},
+	}
+	c := bench.RepairCeiling(words, 0.50)
+	if c.CeilingErrorRate != c.CurrentErrorRate {
+		t.Errorf("flat ceiling expected: current %v ceiling %v", c.CurrentErrorRate, c.CeilingErrorRate)
+	}
+}
+
 func TestSpansFromWords_GroupsContiguousRiskyRuns(t *testing.T) {
 	words := []bench.RepairWord{
 		{StartSec: 0, EndSec: 1, Confidence: 0.95, HasConfidence: true},                      // high-conf → break

@@ -479,6 +479,10 @@ func (s *Service) BenchCalibration(ctx context.Context, runID string) (notoapi.B
 		res.CaptureLiftOverRandom = gate.CaptureLiftOverRandom
 		res.SignalAdmissible = gate.SignalAdmissible
 		res.Reasons = gate.Reasons
+		res.RepairFraction = rep.RepairCeiling.RepairedFraction
+		res.CurrentErrorRate = rep.RepairCeiling.CurrentErrorRate
+		res.CeilingErrorRate = rep.RepairCeiling.CeilingErrorRate
+		res.RepairFixableErrors = rep.RepairCeiling.FixableErrors
 	}
 	return res, nil
 }

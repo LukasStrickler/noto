@@ -236,11 +236,22 @@ Don't add inert Go fields before step 1+2 produce the data — that's speculativ
     meeting hits the TDT fault, the rest decode plain. Fine for first B6 data; a per-request revert/restore
     would raise coverage (enhancement).
 
+- **Iter 12 (2026-06-19):** Wired B6 calibration into the run flow + surfaced it; demonstrated on real data.
+  - The bridge (BuildWordConfidences/WriteCalibration) existed but had NO callers — confidence runs made
+    no calibration.json. Now: `scoreCalibration` + `Runner.CalibrateRun` (retroactive, GPU-free);
+    modal_runner writes calibration.json inline on confidence runs (best-effort).
+  - `noto bench calibration --run <id>` — ECE/Brier/risk-coverage, bottom-decile capture vs random,
+    high-conf error rate, §10.3 admissibility gate. Full plumbing. Committed 057d605, pushed.
+  - **Live on the confidence run:** 3587 words, **ECE 0.81** (NeMo TDT confidence is poorly calibrated in
+    absolute terms — it's an entropy measure, not a probability) BUT **bottom-decile capture 0.396 vs 0.10
+    random (+0.296 lift), 0 high-conf errors → signal ADMISSIBLE**. So the confidence RANKING is good enough
+    to select repair candidates (what B7 needs), even though the absolute values aren't probabilities.
+
 ## Repair + KPI system — roadmap (user directive: implement ALL items)
 
-Done: **B6 calibration** (scorers + CPU pipeline) · **B7 dry-run CORE** (repair.go) · **B7 wiring**
-(SpansFromWords + RepairPreview) · **`noto bench repair` CLI** + **confidence knob** · **B6 confidence
-UNBLOCKED** (TDT degrade-not-crash, repair preview demonstrated on real data). Remaining, in order:
+Done: **B6 calibration WIRED + SURFACED** (`noto bench calibration`, admissible on real data) · **B7
+dry-run** (core + SpansFromWords + RepairPreview + `noto bench repair`, demonstrated) · **confidence knob**
++ **B6 confidence UNBLOCKED** (TDT degrade-not-crash). Remaining, in order:
 1. **B6 confidence GPU run + CLI surface (next, paired):** run one Modal `gate_ami` with word confidence
    enabled (the parakeet server's confidence path) to populate real per-word confidence, THEN add
    `noto bench repair --run <id>` showing the RepairPreview (candidates, seconds, projected cost) — so the

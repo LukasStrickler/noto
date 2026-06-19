@@ -343,6 +343,13 @@ type BenchCalibrationResult struct {
 	CaptureLiftOverRandom float64  `json:"capture_lift_over_random"`
 	SignalAdmissible      bool     `json:"signal_admissible"`
 	Reasons               []string `json:"reasons,omitempty"`
+
+	// Repair ceiling: benchmark headroom from oracle-repairing the lowest-
+	// confidence decile (the MAX error-rate drop repair could buy).
+	RepairFraction        float64 `json:"repair_fraction"`
+	CurrentErrorRate      float64 `json:"current_error_rate"`
+	CeilingErrorRate      float64 `json:"ceiling_error_rate"`
+	RepairFixableErrors   int     `json:"repair_fixable_errors"`
 }
 
 // BenchClient methods for measurement spine.

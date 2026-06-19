@@ -225,6 +225,8 @@ func (a *app) runBenchCalibration(args []string) int {
 	fmt.Fprintf(a.out, "  bottom-decile capture %.3f (random %.2f, lift %+.3f) — does low confidence find errors?\n",
 		res.BottomDecileCapture, 0.10, res.CaptureLiftOverRandom)
 	fmt.Fprintf(a.out, "  high-confidence error rate %.4f\n", res.HighConfErrorRate)
+	fmt.Fprintf(a.out, "  repair ceiling: oracle-fixing the bottom %.0f%% confidence words → error rate %.4f → %.4f (fix %d errors)\n",
+		res.RepairFraction*100, res.CurrentErrorRate, res.CeilingErrorRate, res.RepairFixableErrors)
 	fmt.Fprintf(a.out, "  signal for repair spend: %s\n", admit)
 	for _, r := range res.Reasons {
 		fmt.Fprintf(a.out, "    · %s\n", r)

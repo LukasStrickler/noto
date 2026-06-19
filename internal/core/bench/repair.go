@@ -57,6 +57,56 @@ func (s RepairSpan) ExpectedValue(costPerSecUSD, valuePerUSD float64) float64 {
 	return benefit - cost
 }
 
+// RepairCeilingResult is the §10.3 selective-risk headroom: how far the word error
+// rate would fall if an ORACLE fixed every error among the lowest-confidence words.
+// It is the MAX benchmark accuracy a confidence-guided repair could buy — the gap
+// between CurrentErrorRate and CeilingErrorRate, before P(repair success)<1 and
+// budget. The decision tool for "is repair worth the compute?": if the ceiling
+// barely moves WER, no re-decode is worth running; if it moves a lot, it justifies
+// spending on the low-confidence spans (and only those).
+type RepairCeilingResult struct {
+	RepairedFraction float64 `json:"repaired_fraction"`
+	WordsRepaired    int     `json:"words_repaired"`
+	FixableErrors    int     `json:"fixable_errors"`
+	TotalErrors      int     `json:"total_errors"`
+	CurrentErrorRate float64 `json:"current_error_rate"`
+	CeilingErrorRate float64 `json:"ceiling_error_rate"`
+}
+
+// RepairCeiling sorts words by confidence, takes the lowest `fraction`, and assumes
+// an oracle fixes every error among them. Pure; consumes the correctness labels
+// calibration already scored. This is what makes repair earn its compute on the
+// BENCHMARK, not on confidence: a confidence model whose low-confidence words don't
+// actually contain the errors shows a flat ceiling here and repair is rejected.
+func RepairCeiling(words []WordConfidence, fraction float64) RepairCeilingResult {
+	res := RepairCeilingResult{RepairedFraction: fraction}
+	n := len(words)
+	if n == 0 {
+		return res
+	}
+	if fraction < 0 {
+		fraction = 0
+	}
+	if fraction > 1 {
+		fraction = 1
+	}
+	sorted := append([]WordConfidence(nil), words...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Confidence < sorted[j].Confidence })
+	k := int(fraction * float64(n))
+	res.WordsRepaired = k
+	for i, w := range sorted {
+		if !w.Correct {
+			res.TotalErrors++
+			if i < k {
+				res.FixableErrors++
+			}
+		}
+	}
+	res.CurrentErrorRate = float64(res.TotalErrors) / float64(n)
+	res.CeilingErrorRate = float64(res.TotalErrors-res.FixableErrors) / float64(n)
+	return res
+}
+
 // RepairWord is the minimal per-word signal the span-builder needs: its time span,
 // the model's confidence, and a product-value weight (entities/actions score
 // higher — §10.4). Distinct from calibration's WordConfidence, which pairs

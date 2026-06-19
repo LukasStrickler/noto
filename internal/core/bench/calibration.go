@@ -180,6 +180,10 @@ type CalibrationReport struct {
 	HighConfErrorRate   float64            `json:"high_conf_error_rate"`
 	Words               int                `json:"words,omitempty"`
 	Errors              int                `json:"errors,omitempty"`
+	// RepairCeiling is the benchmark headroom from oracle-repairing the lowest-
+	// confidence decile — the MAX error-rate drop a confidence-guided repair could
+	// buy. The signal for whether repair is worth the compute at all.
+	RepairCeiling RepairCeilingResult `json:"repair_ceiling"`
 }
 
 // BuildCalibrationReport scores word-level confidences into calibration.v1. It
@@ -215,6 +219,7 @@ func BuildCalibrationReport(words []WordConfidence) CalibrationReport {
 		HighConfErrorRate:   HighConfidenceErrorRate(words),
 		Words:               len(words),
 		Errors:              errs,
+		RepairCeiling:       RepairCeiling(words, BottomDecileFraction),
 	}
 }
 
