@@ -38,6 +38,7 @@ func (s *Service) ListProviders(ctx context.Context) ([]notoapi.ProviderInfo, er
 			info.Models = append(info.Models, model)
 		}
 		if suite.CredentialRef != "" {
+			info.RequiresKey = true
 			status, _ := s.secrets.Status(ctx, suite.CredentialRef)
 			info.HasKey = status.Configured
 			info.KeySource = status.Source
@@ -52,6 +53,29 @@ func (s *Service) ListProviders(ctx context.Context) ([]notoapi.ProviderInfo, er
 		out = append(out, info)
 	}
 	return out, nil
+}
+
+// countConfigIssues counts actively-routed providers that require a credential
+// but have none configured — a broken route the user must fix. It's the Config
+// nav pill's attention signal: a provider only counts while it's the active
+// speech or LLM route, and local/fake providers (no CredentialRef) never count.
+func (s *Service) countConfigIssues(ctx context.Context) int {
+	cfg := s.currentCfg()
+	n := 0
+	for _, suite := range s.registry.List() {
+		if suite.CredentialRef == "" {
+			continue // local/fake provider needs no key
+		}
+		active := (suite.Kind == providers.ProviderKindSpeech && cfg.Routing.SpeechProvider == suite.ID) ||
+			(suite.Kind == providers.ProviderKindLLM && cfg.Routing.LLMProvider == suite.ID)
+		if !active {
+			continue
+		}
+		if status, _ := s.secrets.Status(ctx, suite.CredentialRef); !status.Configured {
+			n++
+		}
+	}
+	return n
 }
 
 // SetProviderKey stores a credential via the configured secrets store.

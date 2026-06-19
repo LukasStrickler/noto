@@ -1,6 +1,7 @@
 package speakers
 
 import (
+	"math"
 	"testing"
 )
 
@@ -277,6 +278,155 @@ func TestDimensionMismatch(t *testing.T) {
 	_, err := Match(query, candidates)
 	if err == nil {
 		t.Errorf("Match() expected error for dimension mismatch")
+	}
+}
+
+// unitWithX returns a normalized 3-d vector whose cosine with the unit query
+// {1,0,0} is exactly x, making it easy to dial a candidate's match score.
+func unitWithX(x float64) Embedding {
+	y := math.Sqrt(1 - x*x)
+	return Normalize(Embedding{x, y, 0})
+}
+
+func TestRankCandidates(t *testing.T) {
+	query := Embedding{1, 0, 0}
+	cands := []Candidate{
+		{ProfileID: "p1", Name: "Alice", Centroid: unitWithX(0.40)},
+		{ProfileID: "p2", Name: "Bob", Centroid: unitWithX(0.90)},
+		{ProfileID: "p3", Name: "Carol", Centroid: unitWithX(0.62)},
+	}
+
+	t.Run("sorted desc with status", func(t *testing.T) {
+		got, err := RankCandidates(query, cands, 0)
+		if err != nil {
+			t.Fatalf("RankCandidates: %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("got %d decisions, want 3", len(got))
+		}
+		if got[0].ProfileID != "p2" || got[1].ProfileID != "p3" || got[2].ProfileID != "p1" {
+			t.Errorf("order = %s,%s,%s, want p2,p3,p1", got[0].ProfileID, got[1].ProfileID, got[2].ProfileID)
+		}
+		// scores strictly descending
+		for i := 1; i < len(got); i++ {
+			if got[i].Score > got[i-1].Score {
+				t.Errorf("not sorted desc at %d", i)
+			}
+		}
+		// status reflects bands: 0.90 auto, 0.62 pending, 0.40 new
+		if got[0].Status != StatusAuto || got[1].Status != StatusPending || got[2].Status != StatusNew {
+			t.Errorf("statuses = %s,%s,%s", got[0].Status, got[1].Status, got[2].Status)
+		}
+	})
+
+	t.Run("topK caps", func(t *testing.T) {
+		got, err := RankCandidates(query, cands, 2)
+		if err != nil {
+			t.Fatalf("RankCandidates: %v", err)
+		}
+		if len(got) != 2 || got[0].ProfileID != "p2" {
+			t.Errorf("topK=2 = %+v", got)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		got, err := RankCandidates(query, nil, 3)
+		if err != nil || got != nil {
+			t.Errorf("empty candidates = %v, %v", got, err)
+		}
+	})
+}
+
+func TestMatchConfidentMarginGate(t *testing.T) {
+	query := Embedding{1, 0, 0}
+
+	t.Run("ambiguous top-2 downgraded to pending", func(t *testing.T) {
+		cands := []Candidate{
+			{ProfileID: "p1", Name: "Alice", Centroid: unitWithX(0.72)},
+			{ProfileID: "p2", Name: "Bob", Centroid: unitWithX(0.70)},
+		}
+		// Plain Match (no margin) auto-confirms the 0.72 leader.
+		plain, err := Match(query, cands)
+		if err != nil {
+			t.Fatalf("Match() error = %v", err)
+		}
+		if plain.Status != StatusAuto {
+			t.Fatalf("Match() status = %v, want StatusAuto (no margin)", plain.Status)
+		}
+		// MatchConfident sees the 0.02 lead < 0.05 margin and holds for review.
+		conf, err := MatchConfident(query, cands)
+		if err != nil {
+			t.Fatalf("MatchConfident() error = %v", err)
+		}
+		if conf.Status != StatusPending {
+			t.Errorf("MatchConfident() status = %v, want StatusPending (within margin)", conf.Status)
+		}
+		if conf.ProfileID != "p1" {
+			t.Errorf("MatchConfident() profile = %v, want p1 (still the leader)", conf.ProfileID)
+		}
+	})
+
+	t.Run("clear leader stays auto", func(t *testing.T) {
+		cands := []Candidate{
+			{ProfileID: "p1", Name: "Alice", Centroid: unitWithX(0.85)},
+			{ProfileID: "p2", Name: "Bob", Centroid: unitWithX(0.60)},
+		}
+		conf, err := MatchConfident(query, cands)
+		if err != nil {
+			t.Fatalf("MatchConfident() error = %v", err)
+		}
+		if conf.Status != StatusAuto {
+			t.Errorf("MatchConfident() status = %v, want StatusAuto (0.25 lead)", conf.Status)
+		}
+	})
+
+	t.Run("lone candidate not penalized by margin", func(t *testing.T) {
+		cands := []Candidate{{ProfileID: "p1", Name: "Alice", Centroid: unitWithX(0.90)}}
+		conf, err := MatchConfident(query, cands)
+		if err != nil {
+			t.Fatalf("MatchConfident() error = %v", err)
+		}
+		if conf.Status != StatusAuto {
+			t.Errorf("MatchConfident() status = %v, want StatusAuto (single candidate)", conf.Status)
+		}
+	})
+
+	t.Run("margin only gates auto, not pending", func(t *testing.T) {
+		// Two close candidates both in the pending band stay pending — the gate
+		// must never upgrade, only withhold an auto.
+		cands := []Candidate{
+			{ProfileID: "p1", Name: "Alice", Centroid: unitWithX(0.60)},
+			{ProfileID: "p2", Name: "Bob", Centroid: unitWithX(0.59)},
+		}
+		conf, err := MatchConfident(query, cands)
+		if err != nil {
+			t.Fatalf("MatchConfident() error = %v", err)
+		}
+		if conf.Status != StatusPending {
+			t.Errorf("MatchConfident() status = %v, want StatusPending", conf.Status)
+		}
+	})
+}
+
+func TestMatchWithConfigThresholds(t *testing.T) {
+	query := Embedding{1, 0, 0}
+	cands := []Candidate{{ProfileID: "p1", Name: "Alice", Centroid: unitWithX(0.62)}}
+
+	// A 0.62 score is pending under shipped thresholds...
+	def, err := MatchWithConfig(query, cands, DefaultMatchConfig())
+	if err != nil {
+		t.Fatalf("MatchWithConfig() error = %v", err)
+	}
+	if def.Status != StatusPending {
+		t.Errorf("default thresholds: status = %v, want StatusPending", def.Status)
+	}
+	// ...but auto under a lowered config, proving thresholds are configurable.
+	low, err := MatchWithConfig(query, cands, MatchConfig{Auto: 0.58, Pending: 0.50})
+	if err != nil {
+		t.Fatalf("MatchWithConfig() error = %v", err)
+	}
+	if low.Status != StatusAuto {
+		t.Errorf("lowered thresholds: status = %v, want StatusAuto", low.Status)
 	}
 }
 

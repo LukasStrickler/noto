@@ -24,12 +24,13 @@ func TestDashboardLoadsMeetingsThroughClient(t *testing.T) {
 	}
 
 	ctx := screenCtx{
-		ctx:    context.Background(),
-		client: fake,
-		keys:   keys.New(),
-		styles: theme.NewStyles(),
-		width:  200, // wide enough that the 1/3 list column doesn't truncate titles
-		height: 30,
+		ctx:          context.Background(),
+		client:       fake,
+		keys:         keys.New(),
+		styles:       theme.NewStyles(),
+		width:        200,
+		height:       30,
+		sidebarWidth: 70, // wide enough that the list column doesn't truncate titles
 	}
 
 	m := newDashboardScreen().(*dashboardScreen)

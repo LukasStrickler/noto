@@ -1,27 +1,35 @@
-# NOTO — PROJECT KNOWLEDGE BASE
+# noto — repo knowledge base
 
-**Generated:** 2026-05-20
-**Type:** Terminal-first meeting recorder (Go, Bubble Tea TUI)
-**Core Stack:** Go 1.25 + Bubble Tea TUI + remote `noto serve` backend + SQLite FTS5 + AssemblyAI
+Terminal-first meeting recorder, transcriber, summarizer, and searchable memory
+(Go 1.25 · Bubble Tea v2 TUI · SQLite FTS5 · AssemblyAI STT · OpenRouter LLM).
+This is the big-picture entry point; each `internal/` role group has its own
+`AGENTS.md` with the layer rule and per-file map. For the product overview see
+[README.md](README.md); for TUI key/layout/mouse conventions see [CLAUDE.md](CLAUDE.md).
 
----
+## What this project is
 
-## WHAT THIS PROJECT IS
-
-Noto records meetings via a macOS native capture helper, sends recordings to a `noto serve` backend, transcribes audio with AssemblyAI, generates AI summaries through OpenRouter-compatible LLMs, indexes everything with SQLite FTS5, and exposes a local TUI/CLI plus HTTP/SSE API for browsing, search, and agent access.
+noto records or imports meeting audio, transcribes + diarizes it with AssemblyAI,
+generates a cited summary via an OpenRouter-compatible LLM, links the same voice
+across meetings with an in-process CPU-only speaker embedder, and indexes
+everything in SQLite FTS5 — all behind one backend that a keyboard-first TUI, a
+`--json` CLI, and an HTTP/SSE API all read through.
 
 **Two binaries:**
 - `cmd/noto` — main entry: TUI + all CLI commands + in-process server
-- `cmd/capture` — macOS audio capture helper (Swift? communicates via appsocket Unix socket)
+- `cmd/capture` — macOS audio capture helper; a Go wrapper (`main.go`) around a
+  Swift ScreenCaptureKit binary (`main.swift`, in this repo), talking to the
+  backend over the `appsocket` Unix socket
 
-**Primary modes:**
-1. `noto` / `noto tui` — local terminal UI client
-2. `noto serve` — backend daemon (Unix socket for local development, TCP with bearer token for remote use)
-3. Direct CLI commands (`list`, `search`, `show`, `record`, `import-audio`, etc.) routed through `notoapi.Client`
+**Three deployment modes, one client path** (`host.Connect` discovery order):
+1. **in-process** (default) — zero-config; `noto`/`noto tui` auto-starts a server
+2. **local daemon** — `noto serve` over a Unix socket, for faster repeated CLI calls
+3. **remote** — `noto serve` over TCP + bearer token (`NOTO_API_URL` + `NOTO_API_TOKEN`)
+
+All three go through the single `notoapi.Client` interface; callers never pick a transport.
 
 ---
 
-## STRUCTURE
+## Structure
 
 Packages are grouped by architectural **role**, following the dependency
 flow (leaves → infra → app → delivery):
@@ -30,11 +38,11 @@ flow (leaves → infra → app → delivery):
 noto/
 ├── cmd/
 │   ├── noto/          # main CLI entry point
-│   └── capture/       # macOS audio capture helper (Go wrapper → Swift)
+│   └── capture/       # macOS capture helper: Go wrapper (main.go) + Swift (main.swift)
 ├── internal/
 │   ├── core/                  # domain types + pure logic (leaves, no infra deps)
 │   │   ├── artifacts/         # artifact types: meeting, audio, transcript, summary
-│   │   ├── speakers/          # speaker-matching domain logic
+│   │   ├── speakers/          # speaker-matching decision logic (cosine, robust centroid)
 │   │   └── notoerr/           # structured errors
 │   ├── platform/              # infrastructure adapters (disk, db, network, AI)
 │   │   ├── config/            # viper-based config (dirs, providers, models)
@@ -44,9 +52,10 @@ noto/
 │   │   ├── repo/              # ArtifactRepository iface + LocalArtifactRepository
 │   │   ├── search/            # SQLite FTS5 index + query parser
 │   │   ├── speakerstore/      # speaker profile + meeting-mapping repos (SQLite)
-│   │   └── providers/         # STT + LLM provider registry + routers
+│   │   └── providers/         # provider registry + adapters
 │   │       ├── stt/           # AssemblyAI production STT adapter
 │   │       ├── speech/        # transcript normalization
+│   │       ├── speaker/       # in-process ECAPA voice embedder (ONNX, CPU-only)
 │   │       └── llm/           # OpenRouter LLM adapter
 │   │           └── prompts/   # versioned LLM prompt templates (few-shot + CoT)
 │   ├── app/                   # application core + composition root
@@ -74,7 +83,7 @@ per-file map and local conventions.
 
 ---
 
-## KEY ARCHITECTURAL PATTERNS
+## Key architectural patterns
 
 ### Service is the Hub
 
@@ -109,26 +118,27 @@ Recording/import → job queued → AssemblyAI transcription/diarization → spe
 
 ---
 
-## WHERE TO LOOK
+## Where to look
 
 | Need | Location |
 |------|----------|
-| How a CLI command works | `internal/ui/cli/cli.go` (all `run*` methods) |
+| How a CLI command works | `internal/ui/cli/cli.go` (dispatch) + `commands_*.go` |
 | How TUI screens are structured | `internal/ui/tui/screen*.go`, `root.go` |
 | How recording is triggered | `internal/app/service/recording.go` |
-| How STT is integrated | `internal/platform/providers/stt/provider.go` and `internal/platform/providers/stt/assemblyai.go` |
+| How the pipeline runs (stages) | `internal/app/service/jobs_pipeline.go` (ingest/transcribe/summarize/index) |
+| How jobs are queued/executed | `jobs.go` (queue) · `jobs_worker.go` (runtime) — both in `internal/app/service/` |
+| How STT is integrated | `internal/platform/providers/stt/{provider,assemblyai}.go` |
+| How speaker identity works | `internal/platform/providers/speaker/` (embedder) + `internal/core/speakers/` (matching) |
 | How artifacts are written/read | `internal/core/artifacts/artifact.go`, `internal/app/service/storage.go` |
-| How search index works | `internal/platform/search/search.go` |
-| How FTS query parsing works | Read `internal/platform/search/` carefully |
-| How jobs are queued/executed | `internal/app/service/jobs.go` |
+| How search / FTS query parsing works | `internal/platform/search/` |
 | How providers are configured | `internal/app/service/providers.go`, `internal/platform/config/` |
-| How capture helper IPC works | `internal/transport/appsocket/`, `cmd/capture/main.go` |
+| How capture helper IPC works | `internal/transport/appsocket/`, `cmd/capture/{main.go,main.swift}` |
 | How secrets are stored | `internal/platform/secrets/` |
-| How LLM prompts are built | `internal/platform/providers/llm/prompts/`, `internal/platform/providers/llm/` |
+| How LLM prompts are built | `internal/platform/providers/llm/` + `llm/prompts/` |
 
 ---
 
-## CONVENTIONS (THIS PROJECT)
+## Conventions
 
 - **go.mod**: module `github.com/lukasstrickler/noto`, Go 1.25 (toolchain 1.26.3)
 - **Error handling**: `notoerr.Error` type (structured, typed errors); never bare `errors.New`
@@ -142,7 +152,7 @@ Recording/import → job queued → AssemblyAI transcription/diarization → spe
 
 ---
 
-## ANTI-PATTERNS (THIS PROJECT)
+## Anti-patterns
 
 - **NEVER** import `storage` or `search` directly from CLI packages — go through `Service` via `notoapi.Client`
 - **NEVER** use bare `errors.New` — use `notoerr.*` types
@@ -152,29 +162,18 @@ Recording/import → job queued → AssemblyAI transcription/diarization → spe
 
 ---
 
-## UNIQUE STYLES
-
-- `make dev` boots TUI from source + pre-warms capture helper
-- `make seed` injects 3 fixture meetings (uses fixed UUIDs, idempotent)
-- `go test ./...` for package validation; external-provider tests require explicit credentials
-- TCP daemon mode uses random bearer token (written to `--token-file`)
-- Provider keys configurable via TUI config screen or `noto providers key-set`
-- Remote connections use `NOTO_API_URL` and `NOTO_API_TOKEN`
-
----
-
-## COMMANDS
+## Commands
 
 ```bash
-make dev              # TUI from source (fastest iteration)
+make dev             # TUI from source (fastest iteration)
 make serve           # daemon mode (unix socket)
 make build           # produce ./bin/noto
 make test            # run all tests
+make test-race       # race detector
 make test-e2e        # only E2E pipeline test
+make check           # fmt-check + vet + lint + test — the gate CI enforces
 make seed            # populate 3 fixture meetings
-make vet             # go vet ./...
-make lint            # vet + checks
-make clean          # rm ./bin/
+make clean           # rm ./bin/
 
 # Direct CLI
 noto tui             # open TUI
@@ -186,16 +185,18 @@ noto stop            # stop recording
 noto import-audio <path> [--title "..."] [--wait]
 noto jobs [--json]   # list job queue
 noto providers list  # show configured providers
-noto providers list  # show configured providers
+noto speaker-model download|status   # install the in-process voice model
 ```
 
 ---
 
-## NOTES
+## Notes
 
-- `cmd/capture` is a **Go binary** that wraps a macOS native audio capture mechanism (likely Swift-based screen/audio capture)
-- The Swift capture helper is NOT in this repo — it's a separate macOS app that communicates via appsocket
-- `noto dev` pre-warms the capture helper (5s timeout, best-effort)
+- `cmd/capture` is a Go wrapper (`main.go`) around a Swift ScreenCaptureKit helper
+  (`main.swift`) — both live in this repo; the Swift side does the actual macOS
+  mic + system-audio capture and talks to the backend over the `appsocket` socket
+- `make dev` pre-warms the capture helper (best-effort) so the first recording is fast
 - FTS5 search ranks by recency + BM25-like scoring
 - Artifact checksum tracks integrity of stored JSON vs generated Markdown
-- Active architecture: local TUI/CLI + remote-capable backend + AssemblyAI-only production transcription
+- Speaker recognition runs **in-process** (pure-Go fbank + ONNX ECAPA, CPU-only);
+  biometrics never leave the backend. AssemblyAI is used for transcription only.

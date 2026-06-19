@@ -27,7 +27,8 @@ Supporting concerns:
 - `events.go` — in-process `eventHub` that broadcasts job progress to SSE + TUI
 - `speaker_profiles.go` — speaker profile CRUD + merge
 - `speaker_embedder.go` — speaker embedding pipeline
-- `seed.go` — dev fixture seeding (used by `noto seed`)
+- `speaker_suggest.go` — match-suggestion ranking for the speakers UI
+- `seed.go` / `seed_speakers.go` — dev fixture seeding (used by `noto seed`)
 - `util.go` — small shared helpers
 
 ## Local rules

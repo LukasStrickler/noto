@@ -18,16 +18,38 @@ type RoutingPolicy struct {
 	LLMProvider     string         `json:"llm_provider"`
 	LLMProviders    []string       `json:"llm_providers"`
 	LLMModel        string         `json:"llm_model"`
+	LLMPrivacy      LLMPrivacy     `json:"llm_privacy" mapstructure:"llm_privacy"`
 	Profile         RoutingProfile `json:"profile"`
+}
+
+// LLMPrivacy controls how OpenRouter is allowed to route a request across its
+// upstream providers. These map directly onto OpenRouter's `provider` routing
+// block. They default ON so meeting transcripts stay private unless the user
+// deliberately relaxes them (which widens the model pool but allows providers
+// that may log or train on the data).
+type LLMPrivacy struct {
+	// ZDR routes only to endpoints with a Zero-Data-Retention policy.
+	ZDR bool `json:"zdr" mapstructure:"zdr"`
+	// DenyDataCollection routes only to providers that do not collect/train on data.
+	DenyDataCollection bool `json:"deny_data_collection" mapstructure:"deny_data_collection"`
+	// RequireParameters routes only to providers that honor every request
+	// parameter (e.g. response_format) — keeps structured output reliable.
+	RequireParameters bool `json:"require_parameters" mapstructure:"require_parameters"`
+}
+
+// DefaultLLMPrivacy returns the private-by-default posture.
+func DefaultLLMPrivacy() LLMPrivacy {
+	return LLMPrivacy{ZDR: true, DenyDataCollection: true, RequireParameters: true}
 }
 
 func DefaultRoutingPolicy() RoutingPolicy {
 	return RoutingPolicy{
-		SpeechProvider:  "assemblyai",
-		SpeechProviders: []string{"assemblyai"},
+		SpeechProvider:  "parakeet-local",
+		SpeechProviders: []string{"parakeet-local"},
 		LLMProvider:     "openrouter",
 		LLMProviders:    []string{"openrouter"},
-		LLMModel:        "openai/gpt-4.1-mini",
+		LLMModel:        "google/gemini-3.1-flash-preview",
+		LLMPrivacy:      DefaultLLMPrivacy(),
 		Profile:         RoutingProfileManual,
 	}
 }

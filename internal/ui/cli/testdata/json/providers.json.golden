@@ -1,12 +1,14 @@
 [
   {
-    "id": "assemblyai",
-    "display_name": "AssemblyAI",
+    "id": "parakeet-local",
+    "display_name": "Parakeet TDT (local)",
     "kind": "stt",
     "capabilities": [
-      "transcribe"
+      "transcribe",
+      "word_timestamps"
     ],
     "has_key": false,
+    "requires_key": false,
     "requires_network": false,
     "sends_raw_audio_off_device": false
   }

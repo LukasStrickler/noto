@@ -1,0 +1,7 @@
+{
+  "segmentation": "diar_seg",
+  "embeddings": "diar_emb",
+  "clustering": "diar_cluster",
+  "load_ms": "model_load",
+  "vad_ms": "vad"
+}

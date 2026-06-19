@@ -1,0 +1,10 @@
+# model weights + onnx runtime + ffmpeg are downloaded into the data dir, never committed
+models/
+onnxruntime/
+bin/
+audio/
+*.onnx
+*.so
+*.so.*
+*.db
+.venv/

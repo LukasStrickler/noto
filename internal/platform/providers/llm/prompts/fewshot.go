@@ -8,14 +8,14 @@ import (
 var FewShotDecisionExamples = []DecisionExample{
 	{
 		Name: "Architecture Decision",
-		Transcript: `[seg_000210] Speaker 1: "I think post-meeting diarization is the right approach for V1."
-[seg_000211] Speaker 0: "Agreed. We don't need real-time for the initial release."
-[seg_000212] Speaker 1: "Let's go with post-meeting then. We can always add real-time later if users request it."`,
+		Transcript: `[seg_000210] @S2: "I think post-meeting diarization is the right approach for V1."
+[seg_000211] @S1: "Agreed. We don't need real-time for the initial release."
+[seg_000212] @S2: "Let's go with post-meeting then. We can always add real-time later if users request it."`,
 		ExpectedOutput: `{
   "decisions": [
     {
       "text": "Use post-meeting diarization for V1, with real-time as a potential future enhancement.",
-      "speaker_ids": ["spk_0", "spk_1"],
+      "speaker_ids": ["@S1", "@S2"],
       "evidence": [
         {"segment_id": "seg_000210", "quote": "post-meeting diarization is the right approach for V1"},
         {"segment_id": "seg_000211", "quote": "We don't need real-time for the initial release"}
@@ -26,15 +26,15 @@ var FewShotDecisionExamples = []DecisionExample{
 	},
 	{
 		Name: "Technology Stack Decision",
-		Transcript: `[seg_000320] Speaker 2: "We should consider SQLite for the local search index."
-[seg_000321] Speaker 1: "SQLite with FTS5 would give us full-text search without adding complexity."
-[seg_000322] Speaker 2: "FTS5 BM25 ranking is exactly what we need for keyword search."
-[seg_000323] Speaker 0: "Sounds good. Let's use SQLite FTS5 for the search index."`,
+		Transcript: `[seg_000320] @S3: "We should consider SQLite for the local search index."
+[seg_000321] @S2: "SQLite with FTS5 would give us full-text search without adding complexity."
+[seg_000322] @S3: "FTS5 BM25 ranking is exactly what we need for keyword search."
+[seg_000323] @S1: "Sounds good. Let's use SQLite FTS5 for the search index."`,
 		ExpectedOutput: `{
   "decisions": [
     {
       "text": "Use SQLite with FTS5 for the local search index, using BM25 ranking for keyword search.",
-      "speaker_ids": ["spk_0", "spk_1", "spk_2"],
+      "speaker_ids": ["@S1", "@S2", "@S3"],
       "evidence": [
         {"segment_id": "seg_000321", "quote": "SQLite with FTS5 would give us full-text search without adding complexity"},
         {"segment_id": "seg_000322", "quote": "FTS5 BM25 ranking is exactly what we need for keyword search"}
@@ -45,16 +45,16 @@ var FewShotDecisionExamples = []DecisionExample{
 	},
 	{
 		Name: "Vendor Selection Decision",
-		Transcript: `[seg_000450] Speaker 0: "We've tested AssemblyAI for transcription."
-[seg_000451] Speaker 1: "AssemblyAI gave us better diarization results in our benchmarks."
-[seg_000452] Speaker 0: "The cost difference is significant too. AssemblyAI is more affordable."
-[seg_000453] Speaker 1: "Let's go with AssemblyAI as our default provider."
-[seg_000454] Speaker 0: "Agreed. We can always benchmark others later if needed."`,
+		Transcript: `[seg_000450] @S1: "We've tested AssemblyAI for transcription."
+[seg_000451] @S2: "AssemblyAI gave us better diarization results in our benchmarks."
+[seg_000452] @S1: "The cost difference is significant too. AssemblyAI is more affordable."
+[seg_000453] @S2: "Let's go with AssemblyAI as our default provider."
+[seg_000454] @S1: "Agreed. We can always benchmark others later if needed."`,
 		ExpectedOutput: `{
   "decisions": [
     {
       "text": "Use AssemblyAI as the default STT provider based on benchmark diarization quality and cost.",
-      "speaker_ids": ["spk_0", "spk_1"],
+      "speaker_ids": ["@S1", "@S2"],
       "evidence": [
         {"segment_id": "seg_000451", "quote": "AssemblyAI gave us better diarization results in our benchmarks"},
         {"segment_id": "seg_000452", "quote": "The cost difference is significant too. AssemblyAI is more affordable"}
@@ -74,15 +74,15 @@ type DecisionExample struct {
 var FewShotRiskExamples = []RiskExample{
 	{
 		Name: "Performance Risk",
-		Transcript: `[seg_000600] Speaker 1: "The main concern I have is that the transcription queue might exceed our latency targets."
-[seg_000601] Speaker 0: "We've been seeing 2-3x realtime during peak provider load."
-[seg_000602] Speaker 1: "For a 30-minute meeting, that's potentially 60-90 minutes before notes are ready."
-[seg_000603] Speaker 0: "That's definitely a problem if users are expecting near-instant results."`,
+		Transcript: `[seg_000600] @S2: "The main concern I have is that the transcription queue might exceed our latency targets."
+[seg_000601] @S1: "We've been seeing 2-3x realtime during peak provider load."
+[seg_000602] @S2: "For a 30-minute meeting, that's potentially 60-90 minutes before notes are ready."
+[seg_000603] @S1: "That's definitely a problem if users are expecting near-instant results."`,
 		ExpectedOutput: `{
   "risks": [
     {
       "text": "Transcription queue latency may exceed expectations - 2-3x realtime provider processing could mean 60-90 minutes before notes are ready for 30-minute meetings.",
-      "speaker_ids": ["spk_0", "spk_1"],
+      "speaker_ids": ["@S1", "@S2"],
       "evidence": [
         {"segment_id": "seg_000600", "quote": "transcription queue might exceed our latency targets"},
         {"segment_id": "seg_000601", "quote": "We've been seeing 2-3x realtime during peak provider load"}
@@ -93,15 +93,15 @@ var FewShotRiskExamples = []RiskExample{
 	},
 	{
 		Name: "Dependency Risk",
-		Transcript: `[seg_000700] Speaker 0: "The feature depends on the new API endpoint that the platform team is building."
-[seg_000701] Speaker 1: "What's the timeline on that?"
-[seg_000702] Speaker 0: "They said Q3, but it's not committed yet."
-[seg_000703] Speaker 1: "So we're exposed if that slips."`,
+		Transcript: `[seg_000700] @S1: "The feature depends on the new API endpoint that the platform team is building."
+[seg_000701] @S2: "What's the timeline on that?"
+[seg_000702] @S1: "They said Q3, but it's not committed yet."
+[seg_000703] @S2: "So we're exposed if that slips."`,
 		ExpectedOutput: `{
   "risks": [
     {
       "text": "Feature depends on platform team API endpoint with an uncommitted Q3 timeline - at risk if the dependency slips.",
-      "speaker_ids": ["spk_0", "spk_1"],
+      "speaker_ids": ["@S1", "@S2"],
       "evidence": [
         {"segment_id": "seg_000700", "quote": "The feature depends on the new API endpoint that the platform team is building"},
         {"segment_id": "seg_000702", "quote": "They said Q3, but it's not committed yet"}

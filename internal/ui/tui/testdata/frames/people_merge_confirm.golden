@@ -1,0 +1,30 @@
+╭──────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────────────────────────────────────────╮
+│ people                                         4 │ │ details                                        pick survivor · ⏎ merge · esc cancel │
+│ ──────────────────────────────────────────────── │ │ ─────────────────────────────────────────────────────────────────────────────────── │
+│ Merge — pick who survives                        │ │ Alice Nguyen                                                                        │
+│                                                  │ │ she/her  ·  Work @ noto                                                             │
+│  ⤷ Alice Nguyen                  source          │ │                                                                                     │
+│  ▸ Bob Martins                    2 mtg · May 20 │ │ Notes                                                                               │
+│    Carol Reyes                    1 mtg · May 20 │ │   Eng lead. Owns roadmap + the search v2 ship.                                      │
+│    Dana Okafor                             1 mtg │ │                                                                                     │
+│                                          ╭────────────────────────────────────────────────────╮                                          │
+│                                          │                                                    │                                          │
+│                                          │  Merge into Bob Martins?                           │                                          │
+│                                          │                                                    │                                          │
+│                                          │  Folds Alice Nguyen into Bob Martins: their        │                                          │
+│                                          │  meetings and voiceprints move over and Alice      │                                ✓ auto    │
+│                                          │  Nguyen is deleted. This can't be undone.          │                                ✓ auto    │
+│                                          │                                                    │                                          │
+│                                          │    ⏎ confirm    esc cancel                         │                                          │
+│                                          │                                                    │                                          │
+│                                          ╰────────────────────────────────────────────────────╯                                          │
+│                                                  │ │                                                                                     │
+│                                                  │ │                                                                                     │
+│                                                  │ │                                                                                     │
+│                                                  │ │                                                                                     │
+│                                                  │ │                                                                                     │
+│                                                  │ │                                                                                     │
+│                                                  │ │                                                                                     │
+│   ↑/↓ survivor                                   │ │                                                                                     │
+│   ⏎ merge   esc cancel                           │ │                                                                                     │
+╰──────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────────────────────────────────────────╯

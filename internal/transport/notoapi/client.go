@@ -49,6 +49,22 @@ type Client interface {
 	GetConfig(ctx context.Context) (Config, error)
 	PatchConfig(ctx context.Context, patch ConfigPatch) (Config, error)
 	GetPaths(ctx context.Context) (Paths, error)
+	GetModalComputeStatus(ctx context.Context) (ModalStatus, error)
+	SetupModalCompute(ctx context.Context, req ModalSetupRequest) (ModalStatus, error)
+	RunModalBenchmark(ctx context.Context, req ModalBenchmarkRequest) (ModalBenchmarkResult, error)
+
+	// Benchmark / measurement spine (Program A)
+	BenchEstimate(ctx context.Context, req BenchEstimateRequest) (BenchEstimateResult, error)
+	BenchPreflight(ctx context.Context, req BenchPreflightRequest) (BenchPreflightResult, error)
+	BenchRun(ctx context.Context, req BenchRunRequest) (BenchRunResult, error)
+	BenchCompare(ctx context.Context, req BenchCompareRequest) (BenchCompareResult, error)
+	BenchLedgerWinners(ctx context.Context, opts BenchLedgerWinnersOpts) (BenchLedgerWinnersResult, error)
+	BenchLedgerAppend(ctx context.Context, req BenchLedgerAppendRequest) (BenchLedgerAppendResult, error)
+	BenchDatasetList(ctx context.Context) (BenchDatasetListResult, error)
+	BenchAudit(ctx context.Context, runID string) (BenchAuditResult, error)
+	BenchRetrace(ctx context.Context, runID string) (BenchAuditResult, error)
+	BenchScale(ctx context.Context, req BenchScaleRequest) (BenchScaleResult, error)
+	BenchInsights(ctx context.Context, runID string) (BenchInsightsResult, error)
 
 	// Storage
 	GetStorage(ctx context.Context) (Storage, error)
@@ -57,6 +73,8 @@ type Client interface {
 
 	// Lifecycle / health
 	Health(ctx context.Context) (Health, error)
+	// GetSystem reports the backend's location, accelerator, and capabilities.
+	GetSystem(ctx context.Context) (System, error)
 	Close() error
 
 	// Speaker profiles

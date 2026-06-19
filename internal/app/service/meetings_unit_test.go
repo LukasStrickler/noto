@@ -148,7 +148,7 @@ func TestService_GetMeeting_StatusProgression(t *testing.T) {
 	_ = fr.SaveTranscript(ctx, id, &artifacts.Transcript{
 		SchemaVersion: "transcript.v1",
 		MeetingID:     id.String(),
-		Provider:      artifacts.TranscriptProvider{ID: "assemblyai"},
+		Provider:      artifacts.TranscriptProvider{ID: "parakeet-local"},
 		Segments:      []artifacts.Segment{{ID: "s1", SpeakerID: "spk_0", Text: "hello", StartSeconds: 0, EndSeconds: 2, Confidence: &conf}},
 		Speakers:      []artifacts.Speaker{{ID: "spk_0", DisplayName: "Alice"}},
 	})

@@ -130,6 +130,17 @@ func (s *Server) handleConfigPaths(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
+// --- System ---
+
+func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
+	sys, err := s.svc.GetSystem(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sys)
+}
+
 // --- Storage ---
 
 func (s *Server) handleStorage(w http.ResponseWriter, r *http.Request) {

@@ -15,8 +15,11 @@ import (
 // and a small set of salient 3-word phrases. Used by the detail pane's
 // Speakers tab.
 type speakerStat struct {
-	ID         string
-	Name       string
+	ID   string
+	Name string
+	// token is the stable anonymous per-meeting label ("Speaker A") — the handle
+	// the LLM was given. The renderer resolves it back to a person + color.
+	token      string
 	TalkSec    float64
 	TurnCount  int
 	WordCount  int
@@ -51,15 +54,26 @@ func computeSpeakerStats(t notoapi.Transcript) []speakerStat {
 		a.text.WriteString(seg.Text)
 		a.text.WriteString(" ")
 	}
+	// The anonymous per-meeting token ("Speaker A") lives on the Speaker, not the
+	// segments — index it so each stat can resolve back to a person + color.
+	tokenByID := make(map[string]string, len(t.Speakers))
+	for _, sp := range t.Speakers {
+		tokenByID[sp.ID] = sp.Label
+	}
 	out := make([]speakerStat, 0, len(bag))
 	for id, a := range bag {
 		name := a.name
 		if name == "" {
 			name = id
 		}
+		token := tokenByID[id]
+		if token == "" {
+			token = name
+		}
 		out = append(out, speakerStat{
 			ID:         id,
 			Name:       name,
+			token:      token,
 			TalkSec:    a.talk,
 			TurnCount:  a.turns,
 			WordCount:  a.words,
@@ -161,13 +175,16 @@ func shareBar(st theme.Styles, share float64, width, colorIdx int) string {
 	return fillStyle.Render(strings.Repeat("█", filled)) + st.Muted.Render(strings.Repeat("·", width-filled))
 }
 
-// speakerExtra extends SpeakerA/B/C with three more identity hues for
-// meetings with 4–6 speakers. Picked to stay clear of the status
-// palette (info blue, success green, warning amber).
+// speakerExtra extends SpeakerA/B/C (purple/pink/teal) with three more
+// identity hues for meetings with 4–6 speakers. Picked to stay clear of
+// the semantic palette: no blue (Primary), cyan (Info), green (Success),
+// amber (Warning) or red (Danger), so a colored name never reads as a
+// status. The old sky/sand extras were dropped — they collided with the
+// new blue brand and the amber warning respectively.
 var speakerExtra = []color.Color{
-	lipgloss.Color("#fda4af"), // rose-300, peachy pink
-	lipgloss.Color("#93c5fd"), // sky-300, pale blue distinct from Info
-	lipgloss.Color("#fde047"), // sand, distinct from Warning amber
+	lipgloss.Color("#fb923c"), // orange-400
+	lipgloss.Color("#a78bfa"), // violet-400
+	lipgloss.Color("#fda4af"), // rose-300
 }
 
 func speakerColorForIndex(t theme.Theme, idx int) color.Color {

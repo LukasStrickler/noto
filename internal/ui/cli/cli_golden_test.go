@@ -43,9 +43,14 @@ func seededGoldenClient() *testutil.FakeClient {
 	fc.Summaries["mtg-1"] = notoapi.Summary{MeetingID: "mtg-1", ShortSummary: "Planned the quarter.", Markdown: "# Summary\n\nPlanned the quarter."}
 	fc.Files["mtg-1"] = notoapi.MeetingFiles{MeetingID: "mtg-1", Transcript: "/n/transcript.json", SummaryMD: "/n/summary.md"}
 	fc.Handoffs["mtg-1"] = notoapi.AgentHandoff{MeetingID: "mtg-1", VersionID: "ver-1", Files: fc.Files["mtg-1"], Commands: []string{"noto transcript --json mtg-1"}}
-	fc.Providers = []notoapi.ProviderInfo{{ID: "assemblyai", DisplayName: "AssemblyAI", Kind: "stt", Capabilities: []string{"transcribe"}}}
+	fc.Providers = []notoapi.ProviderInfo{{ID: "parakeet-local", DisplayName: "Parakeet TDT (local)", Kind: "stt", Capabilities: []string{"transcribe", "word_timestamps"}}}
 	fc.Jobs = []notoapi.Job{{ID: "job-1", Kind: notoapi.JobTranscribe, Status: notoapi.JobSucceeded, Progress: 1}}
 	fc.HealthInfo = notoapi.Health{OK: true, Version: "golden", StartedAt: created}
+	fc.SystemInfo = notoapi.System{
+		SchemaVersion: "system.v1", Mode: "local", Hostname: "golden-host",
+		OS: "darwin", Arch: "arm64", Accelerator: "coreml", AcceleratorOK: true,
+		ModelTier: "accurate", StorageType: "local", CaptureAvailable: true, Version: "golden",
+	}
 	fc.Recording = notoapi.RecordingState{Active: false}
 	fc.SearchValue = notoapi.SearchResult{Hits: []notoapi.SearchHit{{MeetingID: "mtg-1", MeetingTitle: "Quarterly planning", Speaker: "Maya", Timestamp: 12, Snippet: "planning the quarter"}}}
 	return fc

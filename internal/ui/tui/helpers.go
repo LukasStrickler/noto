@@ -113,6 +113,24 @@ func fetchConfig(ctx screenCtx) tea.Cmd {
 	}
 }
 
+func fetchSystem(ctx screenCtx) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		sys, err := ctx.client.GetSystem(c)
+		return systemLoadedMsg{System: sys, Err: err}
+	}
+}
+
+// topoTickInterval paces the deployment-diagram animation: slow enough to be
+// calm and cheap (~5.5 frames/s), fast enough to read as motion. The packets
+// drift rather than dart — a hectic tick reads as flicker, not flow.
+const topoTickInterval = 180 * time.Millisecond
+
+func topoTickCmd() tea.Cmd {
+	return tea.Tick(topoTickInterval, func(time.Time) tea.Msg { return topoTickMsg{} })
+}
+
 func runSearch(ctx screenCtx, q string) tea.Cmd {
 	return func() tea.Msg {
 		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
@@ -170,6 +188,61 @@ func testProviderCmd(ctx screenCtx, id string) tea.Cmd {
 	}
 }
 
+// --- People (speaker profiles) ---
+
+func fetchProfiles(ctx screenCtx) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		list, err := ctx.client.ListSpeakerProfiles(c)
+		return profilesLoadedMsg{Profiles: list, Err: err}
+	}
+}
+
+// fetchProfile pulls one profile in full (incl. its meetings list, which the
+// list endpoint omits).
+func fetchProfile(ctx screenCtx, id string) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		p, err := ctx.client.GetSpeakerProfile(c, id)
+		return profileLoadedMsg{Profile: p, Err: err}
+	}
+}
+
+func patchProfileCmd(ctx screenCtx, id string, patch notoapi.SpeakerProfilePatch) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		p, err := ctx.client.PatchSpeakerProfile(c, id, patch)
+		return profileSavedMsg{Action: "saved", Name: p.DisplayName, Err: err}
+	}
+}
+
+func deleteProfileCmd(ctx screenCtx, id, name string) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		err := ctx.client.DeleteSpeakerProfile(c, id)
+		return profileSavedMsg{Action: "deleted", Name: name, Err: err}
+	}
+}
+
+// mergeProfilesCmd folds source into target (target keeps its identity), then
+// reports the surviving name.
+func mergeProfilesCmd(ctx screenCtx, targetID, sourceID, targetName string) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		p, err := ctx.client.MergeSpeakerProfiles(c, targetID, sourceID)
+		name := targetName
+		if err == nil {
+			name = p.DisplayName
+		}
+		return profileSavedMsg{Action: "merged", Name: name, Err: err}
+	}
+}
+
 // --- rendering helpers ---
 
 // fit truncates s to width, padding short ones to width with spaces.
@@ -204,11 +277,12 @@ func renderMeter(s theme.Styles, label string, value int) string {
 		filled = width
 	}
 	bar := strings.Repeat("█", filled) + strings.Repeat("·", width-filled)
+	// Classic level-meter ramp: green (safe) → amber (hot) → red (clipping).
 	style := s.MeterFilled
 	if value >= -6 {
 		style = s.MeterClip
 	} else if value >= -18 {
-		style = s.Action
+		style = s.Warning
 	}
 	return s.Muted.Render(label) + style.Render(bar) + " " + s.Muted.Render(fmt.Sprintf("%+3d dB", value))
 }
@@ -240,27 +314,8 @@ func fileLink(path string) string {
 
 // --- badge helpers used by screens ---
 
-func badgeOK(stylesAny any, text string) string     { return styleAny(stylesAny, "ok", text) }
 func badgeWarn(stylesAny any, text string) string   { return styleAny(stylesAny, "warn", text) }
 func badgeDanger(stylesAny any, text string) string { return styleAny(stylesAny, "danger", text) }
-func badgeInfo(stylesAny any, text string) string   { return styleAny(stylesAny, "info", text) }
-func badgeMuted(stylesAny any, text string) string  { return styleAny(stylesAny, "muted", text) }
-
-// statusBadge renders a meeting status as a colored chip.
-func statusBadge(s any, status notoapi.MeetingStatus) string {
-	switch status {
-	case notoapi.StatusSummarized:
-		return badgeOK(s, "✓ done")
-	case notoapi.StatusTranscribed:
-		return badgeInfo(s, "transcribed")
-	case notoapi.StatusRecording:
-		return badgeDanger(s, "● rec")
-	case notoapi.StatusFailed:
-		return badgeDanger(s, "✗ failed")
-	default:
-		return badgeMuted(s, string(status))
-	}
-}
 
 // jobBar renders a horizontal progress bar (0.0..1.0) with the given
 // total width using ▰ / ▱ glyphs.

@@ -71,7 +71,7 @@ func TestStoreSavesMode0600(t *testing.T) {
 func TestLoadConfigFromFile(t *testing.T) {
 	dir := t.TempDir()
 	cfg := DefaultConfig()
-	cfg.Providers.STT.Default = "assemblyai"
+	cfg.Providers.STT.Default = "parakeet-local"
 	cfg.UI.Theme = "light"
 
 	if err := Save(cfg, dir); err != nil {
@@ -83,8 +83,8 @@ func TestLoadConfigFromFile(t *testing.T) {
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if loaded.Providers.STT.Default != "assemblyai" {
-		t.Errorf("Providers.STT.Default = %q, want assemblyai", loaded.Providers.STT.Default)
+	if loaded.Providers.STT.Default != "parakeet-local" {
+		t.Errorf("Providers.STT.Default = %q, want parakeet-local", loaded.Providers.STT.Default)
 	}
 	if loaded.UI.Theme != "light" {
 		t.Errorf("UI.Theme = %q, want light", loaded.UI.Theme)
@@ -111,7 +111,7 @@ func TestEnvVarOverrides(t *testing.T) {
 	dir := t.TempDir()
 
 	t.Setenv("NOTO_RECORDINGS_DIR", "/custom/recordings")
-	t.Setenv("NOTO_PROVIDERS_STT_DEFAULT", "assemblyai")
+	t.Setenv("NOTO_PROVIDERS_STT_DEFAULT", "parakeet-local")
 
 	cfg, err := Load(dir)
 	if err != nil {
@@ -121,8 +121,8 @@ func TestEnvVarOverrides(t *testing.T) {
 	if cfg.RecordingsDir != "/custom/recordings" {
 		t.Errorf("RecordingsDir = %q, want /custom/recordings", cfg.RecordingsDir)
 	}
-	if cfg.Providers.STT.Default != "assemblyai" {
-		t.Errorf("Providers.STT.Default = %q, want assemblyai", cfg.Providers.STT.Default)
+	if cfg.Providers.STT.Default != "parakeet-local" {
+		t.Errorf("Providers.STT.Default = %q, want parakeet-local", cfg.Providers.STT.Default)
 	}
 }
 
@@ -209,22 +209,22 @@ func TestLoadWithFlags(t *testing.T) {
 	dir := t.TempDir()
 	fs := NewFlagSet()
 
-	fs.String(FlagSTTProvider, "assemblyai", "STT provider")
+	fs.String(FlagSTTProvider, "parakeet-local", "STT provider")
 
 	cfg, err := LoadWithFlags(dir, fs)
 	if err != nil {
 		t.Fatalf("LoadWithFlags returned error: %v", err)
 	}
 
-	if cfg.Providers.STT.Default != "assemblyai" {
-		t.Errorf("Providers.STT.Default = %q, want assemblyai", cfg.Providers.STT.Default)
+	if cfg.Providers.STT.Default != "parakeet-local" {
+		t.Errorf("Providers.STT.Default = %q, want parakeet-local", cfg.Providers.STT.Default)
 	}
 }
 
 func TestSaveAtomicWrite(t *testing.T) {
 	dir := t.TempDir()
 	cfg := DefaultConfig()
-	cfg.Providers.STT.Default = "assemblyai"
+	cfg.Providers.STT.Default = "parakeet-local"
 
 	if err := Save(cfg, dir); err != nil {
 		t.Fatalf("Save returned error: %v", err)
@@ -235,8 +235,8 @@ func TestSaveAtomicWrite(t *testing.T) {
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if loaded.Providers.STT.Default != "assemblyai" {
-		t.Errorf("Providers.STT.Default = %q, want assemblyai", loaded.Providers.STT.Default)
+	if loaded.Providers.STT.Default != "parakeet-local" {
+		t.Errorf("Providers.STT.Default = %q, want parakeet-local", loaded.Providers.STT.Default)
 	}
 
 	tmpPath := filepath.Join(dir, "config.yaml.tmp")

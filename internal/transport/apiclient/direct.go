@@ -127,7 +127,55 @@ func (d *direct) PatchConfig(ctx context.Context, patch notoapi.ConfigPatch) (no
 	return d.svc.PatchConfig(ctx, patch)
 }
 func (d *direct) GetPaths(ctx context.Context) (notoapi.Paths, error) { return d.svc.GetPaths(ctx) }
+func (d *direct) GetModalComputeStatus(ctx context.Context) (notoapi.ModalStatus, error) {
+	return d.svc.GetModalComputeStatus(ctx)
+}
+func (d *direct) SetupModalCompute(ctx context.Context, req notoapi.ModalSetupRequest) (notoapi.ModalStatus, error) {
+	return d.svc.SetupModalCompute(ctx, req)
+}
+func (d *direct) RunModalBenchmark(ctx context.Context, req notoapi.ModalBenchmarkRequest) (notoapi.ModalBenchmarkResult, error) {
+	return d.svc.RunModalBenchmark(ctx, req)
+}
+func (d *direct) BenchEstimate(ctx context.Context, req notoapi.BenchEstimateRequest) (notoapi.BenchEstimateResult, error) {
+	return d.svc.BenchEstimate(ctx, req)
+}
+func (d *direct) BenchPreflight(ctx context.Context, req notoapi.BenchPreflightRequest) (notoapi.BenchPreflightResult, error) {
+	return d.svc.BenchPreflight(ctx, req)
+}
+func (d *direct) BenchRun(ctx context.Context, req notoapi.BenchRunRequest) (notoapi.BenchRunResult, error) {
+	return d.svc.BenchRun(ctx, req)
+}
+func (d *direct) BenchCompare(ctx context.Context, req notoapi.BenchCompareRequest) (notoapi.BenchCompareResult, error) {
+	return d.svc.BenchCompare(ctx, req)
+}
+func (d *direct) BenchLedgerWinners(ctx context.Context, opts notoapi.BenchLedgerWinnersOpts) (notoapi.BenchLedgerWinnersResult, error) {
+	return d.svc.BenchLedgerWinners(ctx, opts)
+}
+func (d *direct) BenchLedgerAppend(ctx context.Context, req notoapi.BenchLedgerAppendRequest) (notoapi.BenchLedgerAppendResult, error) {
+	return d.svc.BenchLedgerAppend(ctx, req)
+}
+func (d *direct) BenchDatasetList(ctx context.Context) (notoapi.BenchDatasetListResult, error) {
+	return d.svc.BenchDatasetList(ctx)
+}
+func (d *direct) BenchAudit(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
+	return d.svc.BenchAudit(ctx, runID)
+}
 
+func (d *direct) BenchRetrace(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
+	return d.svc.BenchRetrace(ctx, runID)
+}
+
+func (d *direct) BenchScale(ctx context.Context, req notoapi.BenchScaleRequest) (notoapi.BenchScaleResult, error) {
+	return d.svc.BenchScale(ctx, req)
+}
+
+func (d *direct) BenchInsights(ctx context.Context, runID string) (notoapi.BenchInsightsResult, error) {
+	return d.svc.BenchInsights(ctx, runID)
+}
+
+func (d *direct) GetSystem(ctx context.Context) (notoapi.System, error) {
+	return d.svc.GetSystem(ctx)
+}
 func (d *direct) GetStorage(ctx context.Context) (notoapi.Storage, error) {
 	return d.svc.GetStorage(ctx)
 }
@@ -173,3 +221,6 @@ func (d *direct) AgentListMeetings(ctx context.Context, opts notoapi.AgentListOp
 func (d *direct) AgentGetMeeting(ctx context.Context, id string) (notoapi.AgentMeetingContext, error) {
 	return d.svc.AgentGetMeeting(ctx, id)
 }
+
+// IsRemote is always false: the direct client runs in the same process as the backend.
+func (d *direct) IsRemote() bool { return false }

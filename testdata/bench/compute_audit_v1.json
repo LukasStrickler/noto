@@ -1,0 +1,31 @@
+{
+  "schema_version": "compute_audit.v1",
+  "run_id": "run_anchor_baseline_001",
+  "execution_profile": "modal_cuda",
+  "operating_mode": "batch_queue",
+  "dataset": {
+    "suite_id": "anchor_ami@2026-06-18",
+    "version": "ami-30",
+    "audio_hours": 11.44
+  },
+  "git": {
+    "commit": "abc123",
+    "dirty": false
+  },
+  "hardware": {
+    "gpu": "L40S",
+    "cpu_cores": 4,
+    "memory_gib": 8
+  },
+  "cost": {
+    "estimated_cost_usd": 0.222,
+    "cost_per_processed_audio_hour_usd": 0.0194,
+    "cost_per_speech_hour_usd": 0.021,
+    "unattributed_pct": 1.4
+  },
+  "cold_start_ms": 8200,
+  "model_load_ms": 31000,
+  "warm_idle_ms": 4000,
+  "trace_summary_ref": "trace_summary.json",
+  "trace_overhead_pct": 1.2
+}

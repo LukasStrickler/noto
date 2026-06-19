@@ -2,9 +2,9 @@ package tui
 
 import "testing"
 
-// TestUpdatePeakDecayHoldLatch covers the three behaviours design.md asks of
-// the meter read-out: a held peak that decays one step per sample, a peak that
-// jumps up immediately on a louder sample, and a CLIP latch that stays set.
+// TestUpdatePeakDecayHoldLatch covers the three meter read-out behaviours: a
+// held peak that decays one step per sample, a peak that jumps up immediately
+// on a louder sample, and a CLIP latch that stays set.
 func TestUpdatePeakDecayHoldLatch(t *testing.T) {
 	t.Run("decays toward the floor", func(t *testing.T) {
 		peak, clip := -20, false

@@ -36,6 +36,13 @@ type EmbeddingWithDuration struct {
 // MinDuration is the minimum segment duration (1.5 sec) required for reliable embedding.
 const MinDuration = 1.5
 
+// MinEnrollSpeech is the minimum total speech (seconds) a meeting speaker must
+// contribute before a match against them is trusted enough to AUTO-confirm.
+// Below this the embedding is built from too little voice to merge silently —
+// the AMI persona bench showed sub-45s speakers score markedly lower (genuine
+// 0.747 vs 0.872) — so we downgrade such matches to pending for human review.
+const MinEnrollSpeech = 3.0
+
 // IsShort returns true if the segment is too short for reliable matching.
 func (e *EmbeddingWithDuration) IsShort() bool {
 	return e.Duration < MinDuration

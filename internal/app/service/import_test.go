@@ -139,7 +139,7 @@ func TestProviderKeyRoundtrip(t *testing.T) {
 	}
 
 	// Active speech can be set to a known provider.
-	if err := client.SetActiveSpeech(ctx, "assemblyai"); err != nil {
+	if err := client.SetActiveSpeech(ctx, "parakeet-local"); err != nil {
 		// Allow gracefully on systems without a writable config store.
 		if !strings.Contains(err.Error(), "permission") {
 			t.Logf("SetActiveSpeech: %v (allowed in test env)", err)

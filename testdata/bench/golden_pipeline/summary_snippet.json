@@ -1,0 +1,10 @@
+{
+  "run_id": "run_golden_pipeline",
+  "estimated_cost_usd": 0.10,
+  "duration_ms": 12400,
+  "processed_audio_hours": 0.4667,
+  "cost_per_audio_hour_usd": 0.2143,
+  "gpu": "L40S",
+  "cpu_cores": 4,
+  "memory_gib": 8
+}

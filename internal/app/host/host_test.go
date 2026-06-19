@@ -95,9 +95,8 @@ func TestE2E_RecordingPipeline(t *testing.T) {
 	if m.Status != notoapi.StatusSummarized {
 		t.Errorf("want status=summarized, got %q", m.Status)
 	}
-	if m.DecisionCount == 0 || m.ActionCount == 0 {
-		t.Errorf("want >0 decisions and actions, got D=%d A=%d", m.DecisionCount, m.ActionCount)
-	}
+	// No LLM key is configured in this test, so the summarizer writes a
+	// clearly-labelled placeholder rather than fabricated decisions/actions.
 
 	// Transcript + summary fetch.
 	tr, err := client.GetTranscript(ctx, m.ID)
@@ -111,8 +110,8 @@ func TestE2E_RecordingPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSummary: %v", err)
 	}
-	if len(sum.Decisions) == 0 {
-		t.Fatal("expected decisions in summary")
+	if sum.ShortSummary == "" {
+		t.Fatal("expected a (placeholder) summary to be written without an LLM key")
 	}
 
 	// Search.
@@ -152,7 +151,7 @@ func TestProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"assemblyai", "openrouter"}
+	want := []string{"parakeet-local", "openrouter"}
 	for _, w := range want {
 		found := false
 		for _, p := range list {

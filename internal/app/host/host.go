@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/lukasstrickler/noto/internal/app/service"
+	"github.com/lukasstrickler/noto/internal/platform/compute"
 	"github.com/lukasstrickler/noto/internal/platform/config"
 	"github.com/lukasstrickler/noto/internal/platform/db"
 	"github.com/lukasstrickler/noto/internal/platform/providers"
@@ -160,6 +161,21 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	}
 	store := secrets.EnvFallbackStore{Primary: primary}
 
+	// Resolve the accelerator plan once, here, on the machine that runs the
+	// backend (the Mac in local mode, the Linux server in remote mode). The
+	// Verify hook is nil for now — the candidate ladder is trusted and the
+	// real safety net is each local provider's fall-back-to-CPU at Open time.
+	// NOTO_COMPUTE / NOTO_MODEL_TIER override the choice.
+	computePlan := compute.DetectFromEnv(nil, func(format string, args ...any) {
+		logger.Printf(format, args...)
+	})
+
+	// Select the artifact store. Default is local (SQLite + filesystem). With
+	// storage.type=remote the pipeline still runs here, but its output is written
+	// through to a remote data plane (the "compute local, store off-site" mode);
+	// audio stays in the local recordings dir as a staging area.
+	artifactRepo := selectRepo(ctx, cfg, store, recordingsDir, logger)
+
 	svc := service.New(service.Deps{
 		Config:          cfg,
 		ConfigStore:     cfgStore,
@@ -171,7 +187,8 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		Version:         opts.Version,
 		SpeakerProfiles: speakerProfiles,
 		MeetingMappings: meetingMappings,
-		Repo:            repo.NewLocal(recordingsDir),
+		Repo:            artifactRepo,
+		Compute:         computePlan,
 	})
 
 	serviceCtx, cancel := context.WithCancel(ctx)
@@ -258,13 +275,22 @@ func (h *Host) Client() notoapi.Client {
 	return h.client
 }
 
-// SeedDev populates the local store with the bundled fixture meetings.
-// Dev-only: not exposed over the wire.
-func (h *Host) SeedDev(ctx context.Context) ([]service.SeededMeeting, error) {
+// SeedDev populates the local store with the bundled fixture meetings plus a
+// People directory + speaker mappings. Dev-only: not exposed over the wire.
+func (h *Host) SeedDev(ctx context.Context) (service.SeedResult, error) {
 	if h.svc == nil {
-		return nil, errors.New("notohost: service not initialized")
+		return service.SeedResult{}, errors.New("notohost: service not initialized")
 	}
 	return h.svc.SeedDev(ctx)
+}
+
+// PurgeAll wipes all local meetings + speaker profiles back to empty.
+// Dev-only: not exposed over the wire.
+func (h *Host) PurgeAll(ctx context.Context) (service.PurgeResult, error) {
+	if h.svc == nil {
+		return service.PurgeResult{}, errors.New("notohost: service not initialized")
+	}
+	return h.svc.PurgeAll(ctx)
 }
 
 // Addr is the listener address (socket path or host:port).
@@ -371,23 +397,44 @@ func loadConfig() (config.Config, config.Store, error) {
 // The returned closeFn is non-nil only when the caller owns the Host
 // (case 3). It must be invoked to free resources.
 func Connect(ctx context.Context, opts Options) (notoapi.Client, func(), error) {
+	logger := opts.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	forceInProcess := truthyEnv("NOTO_FORCE_IN_PROCESS")
 	if remote := os.Getenv("NOTO_API_URL"); remote != "" {
-		token := os.Getenv("NOTO_API_TOKEN")
-		client := apiclient.NewHTTP(apiclient.HTTPOptions{
-			BaseURL: remote,
-			Token:   token,
-		})
-		if _, err := client.Health(ctx); err != nil {
-			return nil, nil, fmt.Errorf("notohost: cannot reach %s: %w", remote, err)
+		if forceInProcess {
+			logger.Printf("notohost: ignoring NOTO_API_URL because NOTO_FORCE_IN_PROCESS is set")
+		} else {
+			token := os.Getenv("NOTO_API_TOKEN")
+			client := apiclient.NewHTTP(apiclient.HTTPOptions{
+				BaseURL: remote,
+				Token:   token,
+			})
+			if _, err := client.Health(ctx); err != nil {
+				return nil, nil, fmt.Errorf("notohost: cannot reach %s: %w", remote, err)
+			}
+			return maybeWrapEdgeCapture(ctx, client, logger), nil, nil
 		}
-		return client, nil, nil
 	}
 	cfg, _, err := loadConfig()
 	if err != nil {
 		return nil, nil, err
 	}
+	// Config-declared remote backend (the persistent "thin client" setup). The
+	// bearer token lives in the secrets store, never config.yaml.
+	if cfg.Backend.IsRemote() && !forceInProcess {
+		client := apiclient.NewHTTP(apiclient.HTTPOptions{
+			BaseURL: cfg.Backend.Remote.URL,
+			Token:   resolveBackendToken(cfg),
+		})
+		if _, err := client.Health(ctx); err != nil {
+			return nil, nil, fmt.Errorf("notohost: cannot reach remote backend %s: %w", cfg.Backend.Remote.URL, err)
+		}
+		return maybeWrapEdgeCapture(ctx, client, logger), nil, nil
+	}
 	sock := DefaultSocketPath(cfg.ConfigDir)
-	if probeSocket(ctx, sock) {
+	if !forceInProcess && probeSocket(ctx, sock) {
 		client := apiclient.NewHTTP(apiclient.HTTPOptions{SocketPath: sock})
 		return client, nil, nil
 	}
@@ -396,6 +443,96 @@ func Connect(ctx context.Context, opts Options) (notoapi.Client, func(), error) 
 		return nil, nil, err
 	}
 	return host.Client(), func() { _ = host.Close() }, nil
+}
+
+// maybeWrapEdgeCapture upgrades a remote client to capture audio locally when
+// the connected backend is headless. A Mac TUI pointed at a Linux data plane
+// reports CaptureAvailable=false; if this machine has a capture helper, we wrap
+// the client so recording runs here and uploads to the backend on stop. When the
+// backend can capture (or we have no helper), the client is returned unchanged —
+// the common path is untouched and the CLI/TUI need no edge-capture awareness.
+func maybeWrapEdgeCapture(ctx context.Context, client notoapi.Client, logger *log.Logger) notoapi.Client {
+	sys, err := client.GetSystem(ctx)
+	if err != nil || sys.CaptureAvailable {
+		return client // backend captures (or unknown) — leave it
+	}
+	if !helperExistsOnSystem() {
+		logger.Printf("notohost: backend is headless and no local capture helper found — recording disabled")
+		return client
+	}
+	ipc, err := appsocket.NewIPCClient()
+	if err != nil {
+		return client
+	}
+	logger.Printf("notohost: backend cannot capture — recording locally and uploading on stop (edge capture)")
+	return apiclient.NewEdgeCapture(client, ipcCapturer{ipc: ipc}, logger.Printf)
+}
+
+// ipcCapturer adapts the macOS Swift helper (appsocket.IPCClient) to the
+// apiclient.LocalCapturer the edge recorder drives.
+type ipcCapturer struct{ ipc *appsocket.IPCClient }
+
+func (c ipcCapturer) Start(ctx context.Context, sources []string) error {
+	if err := c.ipc.Connect(ctx); err != nil {
+		return err
+	}
+	_, err := c.ipc.Start(ctx, sources, 48000)
+	return err
+}
+
+func (c ipcCapturer) Stop(ctx context.Context) (string, int, error) {
+	res, err := c.ipc.Stop(ctx)
+	if err != nil {
+		return "", 0, err
+	}
+	return res.OutputPath, int(res.DurationSecs), nil
+}
+
+func (c ipcCapturer) Pause(ctx context.Context) error  { return c.ipc.Pause(ctx) }
+func (c ipcCapturer) Resume(ctx context.Context) error { return c.ipc.Resume(ctx) }
+
+func (c ipcCapturer) Level(ctx context.Context) (int, int, error) {
+	lvl, err := c.ipc.GetAudioLevel(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return int(lvl.Left), int(lvl.Right), nil
+}
+
+func (c ipcCapturer) Close() error { return c.ipc.Close() }
+
+// selectRepo chooses the artifact store backend from config. With
+// storage.type=remote it writes artifacts through to a remote data plane (audio
+// stays in the local recordings dir as staging); otherwise it stays local.
+func selectRepo(ctx context.Context, cfg config.Config, store secrets.Store, recordingsDir string, logger *log.Logger) repo.ArtifactRepository {
+	if cfg.Storage.IsRemote() {
+		token := ""
+		if ref := strings.TrimSpace(cfg.Storage.Remote.TokenRef); ref != "" {
+			token, _ = store.Get(ctx, ref)
+		}
+		logger.Printf("storage: remote data plane at %s (audio stays local)", cfg.Storage.Remote.URL)
+		return repo.NewRemote(cfg.Storage.Remote.URL, token, recordingsDir)
+	}
+	return repo.NewLocal(recordingsDir)
+}
+
+// resolveBackendToken loads the remote backend's bearer token from the secrets
+// store (Keychain on macOS, credentials.json elsewhere), mirroring how provider
+// keys are protected. Returns "" if no ref is configured.
+func resolveBackendToken(cfg config.Config) string {
+	ref := strings.TrimSpace(cfg.Backend.Remote.TokenRef)
+	if ref == "" {
+		return ""
+	}
+	var primary secrets.Store
+	if runtime.GOOS == "darwin" {
+		primary = secrets.KeychainStore{}
+	} else {
+		primary = secrets.NewFileStore(filepath.Join(cfg.ConfigDir, "credentials.json"))
+	}
+	store := secrets.EnvFallbackStore{Primary: primary}
+	tok, _ := store.Get(context.Background(), ref)
+	return tok
 }
 
 // probeSocket returns true if a noto server is reachable at sock.
@@ -419,6 +556,15 @@ func probeSocket(ctx context.Context, sock string) bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode == 200
+}
+
+func truthyEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // generateToken returns a 32-char hex token.

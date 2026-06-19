@@ -17,7 +17,7 @@ func TestLLMCapabilitiesRouteOnlyToOpenRouter(t *testing.T) {
 		router := CapabilityRouter{
 			Registry: reg,
 			Policy: RoutingPolicy{
-				SpeechProvider: "assemblyai",
+				SpeechProvider: "parakeet-local",
 				LLMProvider:    "openrouter",
 				LLMModel:       "anthropic/claude-3.5-sonnet",
 				Profile:        RoutingProfileManual,
@@ -37,7 +37,7 @@ func TestLLMCapabilitiesRejectNonOpenRouterPolicy(t *testing.T) {
 	router := CapabilityRouter{
 		Registry: DefaultRegistry(),
 		Policy: RoutingPolicy{
-			SpeechProvider: "assemblyai",
+			SpeechProvider: "parakeet-local",
 			LLMProvider:    "not-openrouter",
 			LLMModel:       "not-openrouter-model",
 			Profile:        RoutingProfileManual,
@@ -54,7 +54,7 @@ func TestSpeechCapabilitiesRouteToConfiguredSpeechProvider(t *testing.T) {
 	router := CapabilityRouter{
 		Registry: DefaultRegistry(),
 		Policy: RoutingPolicy{
-			SpeechProvider: "assemblyai",
+			SpeechProvider: "parakeet-local",
 			LLMProvider:    "openrouter",
 			LLMModel:       "openai/gpt-4.1-mini",
 			Profile:        RoutingProfileManual,
@@ -65,8 +65,8 @@ func TestSpeechCapabilitiesRouteToConfiguredSpeechProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve(transcribe) returned error: %v", err)
 	}
-	if got.ID != "assemblyai" {
-		t.Fatalf("Resolve(transcribe) = %s, want assemblyai", got.ID)
+	if got.ID != "parakeet-local" {
+		t.Fatalf("Resolve(transcribe) = %s, want parakeet-local", got.ID)
 	}
 }
 

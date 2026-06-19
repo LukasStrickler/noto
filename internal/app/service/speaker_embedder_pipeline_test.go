@@ -71,23 +71,63 @@ func (r *memoryMeetingMappingRepo) ListByMeeting(ctx context.Context, meetingID 
 	return out, nil
 }
 
+func (r *memoryMeetingMappingRepo) ListByProfile(ctx context.Context, profileID string) ([]speakerstore.MeetingSpeakerMapping, error) {
+	var out []speakerstore.MeetingSpeakerMapping
+	for _, m := range r.mappings {
+		if m.ProfileID != nil && *m.ProfileID == profileID {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+func (r *memoryMeetingMappingRepo) ReassignProfile(ctx context.Context, oldID, newID string) error {
+	for i := range r.mappings {
+		if r.mappings[i].ProfileID != nil && *r.mappings[i].ProfileID == oldID {
+			r.mappings[i].ProfileID = &newID
+		}
+	}
+	return nil
+}
+
 func (r *memoryMeetingMappingRepo) DeleteByMeeting(ctx context.Context, meetingID string) error {
 	return nil
 }
 
+func (r *memoryMeetingMappingRepo) CountUnresolved(ctx context.Context) (int, error) {
+	n := 0
+	for _, m := range r.mappings {
+		if m.MatchStatus != "auto" && m.MatchStatus != "manual" {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r *memoryMeetingMappingRepo) StatusCountsByMeeting(ctx context.Context) (map[string]map[string]int, error) {
+	out := map[string]map[string]int{}
+	for _, m := range r.mappings {
+		if out[m.MeetingID] == nil {
+			out[m.MeetingID] = map[string]int{}
+		}
+		out[m.MeetingID][m.MatchStatus]++
+	}
+	return out, nil
+}
+
 type fakeSTTProvider struct{}
 
-func (fakeSTTProvider) ProviderID() string { return "assemblyai" }
+func (fakeSTTProvider) ProviderID() string { return "parakeet-local" }
 
 func (fakeSTTProvider) FeatureMap() stt.ProviderFeatures {
-	return stt.ProviderFeatures{ProviderID: "assemblyai", Features: []stt.Feature{stt.FeatureTranscribe, stt.FeatureSpeakerDiarize}}
+	return stt.ProviderFeatures{ProviderID: "parakeet-local", Features: []stt.Feature{stt.FeatureTranscribe, stt.FeatureSpeakerDiarize}}
 }
 
 func (fakeSTTProvider) Transcribe(ctx context.Context, audio []byte, opts stt.TranscribeOptions) (*artifacts.Transcript, error) {
 	return &artifacts.Transcript{
 		SchemaVersion: "transcript.v1",
 		MeetingID:     opts.MeetingID,
-		Provider:      artifacts.TranscriptProvider{ID: "assemblyai"},
+		Provider:      artifacts.TranscriptProvider{ID: "parakeet-local"},
 		Speakers: []artifacts.Speaker{
 			{ID: "spk_a", Label: "Speaker A", DisplayName: "Speaker A", ProviderLabel: "A"},
 		},
@@ -128,7 +168,7 @@ func TestRunTranscribe_UsesSpeakerEmbedderForMappings(t *testing.T) {
 	profileRepo := &memorySpeakerProfileRepo{}
 	mappingRepo := &memoryMeetingMappingRepo{}
 	secretStore := secrets.NewMemoryStore()
-	if err := secretStore.Set(ctx, "provider:assemblyai", "test-key"); err != nil {
+	if err := secretStore.Set(ctx, "provider:parakeet-local", "test-key"); err != nil {
 		t.Fatalf("set key: %v", err)
 	}
 	embedder := &fakeSpeakerEmbedder{}
@@ -195,7 +235,7 @@ func TestRunTranscribe_UsesSpeakerEmbedderForMappings(t *testing.T) {
 	if len(profiles) != 1 {
 		t.Fatalf("expected 1 speaker profile, got %d", len(profiles))
 	}
-	if profiles[0].EmbeddingDim != 192 || profiles[0].EmbeddingModel != "titanet-large" {
+	if profiles[0].EmbeddingDim != 192 || profiles[0].EmbeddingModel != "ecapa" {
 		t.Fatalf("profile embedding not persisted correctly: dim=%d model=%q", profiles[0].EmbeddingDim, profiles[0].EmbeddingModel)
 	}
 }

@@ -137,6 +137,35 @@ func TestPanel_RenderClipsToBudget(t *testing.T) {
 	}
 }
 
+// Panel.Right places a pre-styled segment at the far right of the title row,
+// rendered AS-IS (not re-wrapped in Muted the way Subtitle is) so the caller's
+// colour survives, and the header still fits the panel width. An empty Right
+// leaves the header byte-for-byte as a Title-only panel.
+func TestPanel_RightSegment(t *testing.T) {
+	st := theme.NewStyles()
+	// A pre-coloured right segment (its own SGR) plus a plain title.
+	right := st.BadgeDanger.Render("● rec")
+	p := Panel{Width: 40, Height: 5, Title: "Details: Standup", Right: right}
+	out := p.Render(st)
+
+	if got := lipgloss.Width(out); got != 40 {
+		t.Fatalf("rendered width = %d; want 40 (must not overflow)", got)
+	}
+	if !strings.Contains(out, "Details: Standup") || !strings.Contains(out, "● rec") {
+		t.Fatalf("panel missing title or right segment:\n%q", out)
+	}
+	// The right segment is placed verbatim — its ANSI bytes appear unchanged.
+	if !strings.Contains(out, right) {
+		t.Errorf("Right segment was re-styled rather than placed as-is")
+	}
+
+	// Empty Right == a plain Title-only panel (no regression for other screens).
+	plain := Panel{Width: 40, Height: 5, Title: "Details: Standup"}.Render(st)
+	if (Panel{Width: 40, Height: 5, Title: "Details: Standup", Right: ""}).Render(st) != plain {
+		t.Errorf("empty Right changed a Title-only panel's rendering")
+	}
+}
+
 func TestSplit_NeverNegativeOnTinyTotals(t *testing.T) {
 	for total := 0; total <= 8; total++ {
 		got := Split(total, 1, FlexMin(1, 6), Fixed(6))
@@ -145,5 +174,38 @@ func TestSplit_NeverNegativeOnTinyTotals(t *testing.T) {
 				t.Fatalf("total %d slot %d negative: %v", total, i, got)
 			}
 		}
+	}
+}
+
+func TestSidebarSplit_ClampsBothFloors(t *testing.T) {
+	const minSide, minContent = 26, 48
+	cases := []struct {
+		name              string
+		total, pref       int
+		wantSide, wantSum int
+	}{
+		// pref honored when it fits between both floors
+		{"pref fits", 200, 70, 70, 199},
+		// pref below the sidebar floor is pulled up to it
+		{"pref under floor", 120, 10, 26, 119},
+		// pref so wide it would starve content: capped at total-1-minContent
+		{"pref starves content", 120, 100, 120 - 1 - minContent, 119},
+		// zero/unset pref clamps to the sidebar floor (the screen helper
+		// substitutes the default before calling, but the clamp must still hold)
+		{"zero pref", 120, 0, 26, 119},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			side, content := SidebarSplit(c.total, c.pref, minSide, minContent)
+			if side != c.wantSide {
+				t.Errorf("sidebar = %d; want %d", side, c.wantSide)
+			}
+			if content < minContent {
+				t.Errorf("content = %d; must stay >= minContent %d", content, minContent)
+			}
+			if side+content != c.wantSum {
+				t.Errorf("side+content = %d; want %d (total-gap)", side+content, c.wantSum)
+			}
+		})
 	}
 }

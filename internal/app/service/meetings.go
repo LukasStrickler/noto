@@ -30,7 +30,53 @@ func (s *Service) ListMeetings(ctx context.Context, opts notoapi.ListMeetingsOpt
 	if opts.Limit > 0 && opts.Limit < len(out) {
 		out = out[:opts.Limit]
 	}
+	s.attachIdentity(ctx, out)
 	return notoapi.ListMeetingsResult{Meetings: out, Total: total}, nil
+}
+
+// attachIdentity fills each meeting's speaker-identity rollup from the mapping
+// store with one grouped query. Best-effort: a read error (or no mappings) just
+// leaves Identity nil rather than failing the whole listing — it's decorative.
+func (s *Service) attachIdentity(ctx context.Context, meetings []notoapi.Meeting) {
+	if len(meetings) == 0 || s.meetingMappings == nil {
+		return
+	}
+	counts, err := s.meetingMappings.StatusCountsByMeeting(ctx)
+	if err != nil || len(counts) == 0 {
+		return
+	}
+	for i := range meetings {
+		if c, ok := counts[meetings[i].ID]; ok {
+			meetings[i].Identity = identitySummary(c)
+		}
+	}
+}
+
+// identitySummary folds per-status mapping counts into the dashboard's four
+// buckets. Returns nil when there's nothing to summarize.
+func identitySummary(byStatus map[string]int) *notoapi.SpeakerIdentitySummary {
+	sum := &notoapi.SpeakerIdentitySummary{}
+	any := false
+	for status, n := range byStatus {
+		if n == 0 {
+			continue
+		}
+		any = true
+		switch status {
+		case "auto", "manual":
+			sum.Resolved += n
+		case "pending":
+			sum.Likely += n
+		case "new":
+			sum.New += n
+		default: // "unmatched", ""
+			sum.Unset += n
+		}
+	}
+	if !any {
+		return nil
+	}
+	return sum
 }
 
 // GetMeeting returns a single meeting.
@@ -75,6 +121,7 @@ func (s *Service) GetTranscript(ctx context.Context, id string) (notoapi.Transcr
 			ID:          sp.ID,
 			DisplayName: sp.DisplayName,
 			Role:        sp.Origin,
+			Label:       sp.Label,
 		})
 	}
 	// Replace segment speaker labels with display names where available.

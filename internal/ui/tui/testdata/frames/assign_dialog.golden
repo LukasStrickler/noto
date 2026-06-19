@@ -1,0 +1,17 @@
+╭──────────────────────────────────────────────────────────╮
+│                                                          │
+│  Identify "Speaker A"                                    │
+│  currently Bob Martins                                   │
+│                                                          │
+│   search                                                 │
+│                                                          │
+│   ▸ Carol Reyes  0.63 · frequent co-attendee             │
+│     Riya Shah  0.58                                      │
+│     Alice Nguyen                                         │
+│     Bob Martins  ✓ current                               │
+│     Dana Okafor                                          │
+│     ＋ create new person                                 │
+│                                                          │
+│  ↑/↓ select · ⏎ choose · type to filter · esc cancel     │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯

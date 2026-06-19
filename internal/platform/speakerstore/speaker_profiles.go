@@ -4,15 +4,25 @@ package speakerstore
 
 import "time"
 
+// Affiliation is one context a person belongs to — e.g. a university and a
+// project are two affiliations, each with their own organization and email.
+type Affiliation struct {
+	Context      string `json:"context"`      // free label, e.g. "University", "Project X"
+	Organization string `json:"organization"` // org / institution name
+	Email        string `json:"email"`        // contact email for this context
+}
+
 // SpeakerProfile represents a persistent speaker profile with voice embedding.
 type SpeakerProfile struct {
 	ID              string // UUID
 	DisplayName     string
-	Email           string
+	Email           string // legacy/primary email; affiliations carry per-context ones
 	Pronouns        string
+	Notes           string
+	Affiliations    []Affiliation
 	EmbeddingVector []float64 // 192-dim
 	EmbeddingDim    int
-	EmbeddingModel  string // "titanet-large" or "pyannote"
+	EmbeddingModel  string // e.g. "ecapa"
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	LastSeenAt      *time.Time
@@ -25,7 +35,12 @@ type MeetingSpeakerMapping struct {
 	ProviderLabel    string  // Original from provider
 	ProfileID        *string // nil if unmatched
 	MatchConfidence  *float64
-	MatchStatus      string // "auto", "pending", "manual"
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	MatchStatus      string // "auto", "pending", "manual", "new", "unmatched"
+	// EmbeddingVector is this meeting-speaker's voiceprint, persisted so
+	// suggestions can be (re-)ranked against the profile library without
+	// re-decoding the audio. Nil when no embedder ran.
+	EmbeddingVector []float64
+	EmbeddingDim    int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }

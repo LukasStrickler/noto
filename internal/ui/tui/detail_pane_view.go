@@ -2,18 +2,25 @@ package tui
 
 import (
 	"fmt"
-	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
+	"github.com/lukasstrickler/noto/internal/ui/tui/hit"
+	"github.com/lukasstrickler/noto/internal/ui/tui/scroll"
 	"github.com/lukasstrickler/noto/internal/ui/tui/theme"
 )
 
 // view renders the full pane body: fixed header (3 lines + rule), tab
 // strip (1 line + rule), and the active tab body. The host wraps the
 // returned string in its own layout.Panel.
-func (d *detailPane) view(ctx screenCtx, width, height int) string {
+// view renders the pane. originX/originY are the absolute screen coordinates of
+// the pane body's first cell (the host computes them from its panel via
+// BodyOffset) so the tab bar can register clickable regions; onTab is the
+// host's per-tab click action (nil disables tab clicks, e.g. while a sub-mode
+// owns input).
+func (d *detailPane) view(ctx screenCtx, width, height, originX, originY int, onTab func(detailTab) clickAction) string {
 	s := ctx.styles
 	if d.id_ == "" {
 		return s.Muted.Render("select a meeting to preview")
@@ -27,7 +34,10 @@ func (d *detailPane) view(ctx screenCtx, width, height int) string {
 	}
 
 	header := d.renderHeader(s, innerW)
-	tabBar := d.renderTabBar(s, innerW)
+	// Layout is Join([header, rule, tabBar, "", body]); the tab bar sits one
+	// line below the header lines (past the rule).
+	tabBarY := originY + renderedLineCount(header) + 1
+	tabBar := d.renderTabBar(ctx, innerW, originX, tabBarY, onTab)
 	headerLines := renderedLineCount(header) + renderedLineCount(tabBar) + 2 // rule under header + blank
 	bodyH := height - headerLines
 	if bodyH < 3 {
@@ -38,116 +48,161 @@ func (d *detailPane) view(ctx screenCtx, width, height int) string {
 	return strings.Join([]string{header, rule, tabBar, "", body}, "\n")
 }
 
-// renderHeader is a compact meta strip:
-//
-//	row 1: title · date · duration · status
-//	row 2+: compact attendee rows, three speakers per row.
-//
-// Counters and source are intentionally omitted: counters appear in
-// the list row, the source kind is implicit, and the user wanted the
-// header to stay one ribbon tall.
-func (d *detailPane) renderHeader(s theme.Styles, width int) string {
-	title := d.meeting.Title
-	if title == "" {
-		title = "Untitled meeting"
+// headerTitle is the detail panel's left title — "Details: <name>" (or a bare
+// "Details" when nothing is bound). The meeting title used to live in the pane
+// body; it now rides in the panel chrome so the body is pure timeline + people.
+// The host fits the name to leave room for headerMeta on the right.
+func (d *detailPane) headerTitle() string {
+	if d.id_ == "" {
+		return "Details"
 	}
-	when := ""
-	if !d.meeting.CreatedAt.IsZero() {
-		when = d.meeting.CreatedAt.Format("Jan 02 15:04")
+	name := d.meeting.Title
+	if name == "" {
+		name = "Untitled meeting"
 	}
-	dur := ""
-	if d.meeting.DurationSeconds > 0 {
-		dur = formatDuration(d.meeting.DurationSeconds)
-	}
-	line1Parts := []string{s.HeaderEm.Render(fit(title, width-30))}
-	if when != "" {
-		line1Parts = append(line1Parts, s.Muted.Render(when))
-	}
-	if dur != "" {
-		line1Parts = append(line1Parts, s.Muted.Render(dur))
-	}
-	line1Parts = append(line1Parts, statusBadge(s, d.meeting.Status))
-	line1 := strings.Join(line1Parts, "  ")
-	attendees := strings.Split(d.renderAttendeeStrip(s, width), "\n")
-	for i, line := range attendees {
-		attendees[i] = clipLine(line, width)
-	}
-	return clipLine(line1, width) + "\n" + strings.Join(attendees, "\n")
+	return "Details: " + name
 }
 
-// renderAttendeeStrip lays out the always-visible speaker overview:
-// compact name + talk time entries plus a time distribution graph.
-// Rows wrap after three speakers so busy meetings grow vertically
-// instead of blowing out the right edge.
+// headerMeta is the detail panel's right segment: muted "date · time" plus a
+// status flag that shows ONLY outstanding work (untranscribed / recording /
+// failed) — a finished meeting carries no badge, mirroring the list. It's
+// pre-styled and placed via Panel.Right so the flag keeps its colour (the Muted
+// Subtitle wrap would otherwise clobber it).
+func (d *detailPane) headerMeta(s theme.Styles) string {
+	if d.id_ == "" {
+		return ""
+	}
+	parts := []string{}
+	if !d.meeting.CreatedAt.IsZero() {
+		parts = append(parts, s.Muted.Render(d.meeting.CreatedAt.Format("Jan 02 · 15:04")))
+	}
+	if total := d.totalDurationSec(); total > 0 {
+		parts = append(parts, s.Muted.Render(formatDuration(total)))
+	}
+	if flag := outstandingStatusBadge(s, d.meeting.Status); flag != "" {
+		parts = append(parts, flag)
+	}
+	return strings.Join(parts, s.Muted.Render(" · "))
+}
+
+// totalDurationSec is the meeting's total length in seconds — the recorded
+// duration when set, else derived from the last transcript segment's end (seeded
+// meetings carry their duration on the transcript, not the meeting record). It's
+// the "total time" the header advertises beside date · time.
+func (d *detailPane) totalDurationSec() int {
+	if d.meeting.DurationSeconds > 0 {
+		return d.meeting.DurationSeconds
+	}
+	if n := len(d.transcript.Segments); n > 0 {
+		return int(d.transcript.Segments[n-1].EndSec)
+	}
+	return 0
+}
+
+// renderHeader is the pane body's top strip: one FULL-WIDTH timeline row, then
+// the people, each line wrapped to width so nothing spills past the pane edge.
+// The meeting title/date/status now live in the panel chrome (headerTitle /
+// headerMeta), so this is no longer a meta ribbon — just identity + roster.
+func (d *detailPane) renderHeader(s theme.Styles, width int) string {
+	timeline := clipLine(d.renderHeaderTimeline(s, width), width)
+	people := strings.Split(d.renderAttendeeStrip(s, width), "\n")
+	for i, line := range people {
+		people[i] = clipLine(line, width)
+	}
+	return timeline + "\n\n" + strings.Join(people, "\n")
+}
+
+// renderHeaderTimeline draws ONE timeline across the whole pane width (all
+// speakers, dominant-speaker-per-cell colouring) — replacing the old per-row
+// timelines whose lengths jiggled with each legend. A stable single line renders
+// even before segments load so the header height doesn't jump.
+func (d *detailPane) renderHeaderTimeline(s theme.Styles, width int) string {
+	if tl := d.renderInlineTimelineForSpeakers(s, width, d.speakers); tl != "" {
+		return tl
+	}
+	if d.loadingTranscript {
+		return s.Muted.Render("loading timeline…")
+	}
+	return s.Muted.Render(strings.Repeat("·", max(1, width)))
+}
+
+// renderAttendeeStrip lays out the people as "Name talktime" entries, greedily
+// wrapped to width across as many rows as the roster needs (long names / many
+// people push the rest down rather than spilling off the edge). No ● swatch —
+// the full-width timeline above carries speaker colour/identity.
 func (d *detailPane) renderAttendeeStrip(s theme.Styles, width int) string {
+	sep := "   " // a 3-space gap groups "Name HH:MM" pairs without a dot rail
 	if len(d.speakers) == 0 {
 		// Fall back to the static attendee list while diarization is
 		// still loading or when this meeting has no diarization at all.
 		if len(d.transcript.Speakers) == 0 {
 			if len(d.meeting.Attendees) > 0 {
-				return s.Muted.Render("Attendees: ") + strings.Join(d.meeting.Attendees, ", ")
+				return strings.Join(wrapEntries(d.meeting.Attendees, sep, width), "\n")
 			}
 			return s.Muted.Render("Attendees: —")
 		}
 		names := make([]string, 0, len(d.transcript.Speakers))
 		for i, sp := range d.transcript.Speakers {
-			label := sp.DisplayName
-			if label == "" {
-				label = sp.ID
-			}
-			color := speakerColorForIndex(s.T, i%6)
-			names = append(names, lipgloss.NewStyle().Foreground(color).Bold(true).Render(label))
+			// Resolve even on this stats-not-ready path so a confirmed person shows
+			// by name (and a guess as ~name?) the moment the transcript loads, the
+			// same as everywhere else — not a raw label until talk stats arrive.
+			name, tier := d.resolveSpeaker(sp.ID)
+			names = append(names, styleSpeaker(s, name, i%6, tier))
 		}
-		return speakerRows(s, width, names)
+		return strings.Join(wrapEntries(names, sep, width), "\n")
 	}
 	return d.renderSpeakerOverviewRows(s, width)
 }
 
-func speakerRows(s theme.Styles, width int, entries []string) string {
-	if len(entries) == 0 {
-		return s.Muted.Render("Attendees: —")
+// renderSpeakerOverviewRows is the people roster once talk-time stats exist:
+// "Name talktime" per speaker, greedy-wrapped to width.
+func (d *detailPane) renderSpeakerOverviewRows(s theme.Styles, width int) string {
+	entries := make([]string, 0, len(d.speakers))
+	for _, sp := range d.speakers {
+		name, tier := d.resolveSpeaker(sp.ID)
+		entries = append(entries, styleSpeaker(s, name, sp.colorIdx, tier)+" "+s.Muted.Render(formatDuration(int(sp.TalkSec))))
 	}
-	const perRow = 3
-	sep := s.Muted.Render(" · ")
-	rows := make([]string, 0, (len(entries)+perRow-1)/perRow)
-	for i := 0; i < len(entries); i += perRow {
-		end := i + perRow
-		if end > len(entries) {
-			end = len(entries)
-		}
-		rows = append(rows, clipLine(strings.Join(entries[i:end], sep), width))
-	}
-	return strings.Join(rows, "\n")
+	return strings.Join(wrapEntries(entries, "   ", width), "\n")
 }
 
-func (d *detailPane) renderSpeakerOverviewRows(s theme.Styles, width int) string {
-	const perRow = 3
-	sep := s.Muted.Render(" · ")
-	rows := make([]string, 0, (len(d.speakers)+perRow-1)/perRow)
-	for i := 0; i < len(d.speakers); i += perRow {
-		end := i + perRow
-		if end > len(d.speakers) {
-			end = len(d.speakers)
-		}
-		group := d.speakers[i:end]
-		entries := make([]string, 0, len(group))
-		for _, sp := range group {
-			color := speakerColorForIndex(s.T, sp.colorIdx)
-			name := lipgloss.NewStyle().Foreground(color).Bold(true).Render(sp.Name)
-			entries = append(entries, name+" "+s.Muted.Render(formatDuration(int(sp.TalkSec))))
-		}
-		legend := strings.Join(entries, sep)
-		timelineW := width - lipgloss.Width(legend) - 2
-		if timelineW >= 12 {
-			timeline := d.renderInlineTimelineForSpeakers(s, timelineW, group)
-			if timeline != "" {
-				rows = append(rows, clipLine(legend+"  "+timeline, width))
-				continue
-			}
-		}
-		rows = append(rows, clipLine(legend, width))
+// wrapEntries greedily packs pre-styled entries into rows no wider than width,
+// joining them with sep. Each entry stays intact on its row (an entry wider than
+// width gets its own row, clipped only as a last resort). Measured with
+// lipgloss.Width and pure, so the people strip never spills past the pane edge
+// and grows to as many rows as the roster needs.
+func wrapEntries(entries []string, sep string, width int) []string {
+	if len(entries) == 0 {
+		return nil
 	}
-	return strings.Join(rows, "\n")
+	if width < 1 {
+		width = 1
+	}
+	sepW := lipgloss.Width(sep)
+	var rows []string
+	var cur strings.Builder
+	curW := 0
+	for _, e := range entries {
+		ew := lipgloss.Width(e)
+		switch {
+		case curW == 0:
+			cur.WriteString(e)
+			curW = ew
+		case curW+sepW+ew <= width:
+			cur.WriteString(sep)
+			cur.WriteString(e)
+			curW += sepW + ew
+		default:
+			rows = append(rows, cur.String())
+			cur.Reset()
+			cur.WriteString(e)
+			curW = ew
+		}
+	}
+	rows = append(rows, cur.String())
+	for i, r := range rows {
+		rows[i] = clipLine(r, width)
+	}
+	return rows
 }
 
 func (d *detailPane) renderInlineTimelineForSpeakers(s theme.Styles, width int, speakers []speakerStat) string {
@@ -206,49 +261,6 @@ func (d *detailPane) renderInlineTimelineForSpeakers(s theme.Styles, width int, 
 	return b.String()
 }
 
-// colorizeSpeakerNames wraps every occurrence of a known speaker
-// display name in that speaker's color. Called before FTS highlighting
-// so a hit on a speaker name composes correctly (the FTS yellow wins
-// inside the match span).
-//
-// Match policy: case-insensitive, word-boundaried, longest-first so
-// "Paulina" matches before "Paul". Speakers without a display name
-// (still labelled by id) are skipped so we don't accidentally color
-// "spk_0" strings inside transcript ids.
-func (d *detailPane) colorizeSpeakerNames(s theme.Styles, text string) string {
-	if text == "" || len(d.speakers) == 0 {
-		return text
-	}
-	type spName struct {
-		name  string
-		color color.Color
-	}
-	names := make([]spName, 0, len(d.speakers))
-	for _, sp := range d.speakers {
-		if sp.Name == "" || strings.HasPrefix(sp.Name, "spk_") || strings.HasPrefix(sp.Name, "speaker_") {
-			continue
-		}
-		names = append(names, spName{
-			name:  sp.Name,
-			color: speakerColorForIndex(s.T, sp.colorIdx),
-		})
-	}
-	// Longest first so "Paulina" wins over "Paul".
-	for i := 0; i < len(names); i++ {
-		for j := i + 1; j < len(names); j++ {
-			if len(names[j].name) > len(names[i].name) {
-				names[i], names[j] = names[j], names[i]
-			}
-		}
-	}
-	for _, sp := range names {
-		text = replaceWordCaseInsensitive(text, sp.name, func(match string) string {
-			return lipgloss.NewStyle().Foreground(sp.color).Bold(true).Render(match)
-		})
-	}
-	return text
-}
-
 // replaceWordCaseInsensitive replaces case-insensitive occurrences of
 // `needle` at word boundaries in `haystack`. Uses byte iteration so
 // it's safe on ASCII names; longer Unicode names still work but the
@@ -302,21 +314,81 @@ func isWordByte(b byte) bool {
 // renderCounterStrip is the icon-prefixed counter line used in both
 // the detail header and dashboard list rows. Zero-count categories
 // drop out so the row stays compact.
+// counterCat is one category in the work-counter strip: its glyph, its
+// singular/plural words, and the accent style that colours it. The four
+// categories — decisions green, actions blue, risks amber, questions indigo,
+// matching the detail tabs — are defined ONCE here so the three strip tiers
+// (full, compact, icons) can never disagree about a glyph, colour, or word. A
+// new category or a glyph change is a single edit to this table.
+type counterCat struct {
+	glyph, one, many string
+	style            func(theme.Styles) lipgloss.Style
+}
+
+var counterCats = [4]counterCat{
+	{"◆", "decision", "decisions", func(s theme.Styles) lipgloss.Style { return s.Decision }},
+	{"▸", "action", "actions", func(s theme.Styles) lipgloss.Style { return s.Action }},
+	{"⚠", "risk", "risks", func(s theme.Styles) lipgloss.Style { return s.Risk }},
+	{"?", "question", "questions", func(s theme.Styles) lipgloss.Style { return s.Question }},
+}
+
+// renderCounters is the one engine behind all three counter-strip tiers: it
+// walks the shared category table, formats each non-zero count with `format`,
+// colours it with the category's style, and joins the parts with `sep`. The
+// tiers differ ONLY in those two parameters — see the three wrappers below.
+func renderCounters(s theme.Styles, counts [4]int, sep string, format func(c counterCat, n int) string) string {
+	parts := make([]string, 0, len(counterCats))
+	for i, c := range counterCats {
+		if counts[i] > 0 {
+			parts = append(parts, c.style(s).Render(format(c, counts[i])))
+		}
+	}
+	return strings.Join(parts, sep)
+}
+
 func renderCounterStrip(s theme.Styles, decisions, actions, risks, questions int) string {
-	parts := []string{}
-	if decisions > 0 {
-		parts = append(parts, s.PanelTitle.Render(fmt.Sprintf("◆ %d %s", decisions, plural(decisions, "decision", "decisions"))))
+	return renderCounters(s, [4]int{decisions, actions, risks, questions}, "   ",
+		func(c counterCat, n int) string {
+			return fmt.Sprintf("%s %d %s", c.glyph, n, countWord(n, c.one, c.many))
+		})
+}
+
+// countWord is plural() that keeps a CONSTANT width: the singular is right-padded
+// with a trailing space so "1 question " lines up with "2 questions" and the
+// strip's columns stay at the same distance whatever the counts are. (The
+// singular is always one shorter — it's the plural minus its "s" — so this is a
+// single trailing space, but pad to the longer of the two to stay general.)
+func countWord(n int, singular, plural string) string {
+	word := plural
+	if n == 1 {
+		word = singular
 	}
-	if actions > 0 {
-		parts = append(parts, s.Info.Render(fmt.Sprintf("▸ %d %s", actions, plural(actions, "action", "actions"))))
+	if pad := len([]rune(plural)) - len([]rune(word)); pad > 0 {
+		word += strings.Repeat(" ", pad)
 	}
-	if risks > 0 {
-		parts = append(parts, s.Warning.Render(fmt.Sprintf("⚠ %d %s", risks, plural(risks, "risk", "risks"))))
-	}
-	if questions > 0 {
-		parts = append(parts, s.Muted.Render(fmt.Sprintf("? %d %s", questions, plural(questions, "question", "questions"))))
-	}
-	return strings.Join(parts, "   ")
+	return word
+}
+
+// renderCounterStripCompact is the narrow-pane form of the counter strip: the
+// category ICON carries the meaning (◆ decision · ▸ action · ⚠ risk · ? question,
+// same colours as the full strip and the detail tabs), so the word drops and only
+// "◆2 ▸3 ⚠1 ?2" remains. The sidebar list is a 1/3-width column where the spelled
+// counts ("◆ 2 decisions   ▸ 3 actions   …") blow past the right edge; this keeps
+// the same glanceable information in a fraction of the width.
+func renderCounterStripCompact(s theme.Styles, decisions, actions, risks, questions int) string {
+	return renderCounters(s, [4]int{decisions, actions, risks, questions}, " ",
+		func(c counterCat, n int) string { return fmt.Sprintf("%s%d", c.glyph, n) })
+}
+
+// renderCounterStripIcons is the narrowest counter form: the category ICONS
+// alone (◆ ▸ ⚠ ?), colours intact, with the counts dropped entirely. It's the
+// third sidebar tier below renderCounterStripCompact — when even "◆2 ▸3 ⚠1 ?2"
+// can't fit the column, the glyphs still say WHICH kinds of work a meeting holds,
+// just not how many. A category with a zero count drops out so the row stays a
+// faithful (if count-less) inventory.
+func renderCounterStripIcons(s theme.Styles, decisions, actions, risks, questions int) string {
+	return renderCounters(s, [4]int{decisions, actions, risks, questions}, " ",
+		func(c counterCat, n int) string { return c.glyph })
 }
 
 func plural(n int, one, many string) string {
@@ -326,34 +398,111 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// renderTabBar prints "summary | actions | decisions | …" with the
-// active tab highlighted.
-func (d *detailPane) renderTabBar(s theme.Styles, width int) string {
-	parts := make([]string, 0, tabCount)
+// tabBarSep is the single-source separator drawn between detail tabs. It's also
+// what detailTabBarFullCells measures, so the pane's minimum-width floor and the
+// rendered strip can never disagree about the gap.
+const tabBarSep = " │ "
+
+// tabBadgeReserve is the cell budget the tab-bar floor leaves for the worst-case
+// attention flag (" ⚑N") the Speakers tab can carry, so a flagged bar still fits
+// the minimum content width without the badge being clipped.
+const tabBadgeReserve = 3
+
+// detailTabBarFullCells is the cell width of the FULL tab bar — every label
+// spelled out (tabs are NEVER abbreviated) plus the worst-case attention badge.
+// It's the widest fixed-width row in the pane, so it sets minContentW: the detail
+// pane is never sized narrower, and the terminal must be wide enough to grant it
+// (else the root shows the too-small guard). Derived from detailTabLabels so a
+// tab rename/addition keeps the floor honest.
+func detailTabBarFullCells() int {
+	w := 0
 	for i, label := range detailTabLabels {
-		if detailTab(i) == d.tab {
-			parts = append(parts, s.HeaderEm.Render(label))
-		} else {
-			parts = append(parts, s.Muted.Render(label))
+		if i > 0 {
+			w += lipgloss.Width(tabBarSep)
 		}
+		w += lipgloss.Width(label)
 	}
-	sep := s.Muted.Render(" │ ")
-	return clipLine(strings.Join(parts, sep), width)
+	return w + tabBadgeReserve
+}
+
+// renderTabBar prints "summary | actions | decisions | …", each tab a clickable
+// button laid out by a hit.Row (so no column math here): the active tab reads
+// bold, a hovered tab lights up, and a clicked tab focuses the pane + switches to
+// it. Labels are ALWAYS spelled out in full — the pane is guaranteed wide enough
+// for the whole strip (minContentW is derived from it; a terminal too small to
+// grant that shows the too-small guard instead), so there's no abbreviation and
+// clipLine is only a defensive backstop. When onTab is nil (a sub-mode owns
+// input, or a measure/test pass) the row registers nothing and shows no hover.
+func (d *detailPane) renderTabBar(ctx screenCtx, width, originX, originY int, onTab func(detailTab) clickAction) string {
+	s := ctx.styles
+	sep := s.Muted.Render(tabBarSep)
+	var hits *hit.Map[region]
+	var ptr pointer
+	if onTab != nil {
+		hits = ctx.hits
+		ptr = ctx.pointer()
+	}
+	row := hit.NewRow(hits, originX, originY)
+	for i, label := range detailTabLabels {
+		if i > 0 {
+			row.Add(sep)
+		}
+		i, label := i, label
+		tab := detailTab(i)
+		// Badge the tab that has work waiting, so you know where to go before
+		// opening it (e.g. "speakers ⚑2"). Same token as the nav pills; it rides
+		// after the recoloured label so press/hover never resize the segment.
+		badge := ""
+		if n := d.tabAttention(tab); n > 0 {
+			badge = " " + attnCount(s, n)
+		}
+		var onClick clickAction
+		if onTab != nil {
+			onClick = onTab(tab)
+		}
+		button{
+			id:      fmt.Sprintf("dash:tab:%d", i),
+			active:  tab == d.tab,
+			onClick: onClick,
+			render:  func(st uiState) string { return tabSeg(s, label, st) + badge },
+		}.place(row, ptr)
+	}
+	return clipLine(row.String(), width)
+}
+
+// tabSeg renders one detail-tab label in its pointer-resolved state, every
+// state the same width so the strip never reflows. A tab is a LABEL, not a
+// surface: its active state is a recoloured glyph (bold body text), so it uses
+// the label feedback family rather than the accent FILL a row/pill uses —
+// dropping a solid blue bar onto a tab would shout. Hover brightens the text
+// over a quiet raise; pressed shifts the text to the accent over that same
+// raise, so re-clicking the active tab reads as a colour change, not a fill.
+func tabSeg(s theme.Styles, label string, st uiState) string {
+	switch st {
+	case uiPressed:
+		return s.LabelPressed.Render(label)
+	case uiActive:
+		return s.HeaderEm.Render(label)
+	case uiHover:
+		return s.LabelHover.Render(label)
+	default:
+		return s.Muted.Render(label)
+	}
 }
 
 // renderTabBody dispatches to the active tab's renderer.
 func (d *detailPane) renderTabBody(ctx screenCtx, width, height int) string {
 	switch d.tab {
 	case tabSummary:
-		return d.renderSummary(ctx, width)
+		return d.renderSummary(ctx, width, height)
 	case tabActions:
-		return d.renderItemsList(ctx, "Action items", actionItemsToSummary(d.summary.ActionItems), width)
+		return d.renderItemsList(ctx, "Action items", actionItemsToSummary(d.summary.ActionItems), width, height, ctx.styles.Action)
 	case tabDecisions:
-		return d.renderItemsList(ctx, "Decisions", d.summary.Decisions, width)
+		return d.renderItemsList(ctx, "Decisions", d.summary.Decisions, width, height, ctx.styles.Decision)
 	case tabRisks:
-		return d.renderItemsList(ctx, "Risks", d.summary.Risks, width)
+		return d.renderItemsList(ctx, "Risks", d.summary.Risks, width, height, ctx.styles.Risk)
 	case tabQuestions:
-		return d.renderItemsList(ctx, "Open questions", d.summary.OpenQuestions, width)
+		return d.renderItemsList(ctx, "Open questions", d.summary.OpenQuestions, width, height, ctx.styles.Question)
 	case tabTranscript:
 		return d.renderTranscript(ctx, width, height)
 	case tabSpeakers:
@@ -362,43 +511,209 @@ func (d *detailPane) renderTabBody(ctx screenCtx, width, height int) string {
 	return ""
 }
 
-func (d *detailPane) renderSummary(ctx screenCtx, width int) string {
+// wrapBody word-wraps already-styled (ANSI) content to width cells, breaking
+// over-long words so a rendered line NEVER exceeds width — the content can't
+// spill past the pane's right edge (the "overflows out the sides" bug). Each
+// existing line wraps independently so paragraph and list-row breaks survive.
+func wrapBody(content string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	var out []string
+	for _, ln := range strings.Split(content, "\n") {
+		out = append(out, strings.Split(ansi.Wrap(ln, width, ""), "\n")...)
+	}
+	return out
+}
+
+// paneBody is the ONE renderer every detail-tab body goes through, so the
+// summary, the item lists, the transcript and the speakers tab all WRAP (never
+// clip past the right edge) and SCROLL (never hide content past the bottom) the
+// same way — the single helper this is unified around. A screen never windows or
+// draws a scrollbar itself; it describes its body and the focus, exactly like the
+// list and transcript already lean on the scroll package.
+//
+// renderAt draws the body to the content width it is HANDED and returns it as a
+// newline-joined block whose every line already fits that width (text tabs wrap
+// via wrapText; the speakers tab sizes its talk-time bars to it). paneBody calls
+// it once at the full width to learn the line count, and AGAIN at width-1 when a
+// scrollbar is needed — so a width-tuned row is rebuilt one cell narrower instead
+// of having its last cell re-wrapped onto a stray line (the reason a bar row
+// can't just be wrapped like prose).
+//
+// Scroll model mirrors the scroll package's two shapes:
+//   - free-scroll: focus == nil; offset is the caller's stored line offset,
+//     clamped to [0, maxOff] (the summary).
+//   - cursor-follow: focus(contentW) returns the (top, h) line span to keep
+//     visible, derived at the SAME width paneBody renders, so the selected
+//     item/segment/speaker stays on screen (items, transcript, speakers).
+//
+// Returns the windowed block (scrollbar joined when it overflows) and the max
+// valid free-scroll offset, so a free-scroll caller can bound its state without
+// re-measuring.
+func paneBody(s theme.Styles, width, height, offset int, focus func(contentW int) (top, h int), renderAt func(contentW int) string) (string, int) {
+	lines := strings.Split(renderAt(width), "\n")
+	contentW := width
+	if scroll.Needed(len(lines), height) {
+		contentW = width - 1 // reserve the scrollbar column, then rebuild to it
+		lines = strings.Split(renderAt(contentW), "\n")
+	}
+	total := len(lines)
+	maxOff := total - height
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	off := scroll.Clamp(offset, total, height)
+	if focus != nil {
+		top, h := focus(contentW)
+		off = scroll.Follow(total, height, top, h, 0)
+	}
+	end := off + height
+	if end > total {
+		end = total
+	}
+	rows := make([]string, height)
+	for i := range rows {
+		if off+i < end {
+			rows[i] = lines[off+i]
+		}
+	}
+	if contentW == width {
+		return strings.Join(rows, "\n"), maxOff
+	}
+	return attachScrollbar(rows, contentW, total, off, s), maxOff
+}
+
+// wrapText is the renderAt callback for the TEXT tabs (summary, items,
+// transcript): wrap the already-styled content to the width paneBody hands in, so
+// a long line breaks instead of spilling past the pane edge. The speakers tab
+// supplies its own callback instead, because its bar rows are sized to the width
+// rather than wrapped.
+func wrapText(content string) func(int) string {
+	return func(w int) string { return strings.Join(wrapBody(content, w), "\n") }
+}
+
+// wrappedLineOf maps a SOURCE line index (before wrapping) to the line index it
+// occupies once the body is wrapped to contentW — the focus-span helper every
+// cursor-following tab shares so a selected item/segment lands where paneBody
+// actually renders it. (For the speakers tab, whose rows are clipped to width
+// rather than wrapped, every source line is one rendered line and this is exact.)
+func wrappedLineOf(content string, srcLine, contentW int) int {
+	if srcLine <= 0 || contentW < 1 {
+		return 0
+	}
+	src := strings.Split(content, "\n")
+	top := 0
+	for i := 0; i < srcLine && i < len(src); i++ {
+		top += len(strings.Split(ansi.Wrap(src[i], contentW, ""), "\n"))
+	}
+	return top
+}
+
+func (d *detailPane) renderSummary(ctx screenCtx, width, height int) string {
 	s := ctx.styles
 	if d.loadingSummary && d.summary.MeetingID == "" {
 		return s.Muted.Render("loading summary…")
 	}
 	tokens := queryTokens(d.query)
-	var lines []string
+	var content string
 	switch {
 	case d.summary.Markdown != "":
-		lines = append(lines, highlightString(s, d.colorizeSpeakerNames(s, d.summary.Markdown), tokens, -1, -1))
+		content = highlightString(s, d.renderPeople(s, d.summary.Markdown), tokens, -1, -1)
 	case d.summary.ShortSummary != "":
-		lines = append(lines, highlightString(s, d.colorizeSpeakerNames(s, d.summary.ShortSummary), tokens, -1, -1))
+		content = highlightString(s, d.renderPeople(s, d.summary.ShortSummary), tokens, -1, -1)
 	default:
-		lines = append(lines, s.Muted.Render("No summary yet. Run `noto summarize` or kick a pipeline job."))
+		content = s.Muted.Render("No summary yet. Run `noto summarize` or kick a pipeline job.")
 	}
-	for i, line := range lines {
-		lines[i] = clipLine(line, width)
-	}
-	return strings.Join(lines, "\n")
+	// Free-scroll: wrap to the body, window by d.bodyScroll, draw the bar. The
+	// only state written here is bodyMax (the geometry the next Up/Down bounds
+	// against); the offset itself is read-only here and clamped purely for
+	// display, so a resize self-corrects without a stale write driving the view.
+	block, maxOff := paneBody(s, width, height, d.bodyScroll, nil, wrapText(content))
+	d.bodyMax = maxOff
+	return block
 }
 
-func (d *detailPane) renderItemsList(ctx screenCtx, title string, items []notoapi.SummaryItem, width int) string {
+func (d *detailPane) renderItemsList(ctx screenCtx, title string, items []notoapi.SummaryItem, width, height int, titleStyle lipgloss.Style) string {
 	s := ctx.styles
 	if len(items) == 0 {
 		return s.Muted.Render("No " + strings.ToLower(title) + " yet.")
 	}
 	tokens := queryTokens(d.query)
-	rows := []string{s.PanelTitle.Render(title), ""}
+	// Build the body as one string with explicit newlines; bodyViewport wraps it
+	// to the width (so long items wrap instead of clipping) and windows it,
+	// cursor-following itemCur so the selected item is always on screen. cursorTop
+	// is tracked in WRAPPED-line space, computed below after wrapping per row.
+	var b strings.Builder
+	b.WriteString(titleStyle.Bold(true).Render(title))
+	b.WriteString("\n\n")
+	// Record each item's first source line so the focus span can be mapped to
+	// wrapped lines (an item may wrap to several). itemTop[i] is the line index
+	// (pre-wrap) where item i begins.
+	itemTop := make([]int, len(items))
+	srcLine := 2 // title + blank already emitted
+	hasJump := false
 	for i, it := range items {
-		body := highlightString(s, d.colorizeSpeakerNames(s, it.Text), tokens, -1, -1)
-		row := fmt.Sprintf("  %d. %s", i+1, body)
-		if len(it.SegmentRefs) > 0 {
-			row += "  " + s.Info.Render("["+strings.Join(it.SegmentRefs, ",")+"]")
+		itemTop[i] = srcLine
+		body := highlightString(s, d.renderPeople(s, it.Text), tokens, -1, -1)
+		// ▸ marks the item Enter jumps from. Keep the marker a fixed 2 cells
+		// (matching the inactive lead) so the numbered list stays aligned.
+		marker := "  "
+		if i == d.itemCur {
+			marker = titleStyle.Bold(true).Render("▸") + " "
 		}
-		rows = append(rows, clipLine(row, width))
+		row := fmt.Sprintf("%s%d. %s", marker, i+1, body)
+		if stamps := d.evidenceStamps(it.SegmentRefs); stamps != "" {
+			hasJump = true
+			row += "  " + s.Citation.Render(stamps)
+		}
+		b.WriteString(row)
+		b.WriteByte('\n')
+		srcLine++
 	}
-	return strings.Join(rows, "\n")
+	if hasJump {
+		// Derive the key glyphs from the bindings (single source of truth) the
+		// same way the transcript footer advertises its n/N jumps.
+		hint := fmt.Sprintf("%s/%s select · %s jump to transcript",
+			ctx.keys.Up.Help().Key, ctx.keys.Down.Help().Key, ctx.keys.Enter.Help().Key)
+		b.WriteString("\n")
+		b.WriteString(s.Muted.Render(hint))
+	}
+	content := b.String()
+	// Map the selected item's pre-wrap source line to its position in the wrapped
+	// body so cursor-follow keeps it visible even when earlier items wrapped.
+	focus := func(contentW int) (int, int) {
+		if d.itemCur < 0 || d.itemCur >= len(itemTop) {
+			return 0, 1
+		}
+		return wrappedLineOf(content, itemTop[d.itemCur], contentW), 1
+	}
+	block, _ := paneBody(s, width, height, 0, focus, wrapText(content))
+	return block
+}
+
+// evidenceStamps renders an item's cited segments as human timestamps
+// ("[00:08 · 00:36]"). A segment id is an internal artifact; a reader wants to
+// know WHEN in the meeting — and the timestamp doubles as the jump target.
+// Returns "" when none of the refs resolve to a loaded segment.
+func (d *detailPane) evidenceStamps(refs []string) string {
+	if len(refs) == 0 || len(d.transcript.Segments) == 0 {
+		return ""
+	}
+	start := make(map[string]float64, len(d.transcript.Segments))
+	for _, seg := range d.transcript.Segments {
+		start[seg.ID] = seg.StartSec
+	}
+	stamps := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if t, ok := start[ref]; ok {
+			stamps = append(stamps, formatSec(t))
+		}
+	}
+	if len(stamps) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(stamps, " · ") + "]"
 }
 
 func actionItemsToSummary(actions []notoapi.ActionItem) []notoapi.SummaryItem {
@@ -413,9 +728,13 @@ func actionItemsToSummary(actions []notoapi.ActionItem) []notoapi.SummaryItem {
 	return out
 }
 
-// renderTranscript shows speaker-colored segments with FTS highlights
-// and a scrollable viewport. Cursor-driven n/N jumps the active
-// segment; up/down scrolls one line at a time.
+// renderTranscript shows speaker-colored segments with FTS highlights through
+// the shared paneBody: every segment is rendered as a header + body line, wrapped
+// to the pane width (long turns break instead of clipping past the edge) and
+// windowed with the shared scrollbar. Cursor-follow keeps the active segment
+// visible — the n/N search match, the Enter-jump target, or the up/down scroll
+// position (transcriptScroll), so "where did this happen?" always stays on
+// screen. A pinned footer advertises the live search hit count.
 func (d *detailPane) renderTranscript(ctx screenCtx, width, height int) string {
 	s := ctx.styles
 	segs := d.transcript.Segments
@@ -425,168 +744,125 @@ func (d *detailPane) renderTranscript(ctx screenCtx, width, height int) string {
 		}
 		return s.Muted.Render("no transcript yet — run a pipeline job")
 	}
-	// 2 lines per segment (header + body) + 1 footer summary line.
-	perSeg := 2
-	innerH := height - 1
-	if innerH < perSeg {
-		innerH = perSeg
-	}
-	segLimit := innerH / perSeg
-	if segLimit < 1 {
-		segLimit = 1
-	}
-	start := d.transcriptScroll
-	if start > len(segs)-segLimit {
-		start = len(segs) - segLimit
-	}
-	if start < 0 {
-		start = 0
-	}
-	end := start + segLimit
-	if end > len(segs) {
-		end = len(segs)
-	}
 	tokens := queryTokens(d.query)
+	// A live search match wins; otherwise highlight the segment an item's
+	// Enter-jump landed on, so "where did this decision happen?" is obvious.
 	activeSeg := -1
 	if len(d.matchedSegs) > 0 && d.matchCursor < len(d.matchedSegs) {
 		activeSeg = d.matchedSegs[d.matchCursor]
+	} else if d.focusSeg >= 0 && d.focusSeg < len(segs) {
+		activeSeg = d.focusSeg
 	}
-	speakerStyle := map[string]int{}
+	// Color each speaker by the SAME per-speaker index used in the header, the
+	// speakers tab and inline name colorization (talk-time order, full 6-hue
+	// palette) so a person keeps one identity color everywhere. Precompute the
+	// whole map (falling back to appearance order for ids without stats) so the
+	// renderAt callback below is pure — paneBody may call it more than once.
+	colorByID := make(map[string]int, len(d.speakers))
+	for _, sp := range d.speakers {
+		colorByID[sp.ID] = sp.colorIdx
+	}
 	next := 0
-	var rows []string
-	for i := start; i < end; i++ {
-		seg := segs[i]
-		idx, ok := speakerStyle[seg.SpeakerID]
-		if !ok {
-			idx = next % 3
-			speakerStyle[seg.SpeakerID] = idx
+	for _, seg := range segs {
+		if _, ok := colorByID[seg.SpeakerID]; !ok {
+			colorByID[seg.SpeakerID] = next % 6
 			next++
 		}
-		spStyle := s.SpeakerA
-		switch idx {
-		case 1:
-			spStyle = s.SpeakerB
-		case 2:
-			spStyle = s.SpeakerC
-		}
-		header := fmt.Sprintf("%s  %s  %s",
-			s.Muted.Render(fmt.Sprintf("[%s]", formatSec(seg.StartSec))),
-			spStyle.Render(seg.Speaker),
-			s.Citation.Render(seg.ID))
-		marker := "    "
-		if i == activeSeg {
-			marker = s.HighlightActive.Render(" ▸ ") + " "
-		}
-		header = marker + header
-		body := "      " + highlightString(s, d.colorizeSpeakerNames(s, seg.Text), tokens, i, activeSeg)
-		rows = append(rows, clipLine(header, width), clipLine(body, width))
 	}
+
+	// Precompute the two width-independent, per-frame-constant pieces ONCE, so
+	// build (called up to 3× per frame, over every segment) doesn't recompute
+	// them per segment:
+	//   - repls: the people-rewrite table (resolves + styles every speaker; the
+	//     dominant cost when rebuilt per segment), applied per body line.
+	//   - spNameByID: the styled "[stamp] Name" speaker lead per distinct speaker,
+	//     so the per-segment header is a map lookup, not a resolve+style+Render.
+	repls := d.peopleReplacer(s)
+	spNameByID := make(map[string]string, len(colorByID))
+	for id := range colorByID {
+		name, tier := d.resolveSpeaker(id)
+		spNameByID[id] = styleSpeaker(s, name, colorByID[id], tier)
+	}
+
+	// build lays the transcript out at content width w and returns the rendered
+	// lines plus each segment's first-line index (for cursor-follow). Like the
+	// summary, the transcript is reading content, so it is FLUSH at column 0 and
+	// uses the FULL width — no marker gutter (the old 4-cell header pad + 6-cell
+	// body indent that ate the width is gone). The [MM:SS] stamp + speaker lead
+	// each segment; the spoken text wraps full width beneath. The active segment
+	// (an n/N match or an Enter-jump target) is marked WIDTH-NEUTRALLY by
+	// highlighting its timestamp, so nothing shifts as the focus moves. A blank
+	// line separates segments for legibility.
+	//
+	// Memoized by width: paneBody calls renderAt(contentW) and then focus(contentW)
+	// at the SAME width, so the focus pass (which only needs tops) reuses the
+	// rendered result instead of laying the whole transcript out a second time.
+	cacheW := -1
+	var cacheLines string
+	var cacheTops []int
+	build := func(w int) (string, []int) {
+		if w == cacheW {
+			return cacheLines, cacheTops
+		}
+		var lines []string
+		tops := make([]int, len(segs))
+		for i, seg := range segs {
+			tops[i] = len(lines)
+			// Lead with the human timestamp + speaker only; the internal segment
+			// id ("seg_001") is meaningless to a reader and leaks an underscore.
+			stampStyle := s.Muted
+			if i == activeSeg {
+				stampStyle = s.HighlightActive
+			}
+			header := stampStyle.Render(fmt.Sprintf("[%s]", formatSec(seg.StartSec))) + " " + spNameByID[seg.SpeakerID]
+			lines = append(lines, clipLine(header, w))
+			body := highlightString(s, applyPeople(seg.Text, repls), tokens, i, activeSeg)
+			lines = append(lines, wrapBody(body, w)...)
+			if i < len(segs)-1 {
+				lines = append(lines, "")
+			}
+		}
+		cacheW, cacheLines, cacheTops = w, strings.Join(lines, "\n"), tops
+		return cacheLines, cacheTops
+	}
+
+	// A pinned footer (it must not scroll away) advertises the search hit count;
+	// it costs a blank + a line, so the scrollable body shrinks to match.
 	footer := ""
-	if start > 0 || end < len(segs) {
-		footer = "\n" + s.Muted.Render(fmt.Sprintf("showing %d–%d of %d", start+1, end, len(segs)))
-	}
+	bodyH := height
 	if len(d.matchedSegs) > 0 {
-		footer += s.Muted.Render(fmt.Sprintf("  · hit %d/%d (%s/%s to jump)",
+		footer = s.Muted.Render(fmt.Sprintf("hit %d/%d (%s/%s to jump)",
 			d.matchCursor+1, len(d.matchedSegs),
 			ctx.keys.NextMatch.Help().Key, ctx.keys.PrevMatch.Help().Key))
+		if bodyH = height - 2; bodyH < 1 {
+			bodyH = 1
+		}
 	}
-	return strings.Join(rows, "\n") + footer
-}
 
-// renderSpeakers is now a rename editor: each row pairs the
-// diarized speaker_id with the current display name and a talk-time
-// bar. Up/Down navigates rows; Enter or `e` opens the inline text
-// input; the host writes the new name back to transcript.json via
-// UpdateSpeakerName.
-//
-// Salient phrases for the selected speaker stay rendered underneath as
-// an aid for "which voice is this?" identification while the user is
-// renaming. The colored timeline strip is omitted here — it's already
-// in the header.
-func (d *detailPane) renderSpeakers(ctx screenCtx, width, height int) string {
-	s := ctx.styles
-	if len(d.speakers) == 0 {
-		if d.loadingTranscript {
-			return s.Muted.Render("loading speakers…")
+	// Cursor-follow the active segment (or the up/down scroll position), keeping
+	// its whole header+body block visible.
+	focusSeg := activeSeg
+	if focusSeg < 0 {
+		focusSeg = d.transcriptScroll
+	}
+	focus := func(w int) (int, int) {
+		_, tops := build(w)
+		if focusSeg < 0 || focusSeg >= len(tops) {
+			return 0, 1
 		}
-		empty := []string{
-			s.Muted.Render("No diarization in this transcript yet."),
-			s.Muted.Render("Speaker labels appear after AssemblyAI runs with `speaker_labels=true`."),
+		top := tops[focusSeg]
+		h := 2
+		if focusSeg+1 < len(tops) {
+			h = tops[focusSeg+1] - top
 		}
-		return strings.Join(empty, "\n")
+		return top, h
 	}
-	_ = height
-	hintLine := strings.Join([]string{
-		chipPair(s, ctx.keys.Up, ctx.keys.Down, "select"),
-		chipAs(s, ctx.keys.Edit, "rename"),
-		chipAs(s, ctx.keys.Enter, "save"),
-		chipAs(s, ctx.keys.Back, "cancel"),
-	}, s.Muted.Render("  "))
-	list := d.renderSpeakerList(s, width)
-	bottom := []string{}
-	if d.editorBanner != "" {
-		style := s.Muted
-		if strings.HasPrefix(d.editorBanner, "save failed") {
-			style = s.Danger
-		}
-		bottom = append(bottom, style.Render(d.editorBanner))
+	block, _ := paneBody(s, width, bodyH, 0, focus, func(w int) string {
+		c, _ := build(w)
+		return c
+	})
+	if footer != "" {
+		block += "\n\n" + footer
 	}
-	bottom = append(bottom, "", d.renderSpeakerDetail(s, width))
-	return strings.Join(append([]string{clipLine(hintLine, width), "", list}, bottom...), "\n")
-}
-
-func (d *detailPane) renderSpeakerList(s theme.Styles, width int) string {
-	total := totalTalk(d.speakers)
-	if total <= 0 {
-		total = 1
-	}
-	rows := []string{}
-	for i, sp := range d.speakers {
-		share := sp.TalkSec / total
-		barW := max(8, width-44)
-		bar := shareBar(s, share, barW, sp.colorIdx)
-		color := speakerColorForIndex(s.T, sp.colorIdx)
-		coloredName := lipgloss.NewStyle().Foreground(color).Bold(true).Render(fit(sp.Name, max(10, width-barW-24)))
-		idHint := s.Muted.Render(fmt.Sprintf("(%s)", sp.ID))
-		stat := s.Muted.Render(fmt.Sprintf("%5s  %4.0f%%", formatDuration(int(sp.TalkSec)), share*100))
-		line := fmt.Sprintf("%s %s  %s  %s", coloredName, idHint, bar, stat)
-		if i == d.speakerCur {
-			line = s.RowSelected.Render(" ▸ ") + line
-		} else {
-			line = "   " + line
-		}
-		rows = append(rows, clipLine(line, width))
-		// Inline editor under the cursor row when active.
-		if i == d.speakerCur && d.editorOpen {
-			editLine := s.ChipKey.Render(" name › ") + d.editorInput.View()
-			rows = append(rows, clipLine("   "+editLine, width))
-		}
-	}
-	return strings.Join(rows, "\n")
-}
-
-func (d *detailPane) renderSpeakerDetail(s theme.Styles, width int) string {
-	if d.speakerCur >= len(d.speakers) {
-		return s.Muted.Render("Select a speaker (↑/↓).")
-	}
-	sp := d.speakers[d.speakerCur]
-	speakerColor := speakerColorForIndex(s.T, sp.colorIdx)
-	chip := lipgloss.NewStyle().Foreground(speakerColor).Bold(true).Render("●  " + sp.Name)
-	meta := s.Muted.Render(fmt.Sprintf("%s · %d turns · ~%d words", formatDuration(int(sp.TalkSec)), sp.TurnCount, sp.WordCount))
-	bullets := []string{}
-	for _, ph := range sp.TopPhrases {
-		if lipgloss.Width(ph) > width-4 {
-			ph = ph[:max(0, width-5)] + "…"
-		}
-		bullets = append(bullets, "  • "+ph)
-	}
-	if len(bullets) == 0 {
-		bullets = append(bullets, s.Muted.Render("  (no salient phrases yet)"))
-	}
-	return strings.Join([]string{
-		clipLine(chip, width),
-		clipLine(meta, width),
-		s.PanelTitle.Render("salient phrases"),
-		strings.Join(bullets, "\n"),
-	}, "\n")
+	return block
 }

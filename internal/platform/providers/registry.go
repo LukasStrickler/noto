@@ -21,19 +21,19 @@ func NewRegistry(suites []ProviderSuite) Registry {
 func DefaultRegistry() Registry {
 	return NewRegistry([]ProviderSuite{
 		{
-			ID:                     "assemblyai",
-			DisplayName:            "AssemblyAI Universal",
+			ID:                     "parakeet-local",
+			DisplayName:            "Parakeet TDT 0.6b v3 (local)",
 			Kind:                   ProviderKindSpeech,
-			Capabilities:           []Capability{CapabilityTranscribe, CapabilityDiarize, CapabilityWordTimestamps},
-			CredentialRef:          "provider:assemblyai",
-			RequiresNetwork:        true,
-			SendsRawAudioOffDevice: true,
-			PricingHint:            "Universal-3 Pro plus diarization pricing should be refreshed before live benchmark runs.",
-			Notes:                  "Speech-only in Noto. Do not route production summaries through AssemblyAI LLM Gateway.",
+			Capabilities:           []Capability{CapabilityTranscribe, CapabilityWordTimestamps}, // NOT diarize — that's the diar seam
+			CredentialRef:          "",
+			RequiresNetwork:        false,
+			SendsRawAudioOffDevice: false,
+			PricingHint:            "Local compute only — $0 marginal cost, fully offline after first model fetch.",
+			Notes:                  "Default local STT. Diarization is a separate stage. Fetch weights with `noto models download parakeet-tdt-0.6b-v3`.",
 			Models: []Model{{
-				ID:           "universal-3-pro",
-				DisplayName:  "Universal-3 Pro",
-				Capabilities: []Capability{CapabilityTranscribe, CapabilityDiarize, CapabilityWordTimestamps},
+				ID:           "parakeet-tdt-0.6b-v3",
+				DisplayName:  "Parakeet TDT 0.6b v3 (EN + 25 EU)",
+				Capabilities: []Capability{CapabilityTranscribe, CapabilityWordTimestamps},
 			}},
 		},
 		{

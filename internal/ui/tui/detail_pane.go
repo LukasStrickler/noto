@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -28,6 +27,19 @@ type detailPane struct {
 	tab              detailTab
 	speakerCur       int
 	transcriptScroll int
+	// bodyScroll is the free-scroll line offset for the summary tab (the one
+	// scrollable body with no cursor of its own); the item tabs cursor-follow on
+	// itemCur and the transcript scrolls by segment, so neither uses it. bodyMax
+	// is the largest valid offset, cached from the last render (which knows the
+	// wrapped line count) so Up/Down can bound the scroll without re-wrapping.
+	bodyScroll int
+	bodyMax    int
+	// itemCur is the cursor within the active items tab (decisions / actions /
+	// risks / questions); Enter jumps from the selected item to its cited
+	// transcript segment. focusSeg is that jump target in the transcript (a
+	// segment index, -1 = none) so the landed-on line is highlighted.
+	itemCur  int
+	focusSeg int
 
 	// Search context — set by the host so highlights + n/N stay live
 	// as the user types in the dashboard's filter input.
@@ -45,12 +57,33 @@ type detailPane struct {
 	loadingSummary    bool
 	loadingFiles      bool
 
+	// Cross-meeting speaker identity, keyed by meeting-speaker id: resolved
+	// person name + ranked candidates for the unresolved ones. Loaded
+	// alongside the transcript.
+	mappings        map[string]notoapi.MeetingSpeakerMapping
+	loadingMappings bool
+
 	// Speakers-tab rename editor.
 	editorOpen    bool
 	editorInput   textinput.Model
 	editingID     string
 	editorBanner  string
 	editorPending bool
+	// editorProfileID set ⇒ the editor renames that already-linked person;
+	// empty ⇒ it creates a new person from the speaker's voiceprint.
+	editorProfileID string
+
+	// The "Identify speaker" dialog — a centered overlay (composited by the
+	// dashboard) with a contained search over the people directory, the ranked
+	// candidates, and an inline create-new. Works on any speaker, so it doubles
+	// as the reassign/correct flow. While open, inputActive() is true so the
+	// search captures letters and the root/dashboard defer their global keys.
+	// directory is the full people list, lazy-(re)loaded each time it opens.
+	assignOpen  bool
+	assignQuery string
+	assignCur   int
+	directory   []notoapi.SpeakerProfile
+	dirLoading  bool
 }
 
 type detailTab int
@@ -80,12 +113,13 @@ func newDetailPane() *detailPane {
 	ti := textinput.New()
 	ti.Placeholder = "name…"
 	ti.CharLimit = 80
-	return &detailPane{editorInput: ti}
+	return &detailPane{editorInput: ti, focusSeg: -1}
 }
 
-// inputActive reports whether the rename editor is capturing letter
-// keys. Bubbles up to the host so the root router doesn't swallow them.
-func (d *detailPane) inputActive() bool { return d.editorOpen }
+// inputActive reports whether the pane is capturing keys that the root router
+// would otherwise treat as globals — the rename editor (letters) or the assign
+// picker (digits). Bubbles up to the host so they reach the pane.
+func (d *detailPane) inputActive() bool { return d.editorOpen || d.assignOpen }
 
 // hasID reports whether a meeting is currently bound.
 func (d *detailPane) hasID() bool { return d.id_ != "" }
@@ -105,7 +139,7 @@ func (d *detailPane) setQuery(q string) {
 // pane survives idle re-renders without thrashing the API.
 func (d *detailPane) load(ctx screenCtx, id string) tea.Cmd {
 	if id == "" {
-		*d = detailPane{tab: d.tab}
+		*d = detailPane{tab: d.tab, focusSeg: -1}
 		return nil
 	}
 	if id == d.id_ {
@@ -117,21 +151,30 @@ func (d *detailPane) load(ctx screenCtx, id string) tea.Cmd {
 	d.summary = notoapi.Summary{}
 	d.files = notoapi.MeetingFiles{}
 	d.speakers = nil
+	d.mappings = nil
 	d.matchedSegs = nil
 	d.matchCursor = 0
 	d.requestedMatchSegmentID = ""
 	d.speakerCur = 0
 	d.transcriptScroll = 0
+	d.bodyScroll = 0
+	d.itemCur = 0
+	d.focusSeg = -1
+	d.assignOpen = false
+	d.assignQuery = ""
+	d.assignCur = 0
 	d.err = nil
 	d.loadingMeeting = true
 	d.loadingTranscript = true
 	d.loadingSummary = true
 	d.loadingFiles = true
+	d.loadingMappings = true
 	return tea.Batch(
 		fetchMeeting(ctx, id),
 		fetchTranscript(ctx, id),
 		fetchSummary(ctx, id),
 		fetchFiles(ctx, id),
+		fetchSpeakerMappings(ctx, id),
 	)
 }
 
@@ -159,11 +202,123 @@ func saveSpeakerNameCmd(ctx screenCtx, meetingID, speakerID, displayName string)
 	}
 }
 
+// fetchSpeakerMappings pulls the cross-meeting identity layer for a meeting:
+// resolved person names + ranked candidates for the unresolved speakers.
+func fetchSpeakerMappings(ctx screenCtx, meetingID string) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		res, err := ctx.client.GetMeetingSpeakerMappings(c, meetingID)
+		return speakerMappingsLoadedMsg{MeetingID: meetingID, Mappings: res.Mappings, Err: err}
+	}
+}
+
+// assignSpeakerCmd links a meeting speaker to an existing person (status
+// "manual"), then writes that person's name onto the transcript label so this
+// meeting reads correctly too — "name once → everywhere".
+func assignSpeakerCmd(ctx screenCtx, meetingID, speakerID, profileID, name string) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		status := "manual"
+		_, err := ctx.client.PatchMeetingSpeakerMappings(c, meetingID, notoapi.MeetingSpeakerMappingsPatch{
+			Mappings: []notoapi.MeetingSpeakerMappingPatchEntry{{
+				MeetingSpeakerID: speakerID, ProfileID: &profileID, MatchStatus: &status,
+			}},
+		})
+		if err == nil && name != "" {
+			err = ctx.client.UpdateSpeakerName(c, meetingID, speakerID, name)
+		}
+		return speakerIdentityMsg{MeetingID: meetingID, Note: "linked to " + name, Err: err}
+	}
+}
+
+// createPersonForSpeakerCmd creates a new named person seeded from this
+// speaker's voiceprint and links the mapping in one step, then labels the
+// transcript.
+func createPersonForSpeakerCmd(ctx screenCtx, meetingID, speakerID, name string) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		_, err := ctx.client.CreateSpeakerProfile(c, notoapi.CreateSpeakerProfileRequest{
+			DisplayName: name, FromMeetingID: meetingID, FromSpeakerID: speakerID,
+		})
+		if err == nil {
+			err = ctx.client.UpdateSpeakerName(c, meetingID, speakerID, name)
+		}
+		return speakerIdentityMsg{MeetingID: meetingID, Note: "created " + name, Err: err}
+	}
+}
+
+// createPersonForSpeakerOpenCmd creates a person seeded from this speaker's
+// voiceprint (a placeholder name, since the backend requires one) and links the
+// mapping, then asks the host to open the People screen on it in edit mode so
+// the user can name the just-created person. Used by the "open person" jump on
+// an unresolved speaker.
+func createPersonForSpeakerOpenCmd(ctx screenCtx, meetingID, speakerID, placeholder string) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		prof, err := ctx.client.CreateSpeakerProfile(c, notoapi.CreateSpeakerProfileRequest{
+			DisplayName: placeholder, FromMeetingID: meetingID, FromSpeakerID: speakerID,
+		})
+		return speakerPersonOpenMsg{MeetingID: meetingID, ProfileID: prof.ID, Edit: true, Err: err}
+	}
+}
+
+// renameLinkedProfileCmd renames an already-linked person — which propagates to
+// every meeting that person appears in — and updates this meeting's transcript
+// label.
+func renameLinkedProfileCmd(ctx screenCtx, meetingID, speakerID, profileID, name string) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		nm := name
+		_, err := ctx.client.PatchSpeakerProfile(c, profileID, notoapi.SpeakerProfilePatch{DisplayName: &nm})
+		if err == nil {
+			err = ctx.client.UpdateSpeakerName(c, meetingID, speakerID, name)
+		}
+		return speakerIdentityMsg{MeetingID: meetingID, Note: "renamed to " + name, Err: err}
+	}
+}
+
 // update consumes async fetch messages addressed to the bound id. Key
 // events are NOT handled here — the host calls handleKey explicitly so
 // it can decide focus.
 func (d *detailPane) update(ctx screenCtx, msg tea.Msg) tea.Cmd {
 	switch v := msg.(type) {
+	case speakerIdentityMsg:
+		if v.MeetingID != d.id_ {
+			return nil
+		}
+		d.editorPending = false
+		if v.Err != nil {
+			d.editorBanner = "save failed: " + v.Err.Error()
+			return nil
+		}
+		d.editorBanner = ""
+		// Re-pull the identity layer + transcript so the new name shows
+		// everywhere it's rendered from.
+		return tea.Batch(
+			fetchSpeakerMappings(ctx, d.id_),
+			fetchTranscript(ctx, d.id_),
+			func() tea.Msg { return bannerMsg{Kind: "info", Text: v.Note} },
+		)
+	case speakerPersonOpenMsg:
+		if v.MeetingID != d.id_ {
+			return nil
+		}
+		d.editorPending = false
+		if v.Err != nil {
+			d.editorBanner = ""
+			return func() tea.Msg { return bannerMsg{Kind: "error", Text: v.Err.Error()} }
+		}
+		d.editorBanner = ""
+		param := "person:" + v.ProfileID
+		if v.Edit {
+			param = "person-edit:" + v.ProfileID
+		}
+		return pushOrReplaceTo(sPeople, param)
 	case speakerRenamedMsg:
 		if v.MeetingID != d.id_ {
 			return nil
@@ -226,8 +381,89 @@ func (d *detailPane) update(ctx screenCtx, msg tea.Msg) tea.Cmd {
 				d.files = v.Files
 			}
 		}
+	case profilesLoadedMsg:
+		// The people directory for the assign dialog (lazy-loaded on open).
+		d.dirLoading = false
+		if v.Err == nil {
+			d.directory = v.Profiles
+		}
+	case speakerMappingsLoadedMsg:
+		if v.MeetingID == d.id_ {
+			d.loadingMappings = false
+			if v.Err == nil {
+				d.mappings = make(map[string]notoapi.MeetingSpeakerMapping, len(v.Mappings))
+				for _, mp := range v.Mappings {
+					d.mappings[mp.MeetingSpeakerID] = mp
+				}
+			}
+		}
 	}
 	return nil
+}
+
+// speakerDisplayName prefers the resolved cross-meeting person name over the
+// transcript label, so a name set once shows on every speaker row.
+func (d *detailPane) speakerDisplayName(sp speakerStat) string {
+	if mp, ok := d.mappings[sp.ID]; ok && mp.ProfileName != "" {
+		return mp.ProfileName
+	}
+	return sp.Name
+}
+
+// currentCandidates returns the ranked suggestions for the selected speaker
+// (empty unless it's unresolved with at least one candidate).
+func (d *detailPane) currentCandidates() []notoapi.SpeakerCandidate {
+	if d.speakerCur >= len(d.speakers) {
+		return nil
+	}
+	mp, ok := d.mappings[d.speakers[d.speakerCur].ID]
+	if !ok {
+		return nil
+	}
+	return mp.Candidates
+}
+
+// isItemTab reports whether the active tab is one of the cited-item lists
+// (decisions / actions / risks / questions) that share renderItemsList and the
+// item-cursor + jump-to-transcript navigation.
+func (d *detailPane) isItemTab() bool {
+	switch d.tab {
+	case tabActions, tabDecisions, tabRisks, tabQuestions:
+		return true
+	}
+	return false
+}
+
+// currentItems returns the active items tab's list as SummaryItems (actions are
+// flattened to carry their owner inline), so navigation and rendering share one
+// view of "the items shown right now".
+func (d *detailPane) currentItems() []notoapi.SummaryItem {
+	switch d.tab {
+	case tabActions:
+		return actionItemsToSummary(d.summary.ActionItems)
+	case tabDecisions:
+		return d.summary.Decisions
+	case tabRisks:
+		return d.summary.Risks
+	case tabQuestions:
+		return d.summary.OpenQuestions
+	}
+	return nil
+}
+
+// jumpToSegmentID switches to the transcript scrolled to (and highlighting) the
+// given segment, so Enter on a cited item lands the user on the exact moment it
+// references. Returns false when the segment isn't in this transcript.
+func (d *detailPane) jumpToSegmentID(id string) bool {
+	for i, seg := range d.transcript.Segments {
+		if seg.ID == id {
+			d.tab = tabTranscript
+			d.focusSeg = i
+			d.transcriptScroll = i
+			return true
+		}
+	}
+	return false
 }
 
 // handleKey processes a key when the pane has focus. Returns (handled,
@@ -237,51 +473,62 @@ func (d *detailPane) handleKey(ctx screenCtx, k tea.KeyPressMsg) (bool, tea.Cmd)
 	if d.editorOpen {
 		switch k.String() {
 		case "esc":
-			d.editorOpen = false
-			d.editorInput.Blur()
-			d.editorInput.SetValue("")
-			d.editingID = ""
+			d.closeEditor()
 			return true, nil
 		case "enter":
-			name := strings.TrimSpace(d.editorInput.Value())
-			if d.editingID == "" {
-				d.editorOpen = false
-				return true, nil
-			}
-			d.editorPending = true
-			d.editorBanner = "saving…"
-			cmd := saveSpeakerNameCmd(ctx, d.id_, d.editingID, name)
-			d.editorOpen = false
-			d.editorInput.Blur()
-			d.editorInput.SetValue("")
-			return true, cmd
+			return true, d.commitEditor(ctx)
 		}
 		var cmd tea.Cmd
 		d.editorInput, cmd = d.editorInput.Update(k)
 		return true, cmd
 	}
 
-	// On the Speakers tab, Edit (e) or Enter opens the rename editor.
-	if d.tab == tabSpeakers {
-		if key.Matches(k, ctx.keys.Edit, ctx.keys.Enter) {
-			if d.speakerCur < len(d.speakers) {
-				sp := d.speakers[d.speakerCur]
-				d.editingID = sp.ID
-				d.editorInput.SetValue(sp.Name)
-				d.editorInput.Focus()
-				d.editorOpen = true
-				d.editorBanner = ""
-				return true, nil
+	// The assign picker captures keys (incl. digits) while open.
+	if d.assignOpen {
+		return d.handleAssignKey(ctx, k)
+	}
+
+	// Speakers-tab actions: open the assign picker (g) or the name editor
+	// (e / enter). Editing a resolved speaker renames the person; editing an
+	// unresolved one creates a new person from their voiceprint.
+	if d.tab == tabSpeakers && d.speakerCur < len(d.speakers) {
+		switch {
+		case key.Matches(k, ctx.keys.Assign):
+			return true, d.openAssignDialog(ctx)
+		case key.Matches(k, ctx.keys.Enter):
+			// Enter jumps to the speaker's person page (mirrors Enter-to-jump
+			// elsewhere); e keeps the fast inline rename in place.
+			return true, d.openPerson(ctx)
+		case key.Matches(k, ctx.keys.Edit):
+			d.openEditor()
+			return true, nil
+		}
+	}
+
+	// Items tabs (decisions / actions / risks / questions): Enter jumps from the
+	// selected item to its first cited segment in the transcript.
+	if d.isItemTab() && key.Matches(k, ctx.keys.Enter) {
+		items := d.currentItems()
+		if d.itemCur < len(items) {
+			for _, ref := range items[d.itemCur].SegmentRefs {
+				if d.jumpToSegmentID(ref) {
+					return true, nil
+				}
 			}
 		}
+		return true, nil
 	}
 
 	switch {
 	case key.Matches(k, ctx.keys.TabNext):
 		d.tab = (d.tab + 1) % tabCount
+		d.itemCur = 0
+		d.bodyScroll = 0
 		return true, nil
 	case key.Matches(k, ctx.keys.TabPrev):
 		d.tab = (d.tab + tabCount - 1) % tabCount
+		d.itemCur = 0
+		d.bodyScroll = 0
 		return true, nil
 	case key.Matches(k, ctx.keys.Transcript):
 		// Jump straight to the transcript / speakers tabs. These work
@@ -304,28 +551,50 @@ func (d *detailPane) handleKey(ctx screenCtx, k tea.KeyPressMsg) (bool, tea.Cmd)
 			return true, nil
 		}
 	case key.Matches(k, ctx.keys.Up):
-		switch d.tab {
-		case tabSpeakers:
+		switch {
+		case d.tab == tabSpeakers:
 			if d.speakerCur > 0 {
 				d.speakerCur--
 				return true, nil
 			}
-		case tabTranscript:
+		case d.tab == tabTranscript:
 			if d.transcriptScroll > 0 {
 				d.transcriptScroll--
 				return true, nil
 			}
+		case d.isItemTab():
+			if d.itemCur > 0 {
+				d.itemCur--
+				return true, nil
+			}
+		case d.tab == tabSummary:
+			// The summary is free-scrolling (no cursor): bound to [0, bodyMax],
+			// the max offset the last render measured from the wrapped body.
+			if d.bodyScroll > 0 {
+				d.bodyScroll--
+				return true, nil
+			}
 		}
 	case key.Matches(k, ctx.keys.Down):
-		switch d.tab {
-		case tabSpeakers:
+		switch {
+		case d.tab == tabSpeakers:
 			if d.speakerCur < len(d.speakers)-1 {
 				d.speakerCur++
 				return true, nil
 			}
-		case tabTranscript:
+		case d.tab == tabTranscript:
 			if d.transcriptScroll < len(d.transcript.Segments)-1 {
 				d.transcriptScroll++
+				return true, nil
+			}
+		case d.isItemTab():
+			if d.itemCur < len(d.currentItems())-1 {
+				d.itemCur++
+				return true, nil
+			}
+		case d.tab == tabSummary:
+			if d.bodyScroll < d.bodyMax {
+				d.bodyScroll++
 				return true, nil
 			}
 		}

@@ -1,0 +1,11 @@
+# Re-downloadable media is never committed; loaders, specs, and docs are.
+# (specs that ARE committed: synthetic/meeting_2spk.json, librispeech/manifest.json)
+*.wav
+*.mp4
+*.flac
+*.m4a
+*.part
+
+# fetched reference transcripts (produced by the fetchers, re-downloadable)
+words/
+.cache/

@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
+	"github.com/lukasstrickler/noto/internal/ui/tui/scroll"
 	"github.com/lukasstrickler/noto/internal/ui/tui/theme"
 )
 
@@ -93,11 +95,19 @@ func (p *palette) view(width, height int, s theme.Styles, under string) string {
 	rows = append(rows, s.HeaderEm.Render("◇ command menu"))
 	rows = append(rows, s.ChipKey.Render(":")+" "+p.input.View())
 	rows = append(rows, "")
-	visible := 12
-	if visible > len(p.filtered) {
-		visible = len(p.filtered)
+	// Window the list around the cursor with the shared scroll primitive — the
+	// list can hold more entries than maxVisible (the action set plus meeting
+	// titles), and a bare filtered[:12] would let the selection scroll off the
+	// bottom and vanish. Follow keeps the cursor's row on screen; a "+N more"
+	// tail signals the rest exist without a gutter inside the overlay box.
+	const maxVisible = 12
+	total := len(p.filtered)
+	visible := total
+	if visible > maxVisible {
+		visible = maxVisible
 	}
-	for i := 0; i < visible; i++ {
+	off := scroll.Follow(total, visible, p.cursor, 1, 0)
+	for i := off; i < off+visible && i < total; i++ {
 		e := p.filtered[i]
 		labelRow := e.Label
 		if e.Hint != "" {
@@ -109,14 +119,16 @@ func (p *palette) view(width, height int, s theme.Styles, under string) string {
 			rows = append(rows, "   "+labelRow)
 		}
 	}
-	if len(p.filtered) == 0 {
+	if total == 0 {
 		rows = append(rows, s.Muted.Render("  no matches"))
+	} else if total > visible {
+		rows = append(rows, s.Muted.Render(fmt.Sprintf("   +%d more", total-visible)))
 	}
 	rows = append(rows, "")
 	rows = append(rows, s.HintBar.Render(s.ChipKey.Render("↑/↓")+" select   "+s.ChipKey.Render("⏎")+" run   "+s.ChipKey.Render("esc")+" close"))
 
 	box := s.OverlayBox.Width(w).Render(strings.Join(rows, "\n"))
-	return overlayCenter(under, box, width, height)
+	return overlayCenter(under, box, width, height, s.T.Faint)
 }
 
 func fuzzyMatch(haystack, needle string) bool {

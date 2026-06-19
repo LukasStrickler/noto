@@ -74,7 +74,7 @@ func TestLocalRepo_SaveLoadTranscript(t *testing.T) {
 	tr := &artifacts.Transcript{
 		SchemaVersion: "transcript.v1",
 		MeetingID:     id.String(),
-		Provider:      artifacts.TranscriptProvider{ID: "assemblyai"},
+		Provider:      artifacts.TranscriptProvider{ID: "parakeet-local"},
 		Speakers:      []artifacts.Speaker{{ID: "spk_0", DisplayName: "Alice"}},
 		Segments: []artifacts.Segment{
 			{ID: "seg_001", SpeakerID: "spk_0", Text: "Hello world", StartSeconds: 0, EndSeconds: 3, Confidence: &conf},

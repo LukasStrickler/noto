@@ -76,6 +76,9 @@ Desktop.ini
 .env
 .env.*
 !.env.example
+!.env.test.example
+.venv-modal/
+.modal-results/
 *.pem
 *.key
 secrets/
@@ -101,6 +104,5 @@ xcuserdata/
 *.xcworkspace/xcuserdata/
 
 # --- Misc agent state ---------------------------------------
-.sisyphus/runs/
-.sisyphus/cache/
+.sisyphus/
 .ada/

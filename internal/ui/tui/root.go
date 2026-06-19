@@ -3,21 +3,38 @@ package tui
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
+	"github.com/lukasstrickler/noto/internal/ui/tui/hit"
 	"github.com/lukasstrickler/noto/internal/ui/tui/keys"
 	"github.com/lukasstrickler/noto/internal/ui/tui/layout"
 	"github.com/lukasstrickler/noto/internal/ui/tui/theme"
 )
 
+// minTermW/minTermH are the floor below which noto shows the too-small guard
+// instead of a screen. The width floor is the combined two-pane minimum
+// (minTwoPaneW, derived from the detail pane's full tab bar): noto always draws
+// both panes, so when the terminal can't fit both floors it reports the
+// shortfall rather than collapsing to one column or clipping the tab bar.
+var minTermW = minTwoPaneW
+
+const minTermH = 30
+
+// clickAction is what a clickable region does when the mouse hits it: it
+// yields a command to run (or nil for a no-op). Rendering code registers one
+// per clickable element via the hit.Row builder, so the behaviour lives next
+// to the element that draws it instead of in a central dispatch table.
+type clickAction func() tea.Cmd
+
 // rootModel is the top-level tea.Model. It owns the screen stack, the
 // global status bar, the SSE subscription, and the command palette.
+// The persistent frame it draws around each screen (top nav bar, status
+// bar, hint row, banner) lives in chrome.go; the help/overlay machinery
+// lives in help_overlay.go.
 type rootModel struct {
 	ctx    context.Context
 	client notoapi.Client
@@ -26,6 +43,14 @@ type rootModel struct {
 
 	width  int
 	height int
+
+	// sidebarWidth is the persisted left-pane width (cells), shared across the
+	// dashboard/people/config two-pane layouts. Root owns it because dragging
+	// the divider rides on mouse motion, which root handles itself (it never
+	// reaches screens). Seeded from config on startup; persisted on drag-release
+	// and on the keyboard resize bindings. 0 until the config load returns, at
+	// which point it takes the stored (or default) value.
+	sidebarWidth int
 
 	// stack[0] is dashboard; pushing pushes detail/transcript/etc.
 	stack []screen
@@ -38,16 +63,45 @@ type rootModel struct {
 
 	recordingActive  bool
 	recordingElapsed int
+
+	// frameHits holds the clickable regions of the most recently rendered
+	// frame, in absolute screen coordinates. content() rebuilds it every
+	// render; Update queries it on the next mouse event. nil until the first
+	// frame is drawn (queries are nil-safe).
+	frameHits *hit.Map[region]
+
+	// hovered is the id of the region under the pointer, resolved on the last
+	// motion event against the displayed frame. Rendering reads it to draw
+	// that element in its hover state; "" means nothing is hovered.
+	hovered string
+
+	// pressed is the id of the region with the mouse button currently held
+	// down on it (armed on press, cleared on release). The focused element
+	// renders its pressed look while it equals this; the action fires on
+	// release. "" means none.
+	pressed string
+
+	// viewCache is the last frame content() produced; dirty says whether the
+	// model has changed since, so View can return the cache untouched when it
+	// hasn't. This matters because AllMotion mouse tracking delivers a motion
+	// event per cell the pointer crosses, and the runtime calls View after
+	// every event — without the cache, a resting or sweeping pointer would
+	// rebuild the whole frame (a ~1379-alloc, ~hundreds-of-µs job) hundreds of
+	// times a second. Every state-changing path in Update sets dirty; the
+	// motion handler sets it only when the hovered element actually changes.
+	viewCache string
+	dirty     bool
 }
 
 func newRootModel(ctx context.Context, client notoapi.Client) tea.Model {
 	r := &rootModel{
-		ctx:    ctx,
-		client: client,
-		keys:   keys.New(),
-		styles: theme.NewStyles(),
-		width:  100,
-		height: 30,
+		ctx:          ctx,
+		client:       client,
+		keys:         keys.New(),
+		styles:       theme.NewStyles(),
+		width:        100,
+		height:       30,
+		sidebarWidth: defaultSidebarW,
 	}
 	r.stack = []screen{newDashboardScreen()}
 	return r
@@ -58,6 +112,9 @@ func newRootModel(ctx context.Context, client notoapi.Client) tea.Model {
 func (m *rootModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		subscribeEvents(m.ctx, m.client),
+		// Seed the shared sidebar width from the persisted config; the result
+		// arrives as configLoadedMsg (handled below) and replaces the default.
+		fetchConfig(m.screenCtx()),
 		m.top().enter(m.screenCtx(), ""),
 	}
 	return tea.Batch(cmds...)
@@ -72,13 +129,33 @@ func (m *rootModel) top() screen {
 
 func (m *rootModel) screenCtx() screenCtx {
 	return screenCtx{
-		ctx:    m.ctx,
-		client: m.client,
-		keys:   m.keys,
-		styles: m.styles,
-		width:  m.width,
-		height: m.contentHeight(),
+		ctx:          m.ctx,
+		client:       m.client,
+		keys:         m.keys,
+		styles:       m.styles,
+		width:        m.width,
+		height:       m.contentHeight(),
+		sidebarWidth: m.sidebarWidth,
+		hits:         m.frameHits,
+		hovered:      m.hovered,
+		pressed:      m.pressed,
 	}
+}
+
+// pointer is the live hover/press state for button.place in chrome rendering.
+// (Screens get the same via screenCtx.pointer().)
+func (m *rootModel) pointer() pointer {
+	return pointer{hovered: m.hovered, pressed: m.pressed}
+}
+
+// regionAt resolves the clickable region at a screen cell, applying the one
+// rule every pointer handler shares: a modal overlay owns the screen, so
+// nothing behind it is hit. nil-safe before the first frame is drawn.
+func (m *rootModel) regionAt(mouse tea.Mouse) (region, bool) {
+	if m.helpOpen || m.palette != nil {
+		return region{}, false
+	}
+	return m.frameHits.At(mouse.X, mouse.Y)
 }
 
 func (m *rootModel) contentHeight() int {
@@ -88,6 +165,65 @@ func (m *rootModel) contentHeight() int {
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Mouse motion is the firehose: AllMotion tracking delivers one event per
+	// cell the pointer crosses, and nothing about a motion changes the frame
+	// except which element is highlighted. Handle it here and return before the
+	// rest of Update — no screen reacts to raw motion (the architecture forbids
+	// it), so forwarding it would just burn a screen update per cell. Mark the
+	// frame dirty only when the hovered element actually changed; an unchanged
+	// hover leaves dirty as-is so View serves the cached frame for free.
+	if msg, ok := msg.(tea.MouseMotionMsg); ok {
+		// Dragging the sidebar divider: while it's the pressed element, motion
+		// resizes the sidebar to follow the pointer's column (clamped to the
+		// pane floors). This is the one place raw motion drives state — the
+		// divider is root-owned precisely because motion never reaches screens.
+		if m.pressed == sidebarDividerID {
+			if w := m.clampSidebarWidth(msg.Mouse().X); w != m.sidebarWidth {
+				m.sidebarWidth = w
+				m.dirty = true
+			}
+			m.hovered = sidebarDividerID
+			return m, nil
+		}
+		prev := m.hovered
+		m.hovered = ""
+		if r, ok := m.regionAt(msg.Mouse()); ok {
+			m.hovered = r.id
+		}
+		if m.hovered != prev {
+			m.dirty = true
+		}
+		return m, nil
+	}
+
+	// The wheel scrolls whatever the pointer is over. Resolve the region under
+	// the cursor (the same map clicks use) and hand the active screen a semantic
+	// scroll intent tagged with that region id, so a screen scrolls the right
+	// sub-area — the detail pane vs the meeting list — without it first having to
+	// be focused. Modal overlays own the screen (regionAt returns nothing), so a
+	// wheel can't leak to the chrome behind them.
+	if msg, ok := msg.(tea.MouseWheelMsg); ok {
+		if m.helpOpen || m.palette != nil {
+			return m, nil
+		}
+		over := ""
+		if r, ok := m.regionAt(msg.Mouse()); ok {
+			over = r.id
+		}
+		m.dirty = true
+		updated, cmd := m.top().update(m.screenCtx(), mouseWheelMsg{
+			over: over,
+			up:   msg.Mouse().Button == tea.MouseWheelUp,
+		})
+		m.stack[len(m.stack)-1] = updated
+		return m, cmd
+	}
+
+	// Every other message may change visible state, so rebuild the frame on the
+	// next View. (These are all low-frequency next to motion — keys, events,
+	// ticks, clicks — so an occasional redundant rebuild costs nothing.)
+	m.dirty = true
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -95,6 +231,38 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+	case tea.MouseClickMsg:
+		// Press (button DOWN): arm the element under the pointer. It only
+		// *animates* (the pressed colour) when it's the already-focused element
+		// — see button.place — so re-clicking the current selection gives
+		// feedback while clicking a different element just lets the focus change
+		// speak for itself. The action fires on release. No timer.
+		if msg.Mouse().Button == tea.MouseLeft {
+			if r, ok := m.regionAt(msg.Mouse()); ok {
+				m.pressed = r.id
+			}
+		}
+
+	case tea.MouseReleaseMsg:
+		// Release (button UP): run the action if the pointer is still over the
+		// element we pressed (drag-off cancels, like a web button), then clear
+		// the press so the animation ends exactly as the action runs.
+		if msg.Mouse().Button == tea.MouseLeft {
+			pressed := m.pressed
+			m.pressed = ""
+			// Drag-end of the sidebar divider: the width was tracked live on
+			// motion; persist it once here so disk is written per drag, not per
+			// cell. (The divider has no onClick — it's a drag, not a click.)
+			if pressed == sidebarDividerID {
+				return m, persistSidebarWidth(m.screenCtx(), m.sidebarWidth)
+			}
+			if pressed != "" {
+				if r, ok := m.regionAt(msg.Mouse()); ok && r.id == pressed && r.onClick != nil {
+					return m, r.onClick()
+				}
+			}
+		}
 
 	case tea.KeyPressMsg:
 		// Help overlay takes everything.
@@ -135,6 +303,14 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, tea.Quit
+		case key.Matches(msg, m.keys.SidebarWider):
+			// Keyboard parity for the divider drag. Non-letter (ctrl+…) so it
+			// fires even with an input focused; root-owned like the drag.
+			return m, m.resizeSidebar(m.sidebarWidth + sidebarStep)
+		case key.Matches(msg, m.keys.SidebarNarrower):
+			return m, m.resizeSidebar(m.sidebarWidth - sidebarStep)
+		case key.Matches(msg, m.keys.SidebarReset):
+			return m, m.resizeSidebar(defaultSidebarW)
 		case !inputActive && key.Matches(msg, m.keys.Palette):
 			m.palette = newPalette(m.client, m.paletteEntries())
 			return m, nil
@@ -160,6 +336,14 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// lets `r` fall through to its own Record handler.
 			id := screenNavTarget(msg)
 			if m.top().id() == id {
+				// Already on this page: re-pressing its nav key doesn't
+				// navigate, so give the same feedback re-clicking the focused
+				// pill does — briefly flash that pill (button.place shows the
+				// pressed look only because this pill is the focused one). Then
+				// break so the key still reaches the active screen (e.g. `r` on
+				// the recorder records). Toggle keys like `?` never reach here.
+				m.pressed = navHitID(id)
+				cmds = append(cmds, clearPressCmd(navHitID(id)))
 				break
 			}
 			return m, pushOrReplaceTo(id, "")
@@ -177,6 +361,15 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			return m, pushOrReplaceTo(sDashboard, "filter")
+		}
+
+	case configLoadedMsg:
+		// Seed/refresh the shared sidebar width from persisted config. A drag or
+		// a resize key issues a PatchConfig whose echoed result also lands here,
+		// keeping the value in sync. Falls through so the active screen (config)
+		// still receives the message for its own cfg copy.
+		if msg.Err == nil && msg.Cfg.UI.SidebarWidth > 0 {
+			m.sidebarWidth = msg.Cfg.UI.SidebarWidth
 		}
 
 	case eventStreamMsg:
@@ -212,6 +405,12 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case clearBannerMsg:
 		m.banner = nil
+
+	case clearPressMsg:
+		// End a keyboard press flash, unless a newer press took its place.
+		if m.pressed == msg.id {
+			m.pressed = ""
+		}
 
 	case switchScreenMsg:
 		s := buildScreen(msg.ID)
@@ -270,28 +469,71 @@ func (m *rootModel) View() tea.View {
 	// too-small-terminal fallback used to), Bubble Tea would leave the
 	// alternate screen and disable the mouse on that frame, dumping the
 	// fallback into the user's scrollback until the next normal-sized frame.
-	v := tea.NewView(m.content())
+	// Serve the cached frame when nothing has changed since it was built. The
+	// runtime calls View after every message, but most messages (above all the
+	// AllMotion firehose) leave the frame identical; rebuilding it then would
+	// re-render every screen, chip and hit region for no visible change. dirty
+	// is set by every state-changing path in Update; an empty cache forces the
+	// first build.
+	content := m.viewCache
+	if m.dirty || content == "" {
+		content = m.content()
+		m.viewCache = content
+		m.dirty = false
+	}
+	v := tea.NewView(content)
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	// Paint our own canvas so the theme looks identical across terminals.
+	// Without this the UI is drawn as foreground colors over whatever each
+	// terminal's default background happens to be (VS Code vs Ghostty vs …),
+	// which is why the same screen reads differently between them.
+	v.BackgroundColor = m.styles.T.Background
+	// All-motion (not just cell-motion) so we receive pointer movement with
+	// no button held — that's what drives hover highlighting.
+	v.MouseMode = tea.MouseModeAllMotion
 	return v
+}
+
+// renderTooSmall draws the guard shown when the terminal is below the absolute
+// floor. It always reports BOTH dimensions — the current size and the required
+// minimum — so the user knows exactly which way (and how far) to resize, rather
+// than guessing from a generic "too small" line.
+func (m *rootModel) renderTooSmall() string {
+	s := m.styles
+	cur := fmt.Sprintf("%d×%d", m.width, m.height)
+	need := fmt.Sprintf("%d×%d", minTermW, minTermH)
+	return s.Danger.Render("Terminal too small: "+cur) + "\n" +
+		s.Muted.Render("noto needs at least "+need+" (width×height) — enlarge the window.") + "\n"
 }
 
 // content renders the frame body. It returns only the string to draw; the
 // terminal feature flags are owned by View so they can't drift between the
 // normal and fallback paths.
 func (m *rootModel) content() string {
-	if m.width < 30 || m.height < 10 {
-		return m.styles.Muted.Render("noto needs a wider terminal\n")
+	// Rebuild the click map for this frame; rendering registers regions into
+	// it (chrome here, screen body as views adopt hit.Row). The too-small
+	// fallback below draws nothing clickable, so it leaves the map empty.
+	m.frameHits = &hit.Map[region]{}
+
+	if m.width < minTermW || m.height < minTermH {
+		return m.renderTooSmall()
 	}
 	header := m.renderHeader()
-	body := m.top().view(m.screenCtx())
-	hint := m.renderHintBar()
+	// The body is drawn directly under the header; tell the screen where that
+	// is so its hitRow can translate body-local rows into absolute click cells.
+	ctx := m.screenCtx()
+	ctx.bodyTop = lipgloss.Height(header)
+	body := m.top().view(ctx)
 	status := m.renderStatusBar()
 
-	// Banner overrides the hint row when active.
-	row := hint
+	// The hint row sits directly under the body. Register its clickable chips on
+	// that absolute frame row — but only when it's actually shown; a banner
+	// replaces it, and then nothing there is clickable.
+	var row string
 	if m.banner != nil {
 		row = m.renderBanner()
+	} else {
+		row = m.renderHintBar(m.frameHits, lipgloss.Height(header)+lipgloss.Height(body))
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, row, status)
@@ -304,240 +546,10 @@ func (m *rootModel) content() string {
 	return content
 }
 
-func (m *rootModel) renderHeader() string {
-	s := m.styles
-	logo := s.Header.Render("◉ noto")
-	bread := strings.Builder{}
-	for i, sc := range m.stack {
-		if i > 0 {
-			bread.WriteString(s.Muted.Render(" › "))
-		}
-		if i == len(m.stack)-1 {
-			bread.WriteString(s.HeaderEm.Render(string(sc.id())))
-		} else {
-			bread.WriteString(s.Muted.Render(string(sc.id())))
-		}
-	}
-	left := logo + s.Muted.Render("  ·  ") + bread.String()
-	right := ""
-	if m.recordingActive {
-		right = s.Recording.Render(fmt.Sprintf("● REC %s", formatDuration(m.recordingElapsed)))
-	}
-	gap := max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right)-2)
-	return left + strings.Repeat(" ", gap) + right
-}
-
-func (m *rootModel) renderStatusBar() string {
-	s := m.styles
-	parts := []string{}
-	if m.recordingActive {
-		parts = append(parts, s.Recording.Render("● REC")+" "+s.HeaderEm.Render(formatDuration(m.recordingElapsed)))
-	} else {
-		parts = append(parts, s.Muted.Render("○ idle"))
-	}
-	parts = append(parts, s.Muted.Render(fmt.Sprintf("⦿ %d meetings", m.statusBar.MeetingCount)))
-	idxLabel := def(m.statusBar.IndexState, "clean")
-	switch idxLabel {
-	case "clean":
-		parts = append(parts, s.Success.Render("✓ index "+idxLabel))
-	case "indexing":
-		parts = append(parts, s.Info.Render("⟳ index "+idxLabel))
-	default:
-		parts = append(parts, s.Warning.Render("△ index "+idxLabel))
-	}
-	switch {
-	case m.statusBar.JobsRunning > 0:
-		parts = append(parts, s.Info.Render(fmt.Sprintf("⚙ %d running", m.statusBar.JobsRunning)))
-	case m.statusBar.JobsQueued > 0:
-		parts = append(parts, s.Muted.Render(fmt.Sprintf("⌛ %d queued", m.statusBar.JobsQueued)))
-	default:
-		parts = append(parts, s.Muted.Render("⚙ jobs idle"))
-	}
-	left := strings.Join(parts, s.Muted.Render("  ·  "))
-	return s.StatusBar.Render(left)
-}
-
-func (m *rootModel) renderHintBar() string {
-	// Hints are screen-local: each screen exposes its own action chips
-	// (via the rendered body). The global hint row keeps just the
-	// universal modes the user needs everywhere.
-	hints := []string{
-		chip(m.styles, m.keys.Palette),
-		chip(m.styles, m.keys.Search),
-		chip(m.styles, m.keys.Help),
-		chip(m.styles, m.keys.Back),
-		chip(m.styles, m.keys.Quit),
-	}
-	return m.styles.HintBar.Render(strings.Join(hints, "   "))
-}
-
-func hint(s theme.Styles, k, label string) string {
-	return s.ChipKey.Render(k) + " " + s.Hint.Render(label)
-}
-
-// chip renders a key binding as a hint using the binding's OWN help text
-// (key + description). This is the single path the UI uses to show a key,
-// so the label can never drift from what's actually bound — change the
-// key in keys.New() and every chip follows.
-func chip(s theme.Styles, b key.Binding) string {
-	h := b.Help()
-	return hint(s, h.Key, h.Desc)
-}
-
-// chipAs renders a binding's key with a context-specific label, for spots
-// where the generic description doesn't fit (e.g. Tab means "focus
-// details" on the dashboard but "switch pane" in config).
-func chipAs(s theme.Styles, b key.Binding, label string) string {
-	return hint(s, b.Help().Key, label)
-}
-
-// chipPair renders two bindings as one "a/b label" chip, for paired
-// movement keys (↑/↓, ←/→) shown as a single hint.
-func chipPair(s theme.Styles, a, b key.Binding, label string) string {
-	return hint(s, a.Help().Key+"/"+b.Help().Key, label)
-}
-
-func (m *rootModel) renderBanner() string {
-	if m.banner == nil {
-		return ""
-	}
-	s := m.styles
-	var style = s.BadgeInfo
-	switch m.banner.Kind {
-	case "warn":
-		style = s.BadgeWarn
-	case "error":
-		style = s.BadgeDanger
-	}
-	return style.Render(m.banner.Text)
-}
-
-// renderHelpOverlay is built entirely from the central key map: every
-// key shown is read from its binding via chip(), so this overlay can
-// never disagree with what the screens actually handle.
-func (m *rootModel) renderHelpOverlay(under string) string {
-	s := m.styles
-	k := m.keys
-
-	// Every span inside the box is rendered through a style that carries
-	// the overlay's Surface background. lipgloss resets the background to
-	// the terminal default at the end of each styled span, so any cell not
-	// explicitly backed — including the plain spaces between chips — would
-	// otherwise show through as black. Backing keys, descriptions, titles,
-	// AND the separators/indents keeps the panel one continuous surface.
-	// (Same Surface color as before; no palette change — just applied to
-	// the styled spans so they blend instead of punching black holes.)
-	surf := s.T.Surface
-	bg := lipgloss.NewStyle().Background(surf)
-	keyS := s.ChipKey.Background(surf) // bright body text for labels, so the
-	descS := s.Row.Background(surf)    // overlay reads clearly on the dark surface
-	titleS := s.PanelTitle.Background(surf)
-	headS := s.HeaderEm.Background(surf)
-	mutedS := s.Muted.Background(surf)
-
-	sep := bg.Render("   ")
-	gap := bg.Render(" ")
-	row := func(chips ...string) string { return bg.Render("  ") + strings.Join(chips, sep) }
-	hc := func(b key.Binding) string {
-		h := b.Help()
-		return keyS.Render(h.Key) + gap + descS.Render(h.Desc)
-	}
-	hcAs := func(b key.Binding, label string) string {
-		return keyS.Render(b.Help().Key) + gap + descS.Render(label)
-	}
-	hcPair := func(a, b key.Binding, label string) string {
-		return keyS.Render(a.Help().Key+"/"+b.Help().Key) + gap + descS.Render(label)
-	}
-
-	navChips := make([]string, 0, len(topScreens))
-	for _, b := range screenNavBindings() {
-		navChips = append(navChips, hc(b))
-	}
-
-	lines := []string{
-		headS.Render("noto — keys"),
-		"",
-		titleS.Render("Global"),
-		row(navChips...),
-		row(hc(k.Search), hc(k.Palette), hc(k.Help), hc(k.Back), hc(k.Quit)),
-		"",
-		titleS.Render("Meetings list"),
-		row(hcPair(k.Up, k.Down, "select"), hcAs(k.Enter, "focus details"), hcAs(k.Tab, "focus details")),
-		row(hc(k.OpenAgent), hc(k.Delete), hc(k.ClearSearch)),
-		"",
-		titleS.Render("Search (/ focused)"),
-		row(hcAs(k.Tab, "next match"), hcAs(k.ShiftTab, "prev match"), hcAs(k.Enter, "open at hit"), hcAs(k.Back, "to list")),
-		"",
-		titleS.Render("Details pane"),
-		row(hcPair(k.TabPrev, k.TabNext, "switch tab"), hc(k.Transcript), hc(k.Speakers), hc(k.OpenAgent)),
-		row(hcPair(k.Up, k.Down, "scroll/select"), hc(k.NextMatch), hc(k.PrevMatch), hcAs(k.Edit, "rename speaker")),
-		"",
-		titleS.Render("Recorder"),
-		row(hc(k.EditTitle), hc(k.Record), hc(k.Stop), hc(k.Marker)),
-		"",
-		titleS.Render("Config"),
-		row(hcAs(k.Tab, "switch pane"), hcPair(k.Up, k.Down, "move"), hcAs(k.Enter, "set route/key"), hc(k.Test), hc(k.Remove)),
-		"",
-		mutedS.Render("press ? or esc to close"),
-	}
-	box := s.OverlayBox.Width(min(m.width-6, 78)).Render(strings.Join(lines, "\n"))
-	return overlayCenter(under, box, m.width, m.height)
-}
-
-func formatDuration(seconds int) string {
-	h := seconds / 3600
-	rem := seconds % 3600
-	mn := rem / 60
-	sc := rem % 60
-	if h > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", h, mn, sc)
-	}
-	return fmt.Sprintf("%02d:%02d", mn, sc)
-}
-
-func def(s, d string) string {
-	if s == "" {
-		return d
-	}
-	return s
-}
-
 // --- helpers ---
 
 func isEscapeKey(msg tea.KeyPressMsg) bool {
 	return msg.Code == tea.KeyEscape
-}
-
-// overlayCenter composites a pre-styled box centered over a
-// terminal-sized view. The background is dimmed (ANSI-stripped, then
-// re-rendered faint) so the box reads as the foreground; the box keeps
-// its own border/colors.
-//
-// lipgloss v2 does the compositing: a Compositor positions the box layer
-// at (left, top) on top of the full-size background layer, drawn onto an
-// explicit w×h Canvas. (Canvas.Compose alone ignores a layer's X/Y — only
-// a Compositor applies per-layer offsets — so the box goes through one.)
-func overlayCenter(under, box string, w, h int) string {
-	bw := lipgloss.Width(box)
-	bh := lipgloss.Height(box)
-	if bw > w {
-		bw = w
-	}
-	if bh > h {
-		bh = h
-	}
-	left := max(0, (w-bw)/2)
-	top := max(0, (h-bh)/2)
-
-	dimStyle := lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("#475569"))
-	dimmed := dimStyle.Render(ansi.Strip(under))
-
-	return lipgloss.NewCanvas(w, h).
-		Compose(lipgloss.NewCompositor(
-			lipgloss.NewLayer(dimmed),                  // z=0: dimmed background
-			lipgloss.NewLayer(box).X(left).Y(top).Z(1), // z=1: centered box on top
-		)).
-		Render()
 }
 
 // --- screen factory ---
@@ -556,6 +568,52 @@ func buildScreen(id screenID) screen {
 	default:
 		return newDashboardScreen()
 	}
+}
+
+// persistSidebarWidth writes the shared sidebar width to config. The echoed
+// Config comes back as configLoadedMsg so the value (and the config screen's
+// view) stay in sync; PatchConfig only sets SidebarWidth when > 0, so this
+// never disturbs the theme.
+func persistSidebarWidth(ctx screenCtx, width int) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		cfg, err := ctx.client.PatchConfig(c, notoapi.ConfigPatch{
+			UI: &notoapi.ConfigUI{SidebarWidth: width},
+		})
+		return configLoadedMsg{Cfg: cfg, Err: err}
+	}
+}
+
+// resizeSidebar sets the sidebar to the requested width (clamped to the pane
+// floors) and returns the command that persists it. Used by the keyboard
+// resize bindings; the mouse drag persists on release the same way. A no-op
+// when the clamp leaves the width unchanged (already at a floor).
+func (m *rootModel) resizeSidebar(want int) tea.Cmd {
+	w := m.clampSidebarWidth(want)
+	if w == m.sidebarWidth {
+		return nil
+	}
+	m.sidebarWidth = w
+	return persistSidebarWidth(m.screenCtx(), w)
+}
+
+// clampSidebarWidth pins the sidebar preference into the range the current
+// terminal allows: at least minSidebarW, and small enough to leave the content
+// pane minContentW cells. Mirrors layout.SidebarSplit's clamp so the stored
+// value matches what's rendered.
+func (m *rootModel) clampSidebarWidth(w int) int {
+	max := m.width - 1 - minContentW
+	if max < minSidebarW {
+		max = minSidebarW
+	}
+	if w < minSidebarW {
+		w = minSidebarW
+	}
+	if w > max {
+		w = max
+	}
+	return w
 }
 
 func pushOrReplaceTo(id screenID, param string) tea.Cmd {
@@ -586,6 +644,20 @@ func paneParamFor(action, id string) string {
 // reSubscribeMsg / clearBannerMsg are private to this file.
 type reSubscribeMsg struct{}
 type clearBannerMsg struct{}
+
+// clearPressMsg ends a keyboard-triggered press flash for the region it names;
+// the id guards against a newer press being cleared by an older timer. Mouse
+// presses clear on button release instead, so they need no timer — this is
+// only for the keyboard, which has no "release" to key off.
+type clearPressMsg struct{ id string }
+
+// pressFlash is how long re-pressing the current page's hotkey flashes its nav
+// pill. A var (not const) only so tests can shrink it.
+var pressFlash = 120 * time.Millisecond
+
+func clearPressCmd(id string) tea.Cmd {
+	return tea.Tick(pressFlash, func(time.Time) tea.Msg { return clearPressMsg{id} })
+}
 
 // activeMeetingID peeks at the screen stack for a screen that has a
 // meeting context, so global keys like "s" (speakers) can apply to it.

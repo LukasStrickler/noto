@@ -10,8 +10,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/lukasstrickler/noto/internal/core/artifacts"
 	"github.com/lukasstrickler/noto/internal/core/speakers"
+	"github.com/lukasstrickler/noto/internal/platform/config"
 	"github.com/lukasstrickler/noto/internal/platform/providers"
+	"github.com/lukasstrickler/noto/internal/platform/providers/diarize"
 	"github.com/lukasstrickler/noto/internal/platform/providers/llm"
+	"github.com/lukasstrickler/noto/internal/platform/providers/merge"
 	"github.com/lukasstrickler/noto/internal/platform/providers/stt"
 	"github.com/lukasstrickler/noto/internal/platform/repo"
 	"github.com/lukasstrickler/noto/internal/platform/search"
@@ -64,25 +67,60 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 
 	var transcript *artifacts.Transcript
 	var audio []byte
+	// Diarization consumes only the raw audio and is the LONGER local stage, so
+	// it runs concurrently with STT; the merge below is the first point that
+	// needs both. The buffered channel doubles as the join: nil = no diarizer.
+	type diarResult struct {
+		turns []diarize.Turn
+		err   error
+	}
+	var diarCh chan diarResult
 	if audioPath != "" {
 		s.publishProgress(job, "transcribing", 0.3, "")
-		key, _ := s.secrets.Get(ctx, "provider:assemblyai")
-		if strings.TrimSpace(key) != "" {
-			var rerr error
-			audio, rerr = os.ReadFile(audioPath)
-			if rerr != nil {
-				return fmt.Errorf("read audio: %w", rerr)
+		// Load the audio bytes whenever the file exists — the local voice
+		// profiler needs them even on the no-STT-key path (it embeds speakers
+		// independently of whoever produced the diarization).
+		if data, rerr := os.ReadFile(audioPath); rerr == nil {
+			audio = data
+		}
+		if len(audio) > 0 {
+			if d := s.resolveDiarizer(ctx); d != nil {
+				diarCh = make(chan diarResult, 1)
+				s.publishProgress(job, "diarizing", 0.35, d.ProviderID())
+				go func() {
+					turns, derr := d.Diarize(ctx, audio, diarize.DiarizeOptions{
+						MeetingID:   mid.String(),
+						NumSpeakers: 0,
+					})
+					diarCh <- diarResult{turns: turns, err: derr}
+				}()
 			}
-			adapter, err := s.newSTTAdapter("assemblyai")
-			if err != nil {
-				return fmt.Errorf("get assemblyai adapter: %w", err)
+		}
+		// Route to the configured speech provider — local-first by default
+		// (parakeet-local), with cloud (AssemblyAI) as an optional offload.
+		// Any failure here (model not installed, engine not built, missing
+		// cloud key, network error) is NON-fatal: we note it and fall through
+		// to the synthesized transcript so the job still completes and the
+		// reason is visible, rather than producing a silent wrong transcript.
+		if len(audio) > 0 {
+			provider := strings.TrimSpace(s.currentCfg().Routing.SpeechProvider)
+			if provider == "" {
+				provider = config.DefaultSTTProvider
 			}
-			transcript, err = adapter.Transcribe(ctx, audio, stt.TranscribeOptions{
-				Language:  jobOptString(job.Options, "language", ""),
-				MeetingID: mid.String(),
-			})
-			if err != nil {
-				return fmt.Errorf("transcribe: %w", err)
+			adapter, aerr := s.resolveSTTAdapter(ctx, provider)
+			if aerr != nil {
+				s.publishProgress(job, "stt provider unavailable", 0.5, aerr.Error())
+			} else {
+				t, terr := adapter.Transcribe(ctx, audio, stt.TranscribeOptions{
+					Language:    jobOptString(job.Options, "language", ""),
+					MeetingID:   mid.String(),
+					ContextBias: s.contextBiasTerms(ctx, title),
+				})
+				if terr != nil {
+					s.publishProgress(job, "transcription unavailable", 0.5, terr.Error())
+				} else {
+					transcript = t
+				}
 			}
 			// Clean the raw provider output (merge diarization gaps, fix
 			// overlapping timestamps, canonicalize speaker labels, …) before
@@ -90,14 +128,16 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 			// normalized result can be validated. If normalization produces
 			// something the storage layer can't read back, keep the raw
 			// transcript and surface a note rather than failing the job.
-			transcript.MeetingID = mid.String()
-			if normalized, nerr := providers.NormalizeTranscript(transcript); nerr != nil {
-				s.publishProgress(job, "normalization skipped", 0.5, nerr.Error())
-			} else if normalized != nil {
-				if verr := artifacts.ValidateTranscript(*normalized); verr != nil {
-					s.publishProgress(job, "normalization skipped", 0.5, verr.Error())
-				} else {
-					transcript = normalized
+			if transcript != nil {
+				transcript.MeetingID = mid.String()
+				if normalized, nerr := providers.NormalizeTranscript(transcript); nerr != nil {
+					s.publishProgress(job, "normalization skipped", 0.5, nerr.Error())
+				} else if normalized != nil {
+					if verr := artifacts.ValidateTranscript(*normalized); verr != nil {
+						s.publishProgress(job, "normalization skipped", 0.5, verr.Error())
+					} else {
+						transcript = normalized
+					}
 				}
 			}
 		}
@@ -112,17 +152,32 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 				JobID: job.ID,
 			},
 			Speakers: []artifacts.Speaker{
-				{ID: "spk_0", DisplayName: "You", Origin: "local_speaker", Label: "me"},
-				{ID: "spk_1", DisplayName: "Participants", Origin: "participants", Label: "participants"},
+				{ID: "spk_0", DisplayName: "You", Origin: "local_speaker", Label: "me", ProviderLabel: "A"},
+				{ID: "spk_1", DisplayName: "Participants", Origin: "participants", Label: "participants", ProviderLabel: "B"},
 			},
 			Segments: synthesizeSegments(title),
 		}
 	} else {
 		transcript.MeetingID = mid.String()
 	}
+	// Join the concurrent diarization (started alongside STT above). Always
+	// wait so the engine subprocess isn't still running when the job ends.
+	// Attribution stays best-effort and still requires word-level timing: a
+	// diarizer failure leaves the STT speakers in place and surfaces a note.
+	if diarCh != nil {
+		res := <-diarCh
+		if transcript != nil && len(transcript.Words) > 0 {
+			if res.err != nil {
+				s.publishProgress(job, "diarization skipped", 0.75, res.err.Error())
+			} else if attributed := merge.Attribute(transcript, res.turns); attributed != nil {
+				attributed.MeetingID = mid.String()
+				transcript = attributed
+			}
+		}
+	}
 	embeddings := map[string][]float64(nil)
-	if s.speakerEmbedder != nil && len(audio) > 0 {
-		if generated, err := s.speakerEmbedder.EmbedSpeakers(ctx, audio, transcript); err == nil {
+	if emb := s.activeSpeakerEmbedder(); emb != nil && len(audio) > 0 {
+		if generated, err := emb.EmbedSpeakers(ctx, audio, transcript); err == nil {
 			embeddings = generated
 		}
 	}
@@ -136,6 +191,39 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 	}
 	s.publishProgress(job, "transcript written", 1.0, fmt.Sprintf("%d segments", len(transcript.Segments)))
 	return nil
+}
+
+// contextBiasTerms collects domain terms that improve transcription accuracy on
+// proper nouns: the known real speaker names from the profile library plus the
+// meeting title. Generic placeholder names ("spk_…", "Speaker …", "Participants")
+// are skipped — they bias nothing useful. Best-effort: any error yields no bias.
+func (s *Service) contextBiasTerms(ctx context.Context, title string) []string {
+	seen := map[string]bool{}
+	var terms []string
+	add := func(t string) {
+		t = strings.TrimSpace(t)
+		if t == "" || seen[t] {
+			return
+		}
+		seen[t] = true
+		terms = append(terms, t)
+	}
+	if title != "" && title != "Untitled meeting" {
+		add(title)
+	}
+	if s.speakerProfiles != nil {
+		if profiles, err := s.speakerProfiles.List(ctx); err == nil {
+			for _, p := range profiles {
+				name := strings.TrimSpace(p.DisplayName)
+				if name == "" || name == "Participants" ||
+					strings.HasPrefix(name, "spk_") || strings.HasPrefix(name, "Speaker ") {
+					continue
+				}
+				add(name)
+			}
+		}
+	}
+	return terms
 }
 
 func synthesizeSegments(title string) []artifacts.Segment {
@@ -185,37 +273,26 @@ func (s *Service) runSummarize(ctx context.Context, job *notoapi.Job) error {
 	}
 
 	s.publishProgress(job, "synthesizing summary", 0.6, "no LLM key configured")
-	cfg := s.currentCfg()
-	summary := synthesizeSummary(title, mid.String(), cfg.Routing.LLMProvider, cfg.Routing.LLMModel)
+	summary := synthesizeSummary(title, mid.String())
 	md := renderSummaryMD(title, summary, transcript)
 	if err := s.repo.SaveSummary(ctx, mid, md, summary); err != nil {
 		return err
 	}
-	s.publishProgress(job, "summary written", 1.0, "")
+	s.publishProgress(job, "summary written", 1.0, "placeholder (no LLM key)")
 	return nil
 }
 
-// synthesizeSummary returns a deterministic placeholder summary used when no
-// LLM key is configured.
-func synthesizeSummary(title, meetingID, llmProvider, llmModel string) *artifacts.Summary {
+// synthesizeSummary returns a clearly-labelled placeholder used when no LLM key
+// is configured. It deliberately fabricates NO decisions/actions/risks: passing
+// invented insights off as real would be worse than an empty summary, so the
+// placeholder states plainly that it is one and that a key is needed.
+func synthesizeSummary(title, meetingID string) *artifacts.Summary {
 	return &artifacts.Summary{
 		SchemaVersion: "summary.v1",
 		MeetingID:     meetingID,
-		ShortSummary:  fmt.Sprintf("Meeting %q reached three decisions and one action item.", title),
-		Decisions: []artifacts.SummaryItem{
-			{Text: "Ship v1 by end of quarter", SpeakerIDs: []string{"spk_0"}, Evidence: []artifacts.Evidence{{SegmentID: "seg_000070", Quote: "ship the v1 by end of quarter"}}},
-			{Text: "Pick top three open questions; defer the rest", SpeakerIDs: []string{"spk_0", "spk_1"}, Evidence: []artifacts.Evidence{{SegmentID: "seg_000150", Quote: "decide on the top three and defer the rest"}}},
-		},
-		ActionItems: []artifacts.ActionItem{
-			{Text: "Circulate the timeline next week", Owner: "spk_0", Evidence: []artifacts.Evidence{{SegmentID: "seg_000030", Quote: "timeline first"}}},
-		},
-		Risks: []artifacts.SummaryItem{
-			{Text: "Timeline may be aggressive for v1 scope.", Evidence: []artifacts.Evidence{{SegmentID: "seg_000070", Quote: "ship the v1 by end of quarter"}}},
-		},
-		OpenQuestions: []artifacts.SummaryItem{
-			{Text: "Which open questions are highest priority?", Evidence: []artifacts.Evidence{{SegmentID: "seg_000100", Quote: "open-questions list"}}},
-		},
-		Model: artifacts.SummaryModel{Provider: llmProvider, ModelID: llmModel, PromptVersion: "summary.v1"},
+		ShortSummary:  fmt.Sprintf("No LLM provider key is configured, so no summary was generated for %q. Add an OpenRouter API key in settings to produce a real, evidence-grounded summary.", title),
+		Model:         artifacts.SummaryModel{Provider: "synthetic", ModelID: "placeholder", PromptVersion: "none"},
+		Coverage:      &artifacts.SummaryCoverage{},
 	}
 }
 
@@ -237,8 +314,14 @@ func (s *Service) summarizeWithProvider(ctx context.Context, job *notoapi.Job, t
 	if err != nil || strings.TrimSpace(key) == "" {
 		return nil
 	}
-	s.publishProgress(job, "calling LLM", 0.6, providerID)
-	adapter := &llm.OpenRouterAdapter{APIKey: key, ModelID: cfg.Routing.LLMModel}
+	s.publishProgress(job, "calling LLM", 0.6, providerID+" · "+cfg.Routing.LLMModel)
+	adapter := &llm.OpenRouterAdapter{
+		APIKey:             key,
+		ModelID:            cfg.Routing.LLMModel,
+		ZDR:                cfg.Routing.LLMPrivacy.ZDR,
+		DenyDataCollection: cfg.Routing.LLMPrivacy.DenyDataCollection,
+		RequireParameters:  cfg.Routing.LLMPrivacy.RequireParameters,
+	}
 	summary, err := adapter.Summarize(ctx, transcript, llm.SummarizeOptions{MeetingID: mid.String()})
 	if err != nil {
 		s.publishProgress(job, "llm error, falling back", 0.7, err.Error())
@@ -422,6 +505,17 @@ func parseMeetingID(kind, raw string) (uuid.UUID, error) {
 	return mid, nil
 }
 
+// embedderModelID reports the active embedding model so profiles are tagged with the
+// space they live in. Defaults to "ecapa" (the shipped local provider).
+func (s *Service) embedderModelID() string {
+	if m, ok := s.activeSpeakerEmbedder().(interface{ ModelID() string }); ok {
+		if id := m.ModelID(); id != "" {
+			return id
+		}
+	}
+	return "ecapa"
+}
+
 func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artifacts.Transcript, embeddings map[string][]float64) error {
 	if tr == nil || len(tr.Speakers) == 0 {
 		return nil
@@ -443,6 +537,14 @@ func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artif
 			})
 		}
 	}
+	// Total speech per transcript speaker, so we can withhold auto-confirmation
+	// when a match is built from too little voice (see speakers.MinEnrollSpeech).
+	speechBySpeaker := make(map[string]float64, len(tr.Speakers))
+	for _, seg := range tr.Segments {
+		if d := seg.EndSeconds - seg.StartSeconds; d > 0 {
+			speechBySpeaker[seg.SpeakerID] += d
+		}
+	}
 	now := time.Now()
 	for _, sp := range tr.Speakers {
 		emb, ok := embeddings[sp.ProviderLabel]
@@ -461,9 +563,18 @@ func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artif
 		}
 		var decision speakers.MatchDecision
 		if len(candidates) > 0 {
-			decision, err = speakers.Match(emb, candidates)
+			// MatchConfident adds a top-1-vs-top-2 margin gate so a close call
+			// between two stored profiles (the same-gender confusion seen in the
+			// AMI bench) lands in pending instead of auto-merging.
+			decision, err = speakers.MatchConfident(emb, candidates)
 			if err != nil {
 				return err
+			}
+			// Min-enrollment-speech gate: an auto-confirm built from very little
+			// voice is untrustworthy, so downgrade it to pending for review.
+			if decision.Status == speakers.StatusAuto && speechBySpeaker[sp.ID] < speakers.MinEnrollSpeech {
+				decision.Status = speakers.StatusPending
+				decision.Reason = "insufficient enrollment speech"
 			}
 		} else {
 			decision = speakers.MatchDecision{Status: speakers.StatusNew, Reason: "no existing profiles"}
@@ -494,8 +605,12 @@ func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artif
 			ProfileID:        profileID,
 			MatchConfidence:  confidence,
 			MatchStatus:      status,
-			CreatedAt:        now,
-			UpdatedAt:        now,
+			// Persist this meeting-speaker's voiceprint so the UI can (re-)rank
+			// suggestions against the profile library without re-decoding audio.
+			EmbeddingVector: emb,
+			EmbeddingDim:    len(emb),
+			CreatedAt:       now,
+			UpdatedAt:       now,
 		}); err != nil {
 			return err
 		}
@@ -505,7 +620,7 @@ func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artif
 				DisplayName:     sp.DisplayName,
 				EmbeddingVector: emb,
 				EmbeddingDim:    len(emb),
-				EmbeddingModel:  "titanet-large",
+				EmbeddingModel:  s.embedderModelID(),
 				CreatedAt:       now,
 				UpdatedAt:       now,
 				LastSeenAt:      &now,

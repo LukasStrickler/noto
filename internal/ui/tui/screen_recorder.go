@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
+	"github.com/lukasstrickler/noto/internal/ui/tui/hit"
 	"github.com/lukasstrickler/noto/internal/ui/tui/layout"
 	"github.com/lukasstrickler/noto/internal/ui/tui/theme"
 )
@@ -29,8 +30,8 @@ type recorderScreen struct {
 	partHist []int
 
 	// Held peak (dBFS) per channel, decaying over samples, plus a latched
-	// clip indicator — implements design.md's "peak holds then decays" and
-	// "clipping turns the label into persistent CLIP" rules.
+	// clip indicator: the peak holds then decays, and clipping latches a
+	// persistent CLIP label rather than flashing.
 	micPeak, partPeak int
 	micClip, partClip bool
 }
@@ -174,27 +175,38 @@ func (r *recorderScreen) pushSample(mic, part int) {
 
 func (r *recorderScreen) view(ctx screenCtx) string {
 	s := ctx.styles
-	var body string
-	subtitle := ""
+	subtitle := "press " + ctx.keys.Record.Help().Key + " to start"
 	if r.rec.Active {
-		body = r.renderActive(ctx)
 		subtitle = "recording — press " + ctx.keys.Stop.Help().Key + " to stop"
-	} else {
-		body = r.renderIdle(ctx)
-		subtitle = "press " + ctx.keys.Record.Help().Key + " to start"
 	}
-	return layout.Panel{
+	p := layout.Panel{
 		Title:    "recorder",
 		Subtitle: subtitle,
 		Width:    ctx.width,
 		Height:   ctx.height,
 		Focused:  true,
-		Body:     body,
-	}.Render(s)
+	}
+	ox, oy := p.BodyOffset()
+	originX, originY := ox, ctx.bodyTop+oy
+	if r.rec.Active {
+		p.Body = r.renderActive(ctx, originX, originY)
+	} else {
+		p.Body = r.renderIdle(ctx, originX, originY)
+	}
+	return p.Render(s)
 }
 
-func (r *recorderScreen) renderIdle(ctx screenCtx) string {
+// renderIdle is the pre-recording form. originX/originY locate the body so the
+// title field (click to edit) and the action chips (click replays the key)
+// register clickable regions; hover lights them. Skipped while the title input
+// is focused (then it owns input).
+func (r *recorderScreen) renderIdle(ctx screenCtx, originX, originY int) string {
 	s := ctx.styles
+	clickable := !r.inputActive()
+	ptr := pointer{}
+	if clickable {
+		ptr = ctx.pointer()
+	}
 	titleLine := r.titleIn.View()
 	if !r.titleFocus && strings.TrimSpace(r.titleIn.Value()) == "" {
 		titleLine = s.Muted.Render(r.titleIn.Placeholder)
@@ -217,12 +229,24 @@ func (r *recorderScreen) renderIdle(ctx screenCtx) string {
 	sources := s.Muted.Render("sources  ") + s.Secondary.Render("microphone + system audio")
 	after := s.Muted.Render("pipeline ") + s.Secondary.Render("ingest → transcribe → summarize → index")
 
-	chips := strings.Join([]string{
-		chipAs(s, ctx.keys.EditTitle, "edit title"),
-		chipAs(s, ctx.keys.Record, "start"),
-		chip(s, ctx.keys.Palette),
-		chip(s, ctx.keys.Back),
-	}, "   ")
+	// The title field is row 2 of the body; clicking it starts editing (replays
+	// the edit-title key). Hover lights it.
+	if clickable {
+		fieldW := max(lipgloss.Width(field), 24)
+		field = rowFeedback(field, ctx.pointer().state("rec:title", false), s, fieldW, 0)
+		ctx.hits.Add(hit.Rect{X: originX, Y: originY + 2, W: fieldW, H: 1},
+			region{id: "rec:title", onClick: replayKey(ctx.keys.EditTitle)})
+	}
+
+	// Action chips on the last body row (row 8) — each clickable.
+	chipRow := hit.NewRow(hitsIf(ctx, clickable), originX, originY+8)
+	chipButtonAs(chipRow, ptr, s, "rec:act:title", ctx.keys.EditTitle, "edit title")
+	chipRow.Add("   ")
+	chipButtonAs(chipRow, ptr, s, "rec:act:start", ctx.keys.Record, "start")
+	chipRow.Add("   ")
+	chipButton(chipRow, ptr, s, "rec:act:palette", ctx.keys.Palette)
+	chipRow.Add("   ")
+	chipButton(chipRow, ptr, s, "rec:act:back", ctx.keys.Back)
 
 	return strings.Join([]string{
 		headline,
@@ -233,12 +257,17 @@ func (r *recorderScreen) renderIdle(ctx screenCtx) string {
 		"",
 		pre,
 		"",
-		s.HintBar.Render(chips),
+		s.HintBar.Render(chipRow.String()),
 	}, "\n")
 }
 
-func (r *recorderScreen) renderActive(ctx screenCtx) string {
+func (r *recorderScreen) renderActive(ctx screenCtx, originX, originY int) string {
 	s := ctx.styles
+	clickable := !r.inputActive()
+	ptr := pointer{}
+	if clickable {
+		ptr = ctx.pointer()
+	}
 	rec := r.rec
 	width := ctx.width - 6
 	if width < 30 {
@@ -258,12 +287,6 @@ func (r *recorderScreen) renderActive(ctx screenCtx) string {
 		renderWaveLane(s, "system ", rec.ParticipantDB, r.partPeak, r.partClip, r.partHist, waveW, 1),
 	}, "\n")
 
-	chips := strings.Join([]string{
-		chip(s, ctx.keys.Stop),
-		chip(s, ctx.keys.Marker),
-		chip(s, ctx.keys.Palette),
-	}, "   ")
-
 	markers := ""
 	if len(rec.Markers) > 0 {
 		var lines []string
@@ -274,16 +297,21 @@ func (r *recorderScreen) renderActive(ctx screenCtx) string {
 		markers = "\n" + strings.Join(lines, "\n")
 	}
 
-	return strings.Join([]string{
-		timer,
-		title,
-		sources,
-		"",
-		wave,
-		markers,
-		"",
-		s.HintBar.Render(chips),
-	}, "\n")
+	// The chip row's y depends on the wave (2 lines) + however many marker lines
+	// precede it, so derive it from the rendered heights rather than a constant.
+	head := []string{timer, title, sources, "", wave, markers, ""}
+	chipY := originY
+	for _, p := range head {
+		chipY += lipgloss.Height(p)
+	}
+	chipRow := hit.NewRow(hitsIf(ctx, clickable), originX, chipY)
+	chipButton(chipRow, ptr, s, "rec:act:stop", ctx.keys.Stop)
+	chipRow.Add("   ")
+	chipButton(chipRow, ptr, s, "rec:act:marker", ctx.keys.Marker)
+	chipRow.Add("   ")
+	chipButton(chipRow, ptr, s, "rec:act:palette", ctx.keys.Palette)
+
+	return strings.Join(append(head, s.HintBar.Render(chipRow.String())), "\n")
 }
 
 // renderWaveLane draws one label + bar-pixel waveform + live dB read-out.

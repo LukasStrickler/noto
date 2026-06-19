@@ -15,15 +15,34 @@ import (
 )
 
 // summaryPromptVersion identifies the prompt-template revision recorded on each
-// Summary. Defined once so the request builder and the parsed response can't
-// drift apart.
-const summaryPromptVersion = "summary.v1"
+// Summary. Bumped to v2 for the @S1-token + two-pass (extract → verify →
+// refine/gap) pipeline.
+const summaryPromptVersion = "summary.v2"
+
+// defaults for the generation request.
+const (
+	defaultModelID     = "google/gemini-3.1-flash-preview"
+	defaultTemperature = 0.1
+	defaultMaxTokens   = 8000
+)
 
 type OpenRouterAdapter struct {
 	BaseURL string
 	APIKey  string
 	ModelID string
 	HTTP    HTTPDoer
+
+	// Temperature overrides the default extraction temperature (0.1) when set.
+	Temperature *float64
+	// MaxTokens caps the response; 0 uses defaultMaxTokens.
+	MaxTokens int
+
+	// Privacy guards map onto OpenRouter's `provider` routing block. They are
+	// set from config (default ON) so transcripts only reach privacy-respecting
+	// endpoints unless the user relaxes them.
+	ZDR                bool
+	DenyDataCollection bool
+	RequireParameters  bool
 }
 
 type HTTPDoer interface {
@@ -34,130 +53,301 @@ func (a *OpenRouterAdapter) ProviderID() string {
 	return "openrouter"
 }
 
+// Summarize runs the two-pass, evidence-grounded summarization pipeline:
+//
+//  1. extract  — one structured-output call over the whole (token-attributed)
+//     transcript;
+//  2. verify   — deterministic quote grounding (no LLM, free);
+//  3. refine   — one call that does gap analysis, repairs ungrounded quotes,
+//     and prunes hallucinations;
+//  4. verify   — re-score and attach coverage insights.
+//
+// On any provider error the best result obtained so far is returned; the job
+// only fails if the very first call fails.
 func (a *OpenRouterAdapter) Summarize(ctx context.Context, transcript artifacts.Transcript, opts SummarizeOptions) (*artifacts.Summary, error) {
 	if strings.TrimSpace(a.APIKey) == "" {
 		return nil, notoerr.New("provider_config_invalid", "OpenRouter API key is required.", nil)
 	}
-
-	client := a.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
-	}
-
-	baseURL := a.BaseURL
-	if baseURL == "" {
-		baseURL = "https://openrouter.ai/api/v1"
+	if transcript.MeetingID == "" {
+		transcript.MeetingID = opts.MeetingID
 	}
 
 	modelID := a.ModelID
 	if modelID == "" {
-		modelID = "openai/gpt-4.1-mini"
+		modelID = defaultModelID
 	}
 
-	messages := buildSummaryMessages(transcript)
+	builder := prompts.NewPromptBuilder(summaryPromptVersion)
+
+	// Pass 1 — extract.
+	extractContent, err := a.chat(ctx, []prompts.ChatMessage{
+		{Role: "system", Content: builder.SystemPrompt(prompts.SummaryTypeFull)},
+		{Role: "user", Content: transcriptUserMessage(builder, transcript)},
+	})
+	if err != nil {
+		return nil, err
+	}
+	draft := parseSummaryContent(extractContent, opts.MeetingID, modelID)
+	sanitizeEvidence(draft, transcript)
+	artifacts.VerifyAndScore(draft, transcript)
+
+	best := draft
+
+	// Pass 2 — refine + gap analysis. Best-effort: a failure here keeps the draft.
+	refineUser := refineUserMessage(builder, transcript, draft)
+	if refineContent, rerr := a.chat(ctx, []prompts.ChatMessage{
+		{Role: "system", Content: builder.RefineSystemPrompt()},
+		{Role: "user", Content: refineUser},
+	}); rerr == nil {
+		refined := parseSummaryContent(refineContent, opts.MeetingID, modelID)
+		sanitizeEvidence(refined, transcript)
+		artifacts.VerifyAndScore(refined, transcript)
+		// Adopt the refined pass unless it regressed the count of grounded
+		// items (which would mean the reviewer dropped real, verified content).
+		if refined.Coverage == nil || best.Coverage == nil || refined.Coverage.ItemsGrounded >= best.Coverage.ItemsGrounded {
+			best = refined
+		}
+	}
+
+	best.MeetingID = opts.MeetingID
+	best.Model = artifacts.SummaryModel{Provider: "openrouter", ModelID: modelID, PromptVersion: summaryPromptVersion}
+
+	if err := artifacts.ValidateSummary(*best, transcript); err != nil {
+		return nil, notoerr.Wrap("summary_invalid", "OpenRouter summary failed validation.", err)
+	}
+	return best, nil
+}
+
+// transcriptUserMessage renders the token-attributed transcript (no embedded
+// system prompt — that travels as the system message). Build only fails on a
+// missing meeting_id, which Summarize has already populated.
+func transcriptUserMessage(b *prompts.PromptBuilder, transcript artifacts.Transcript) string {
+	msg, err := b.Build("", transcript)
+	if err != nil {
+		return "## Meeting Transcript\n(unavailable)"
+	}
+	return msg
+}
+
+// refineUserMessage gives the reviewer the transcript, the draft as JSON, and an
+// explicit list of items whose quotes did not verify, so it can target repairs.
+func refineUserMessage(b *prompts.PromptBuilder, transcript artifacts.Transcript, draft *artifacts.Summary) string {
+	var sb strings.Builder
+	sb.WriteString(transcriptUserMessage(b, transcript))
+	sb.WriteString("\n\n## Draft summary (JSON)\n")
+	if raw, err := json.Marshal(draftView(draft)); err == nil {
+		sb.Write(raw)
+	}
+	if unverified := unverifiedItems(draft); len(unverified) > 0 {
+		sb.WriteString("\n\n## Unverified items (quote not found verbatim in cited segment — fix or remove)\n")
+		for _, u := range unverified {
+			sb.WriteString("- ")
+			sb.WriteString(u)
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// draftView is the model-facing projection of the draft (drops internal scoring
+// fields so the reviewer sees the same shape it must return).
+func draftView(s *artifacts.Summary) map[string]any {
+	return map[string]any{
+		"short_summary":  s.ShortSummary,
+		"decisions":      s.Decisions,
+		"action_items":   s.ActionItems,
+		"risks":          s.Risks,
+		"open_questions": s.OpenQuestions,
+	}
+}
+
+func unverifiedItems(s *artifacts.Summary) []string {
+	var out []string
+	collect := func(kind string, items []artifacts.SummaryItem) {
+		for _, it := range items {
+			if it.Confidence == 0 {
+				out = append(out, kind+": "+it.Text)
+			}
+		}
+	}
+	collect("decision", s.Decisions)
+	collect("risk", s.Risks)
+	collect("open_question", s.OpenQuestions)
+	for _, it := range s.ActionItems {
+		if it.Confidence == 0 {
+			out = append(out, "action_item: "+it.Text)
+		}
+	}
+	return out
+}
+
+// chat issues a single chat-completions request with structured output and the
+// privacy provider-routing block, retrying transient failures with backoff.
+// Returns the assistant message content (code fences stripped).
+func (a *OpenRouterAdapter) chat(ctx context.Context, messages []prompts.ChatMessage) (string, error) {
+	client := a.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 90 * time.Second}
+	}
+	baseURL := a.BaseURL
+	if baseURL == "" {
+		baseURL = "https://openrouter.ai/api/v1"
+	}
+	modelID := a.ModelID
+	if modelID == "" {
+		modelID = defaultModelID
+	}
+	temperature := defaultTemperature
+	if a.Temperature != nil {
+		temperature = *a.Temperature
+	}
+	maxTokens := a.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = defaultMaxTokens
+	}
 
 	payload := map[string]any{
-		"model":    modelID,
-		"messages": messages,
+		"model":           modelID,
+		"messages":        messages,
+		"temperature":     temperature,
+		"max_tokens":      maxTokens,
+		"response_format": a.responseFormat(),
 	}
-	if opts.Temperature != nil {
-		payload["temperature"] = *opts.Temperature
+	if provider := a.providerRouting(); len(provider) > 0 {
+		payload["provider"] = provider
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, notoerr.Wrap("provider_request_failed", "Could not marshal OpenRouter request body.", err)
+		return "", notoerr.Wrap("provider_request_failed", "Could not marshal OpenRouter request body.", err)
 	}
 	if len(body) > 1024*1024 {
-		return nil, notoerr.New("provider_request_too_large", "OpenRouter request body exceeds 1MB limit.", nil)
+		return "", notoerr.New("provider_request_too_large", "OpenRouter request body exceeds 1MB limit.", nil)
 	}
+
 	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, notoerr.Wrap("provider_request_failed", "Could not create OpenRouter request.", err)
+		return "", notoerr.Wrap("provider_request_failed", "Could not create OpenRouter request.", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+a.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("HTTP-Referer", "https://github.com/lukasstrickler/noto")
 	req.Header.Set("X-Title", "Noto")
 
-	var resp *http.Response
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			req.Body = io.NopCloser(bytes.NewReader(body))
 		}
-		resp, err = client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
-			return nil, notoerr.Wrap("retryable_remote_error", "OpenRouter request failed.", err)
+			return "", notoerr.Wrap("retryable_remote_error", "OpenRouter request failed.", err)
 		}
 
-		respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		respBytes, rerr := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 		resp.Body.Close()
-		if err != nil {
-			return nil, notoerr.Wrap("provider_response_invalid", "Could not read OpenRouter response.", err)
+		if rerr != nil {
+			return "", notoerr.Wrap("provider_response_invalid", "Could not read OpenRouter response.", rerr)
 		}
 
 		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
-			if err := sleepWithContext(ctx, time.Duration(1<<attempt)*time.Second); err != nil {
-				return nil, notoerr.Wrap("provider_cancelled", "OpenRouter request cancelled during backoff.", err)
+			if werr := sleepWithContext(ctx, time.Duration(1<<attempt)*time.Second); werr != nil {
+				return "", notoerr.Wrap("provider_cancelled", "OpenRouter request cancelled during backoff.", werr)
 			}
 			continue
 		}
-
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-				return nil, notoerr.New("provider_client_error", "OpenRouter summarization failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
+				return "", notoerr.New("provider_client_error", "OpenRouter summarization failed.", map[string]any{"status_code": resp.StatusCode, "body": string(respBytes)})
 			}
-			if err := sleepWithContext(ctx, time.Duration(1<<attempt)*time.Second); err != nil {
-				return nil, notoerr.Wrap("provider_cancelled", "OpenRouter request cancelled during backoff.", err)
+			if werr := sleepWithContext(ctx, time.Duration(1<<attempt)*time.Second); werr != nil {
+				return "", notoerr.Wrap("provider_cancelled", "OpenRouter request cancelled during backoff.", werr)
 			}
 			continue
 		}
-
-		return parseOpenRouterResponse(respBytes, transcript, opts.MeetingID, modelID)
+		return extractContent(respBytes)
 	}
-
-	return nil, notoerr.New("provider_server_error", "OpenRouter service unavailable after retries.", nil)
+	return "", notoerr.New("provider_server_error", "OpenRouter service unavailable after retries.", nil)
 }
 
-func buildSummaryMessages(transcript artifacts.Transcript) []prompts.ChatMessage {
-	var textBuilder strings.Builder
-	totalChars := 0
-	maxChars := 100_000
-	maxSegments := 150
-
-	for i, seg := range transcript.Segments {
-		if i >= maxSegments || totalChars > maxChars {
-			textBuilder.WriteString("... (truncated)")
-			break
+// responseFormat asks for JSON. With RequireParameters on, OpenRouter only
+// routes to providers that honor a strict json_schema, so we use it; otherwise
+// we fall back to the broadly-supported json_object to still nudge valid JSON.
+func (a *OpenRouterAdapter) responseFormat() map[string]any {
+	if a.RequireParameters {
+		return map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "meeting_summary",
+				"strict": false,
+				"schema": summaryJSONSchema(),
+			},
 		}
-		speaker := "Unknown"
-		for _, sp := range transcript.Speakers {
-			if sp.ID == seg.SpeakerID {
-				speaker = sp.Label
-				break
-			}
-		}
-		segText := "[" + seg.ID + "] " + speaker + ": " + seg.Text + "\n"
-		textBuilder.WriteString(segText)
-		totalChars += len(segText)
 	}
+	return map[string]any{"type": "json_object"}
+}
 
-	// The system prompt comes from the versioned, few-shot/chain-of-thought
-	// prompt builder (single source of truth). The user message keeps the
-	// truncating serialization above so oversized transcripts stay under the
-	// 1MB request guard.
-	systemPrompt := prompts.NewPromptBuilder(summaryPromptVersion).SystemPrompt(prompts.SummaryTypeFull)
-	userContent := "Please summarize this meeting transcript:\n\n" + textBuilder.String()
+// providerRouting builds OpenRouter's `provider` block from the privacy guards.
+func (a *OpenRouterAdapter) providerRouting() map[string]any {
+	p := map[string]any{}
+	if a.ZDR {
+		p["zdr"] = true
+	}
+	if a.DenyDataCollection {
+		p["data_collection"] = "deny"
+	}
+	if a.RequireParameters {
+		p["require_parameters"] = true
+	}
+	return p
+}
 
-	return []prompts.ChatMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userContent},
+func summaryJSONSchema() map[string]any {
+	evidence := map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"segment_id": map[string]any{"type": "string"},
+				"quote":      map[string]any{"type": "string"},
+			},
+		},
+	}
+	item := map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text":        map[string]any{"type": "string"},
+				"speaker_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"evidence":    evidence,
+			},
+		},
+	}
+	action := map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text":     map[string]any{"type": "string"},
+				"owner":    map[string]any{"type": "string"},
+				"due_at":   map[string]any{"type": "string"},
+				"evidence": evidence,
+			},
+		},
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"short_summary":  map[string]any{"type": "string"},
+			"decisions":      item,
+			"action_items":   action,
+			"risks":          item,
+			"open_questions": item,
+		},
 	}
 }
 
-// sleepWithContext waits for d or until ctx is cancelled, whichever comes
-// first, so retry backoff stays responsive to job cancellation.
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -169,7 +359,9 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetingID string, modelID string) (*artifacts.Summary, error) {
+// extractContent pulls the assistant message text out of a chat-completions
+// response and strips any markdown code fences a model wrapped it in.
+func extractContent(raw []byte) (string, error) {
 	var resp struct {
 		Choices []struct {
 			Message struct {
@@ -178,140 +370,148 @@ func parseOpenRouterResponse(raw []byte, transcript artifacts.Transcript, meetin
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, notoerr.Wrap("provider_response_invalid", "Could not parse OpenRouter response.", err)
+		return "", notoerr.Wrap("provider_response_invalid", "Could not parse OpenRouter response.", err)
 	}
-
 	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
-		return nil, notoerr.New("provider_response_invalid", "OpenRouter response did not include message content.", nil)
+		return "", notoerr.New("provider_response_invalid", "OpenRouter response did not include message content.", nil)
 	}
+	return stripCodeFences(strings.TrimSpace(resp.Choices[0].Message.Content)), nil
+}
 
-	content := resp.Choices[0].Message.Content
-	content = strings.Trim(content, " \n")
+// stripCodeFences removes a leading ```json / ``` fence and trailing ``` so a
+// fenced JSON object parses. Leaves already-bare content untouched.
+func stripCodeFences(s string) string {
+	if !strings.HasPrefix(s, "```") {
+		return s
+	}
+	s = strings.TrimPrefix(s, "```")
+	// Drop an optional language tag on the first line (e.g. "json").
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		first := strings.TrimSpace(s[:i])
+		if first == "" || !strings.ContainsAny(first, "{[") {
+			s = s[i+1:]
+		}
+	}
+	s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+	return strings.TrimSpace(s)
+}
 
+// parseSummaryContent unmarshals model JSON into a Summary. If the content is
+// not valid JSON it degrades gracefully, using the raw text as the short
+// summary with no structured items (so a misbehaving model never loses the
+// whole job). Validation/grounding happen in the caller.
+func parseSummaryContent(content, meetingID, modelID string) *artifacts.Summary {
 	var parsed struct {
 		ShortSummary string `json:"short_summary"`
 		Decisions    []struct {
 			Text       string   `json:"text"`
 			SpeakerIDs []string `json:"speaker_ids"`
-			Evidence   []struct {
-				SegmentID string `json:"segment_id"`
-				Quote     string `json:"quote"`
-			} `json:"evidence"`
+			Evidence   []rawEvi `json:"evidence"`
 		} `json:"decisions"`
 		ActionItems []struct {
-			Text     string `json:"text"`
-			Owner    string `json:"owner"`
-			DueAt    string `json:"due_at"`
-			Evidence []struct {
-				SegmentID string `json:"segment_id"`
-				Quote     string `json:"quote"`
-			} `json:"evidence"`
+			Text     string   `json:"text"`
+			Owner    string   `json:"owner"`
+			DueAt    string   `json:"due_at"`
+			Evidence []rawEvi `json:"evidence"`
 		} `json:"action_items"`
 		Risks []struct {
-			Text     string `json:"text"`
-			Evidence []struct {
-				SegmentID string `json:"segment_id"`
-				Quote     string `json:"quote"`
-			} `json:"evidence"`
+			Text       string   `json:"text"`
+			SpeakerIDs []string `json:"speaker_ids"`
+			Evidence   []rawEvi `json:"evidence"`
 		} `json:"risks"`
 		OpenQuestions []struct {
-			Text     string `json:"text"`
-			Evidence []struct {
-				SegmentID string `json:"segment_id"`
-				Quote     string `json:"quote"`
-			} `json:"evidence"`
+			Text       string   `json:"text"`
+			SpeakerIDs []string `json:"speaker_ids"`
+			Evidence   []rawEvi `json:"evidence"`
 		} `json:"open_questions"`
-	}
-
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		// The model ignored the JSON instruction and returned prose. Rather
-		// than failing the whole summarization, fall back to using the raw
-		// content as the short summary with no structured items. A failed
-		// Unmarshal of non-JSON content leaves parsed at its zero value.
-		parsed.ShortSummary = content
-	}
-
-	decisions := make([]artifacts.SummaryItem, len(parsed.Decisions))
-	for i, d := range parsed.Decisions {
-		evidence := make([]artifacts.Evidence, len(d.Evidence))
-		for j, e := range d.Evidence {
-			evidence[j] = artifacts.Evidence{
-				SegmentID: e.SegmentID,
-				Quote:     e.Quote,
-			}
-		}
-		decisions[i] = artifacts.SummaryItem{
-			Text:       d.Text,
-			SpeakerIDs: d.SpeakerIDs,
-			Evidence:   evidence,
-		}
-	}
-
-	actionItems := make([]artifacts.ActionItem, len(parsed.ActionItems))
-	for i, ai := range parsed.ActionItems {
-		evidence := make([]artifacts.Evidence, len(ai.Evidence))
-		for j, e := range ai.Evidence {
-			evidence[j] = artifacts.Evidence{
-				SegmentID: e.SegmentID,
-				Quote:     e.Quote,
-			}
-		}
-		actionItems[i] = artifacts.ActionItem{
-			Text:     ai.Text,
-			Owner:    ai.Owner,
-			DueAt:    ai.DueAt,
-			Evidence: evidence,
-		}
-	}
-
-	risks := make([]artifacts.SummaryItem, len(parsed.Risks))
-	for i, r := range parsed.Risks {
-		evidence := make([]artifacts.Evidence, len(r.Evidence))
-		for j, e := range r.Evidence {
-			evidence[j] = artifacts.Evidence{
-				SegmentID: e.SegmentID,
-				Quote:     e.Quote,
-			}
-		}
-		risks[i] = artifacts.SummaryItem{
-			Text:     r.Text,
-			Evidence: evidence,
-		}
-	}
-
-	openQuestions := make([]artifacts.SummaryItem, len(parsed.OpenQuestions))
-	for i, oq := range parsed.OpenQuestions {
-		evidence := make([]artifacts.Evidence, len(oq.Evidence))
-		for j, e := range oq.Evidence {
-			evidence[j] = artifacts.Evidence{
-				SegmentID: e.SegmentID,
-				Quote:     e.Quote,
-			}
-		}
-		openQuestions[i] = artifacts.SummaryItem{
-			Text:     oq.Text,
-			Evidence: evidence,
-		}
 	}
 
 	summary := &artifacts.Summary{
 		SchemaVersion: "summary.v1",
 		MeetingID:     meetingID,
-		ShortSummary:  parsed.ShortSummary,
-		Decisions:     decisions,
-		ActionItems:   actionItems,
-		OpenQuestions: openQuestions,
-		Risks:         risks,
-		Model: artifacts.SummaryModel{
-			Provider:      "openrouter",
-			ModelID:       modelID,
-			PromptVersion: summaryPromptVersion,
-		},
+		Model:         artifacts.SummaryModel{Provider: "openrouter", ModelID: modelID, PromptVersion: summaryPromptVersion},
 	}
 
-	if err := artifacts.ValidateSummary(*summary, transcript); err != nil {
-		return nil, notoerr.Wrap("summary_invalid", "OpenRouter summary failed validation.", err)
+	if err := json.Unmarshal([]byte(extractJSONObject(content)), &parsed); err != nil {
+		summary.ShortSummary = content
+		return summary
 	}
 
-	return summary, nil
+	summary.ShortSummary = parsed.ShortSummary
+	for _, d := range parsed.Decisions {
+		summary.Decisions = append(summary.Decisions, artifacts.SummaryItem{Text: d.Text, SpeakerIDs: d.SpeakerIDs, Evidence: toEvidence(d.Evidence)})
+	}
+	for _, ai := range parsed.ActionItems {
+		summary.ActionItems = append(summary.ActionItems, artifacts.ActionItem{Text: ai.Text, Owner: ai.Owner, DueAt: ai.DueAt, Evidence: toEvidence(ai.Evidence)})
+	}
+	for _, r := range parsed.Risks {
+		summary.Risks = append(summary.Risks, artifacts.SummaryItem{Text: r.Text, SpeakerIDs: r.SpeakerIDs, Evidence: toEvidence(r.Evidence)})
+	}
+	for _, q := range parsed.OpenQuestions {
+		summary.OpenQuestions = append(summary.OpenQuestions, artifacts.SummaryItem{Text: q.Text, SpeakerIDs: q.SpeakerIDs, Evidence: toEvidence(q.Evidence)})
+	}
+	return summary
+}
+
+type rawEvi struct {
+	SegmentID string `json:"segment_id"`
+	Quote     string `json:"quote"`
+}
+
+func toEvidence(in []rawEvi) []artifacts.Evidence {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]artifacts.Evidence, len(in))
+	for i, e := range in {
+		out[i] = artifacts.Evidence{SegmentID: e.SegmentID, Quote: e.Quote}
+	}
+	return out
+}
+
+// extractJSONObject returns the substring from the first '{' to the last '}',
+// salvaging a JSON object a model wrapped in stray prose. Returns the input
+// unchanged when no braces are found.
+func extractJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	end := strings.LastIndexByte(s, '}')
+	if start < 0 || end < start {
+		return s
+	}
+	return s[start : end+1]
+}
+
+// sanitizeEvidence drops evidence whose segment_id is empty or not present in
+// the transcript, so a model citing a non-existent segment can't fail
+// ValidateSummary for the whole job. Ungrounded items survive (with empty
+// evidence) and are surfaced as low-confidence by VerifyAndScore.
+func sanitizeEvidence(summary *artifacts.Summary, transcript artifacts.Transcript) {
+	valid := make(map[string]bool, len(transcript.Segments))
+	for _, seg := range transcript.Segments {
+		valid[seg.ID] = true
+	}
+	clean := func(ev []artifacts.Evidence) []artifacts.Evidence {
+		out := ev[:0]
+		for _, e := range ev {
+			if e.SegmentID != "" && valid[e.SegmentID] {
+				out = append(out, e)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+	for i := range summary.Decisions {
+		summary.Decisions[i].Evidence = clean(summary.Decisions[i].Evidence)
+	}
+	for i := range summary.ActionItems {
+		summary.ActionItems[i].Evidence = clean(summary.ActionItems[i].Evidence)
+	}
+	for i := range summary.Risks {
+		summary.Risks[i].Evidence = clean(summary.Risks[i].Evidence)
+	}
+	for i := range summary.OpenQuestions {
+		summary.OpenQuestions[i].Evidence = clean(summary.OpenQuestions[i].Evidence)
+	}
 }

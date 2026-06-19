@@ -2,7 +2,6 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
-	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
 
 // runQueryCmd kicks an FTS request (or clears the matched list if the
@@ -172,14 +171,4 @@ func (m *dashboardScreen) currentMeetingID() string {
 		return m.all[m.cursor].ID
 	}
 	return ""
-}
-
-func (m *dashboardScreen) currentMatchedRow() (notoapi.MeetingHits, bool) {
-	if m.query == "" {
-		return notoapi.MeetingHits{}, false
-	}
-	if m.cursor < 0 || m.cursor >= len(m.matched) {
-		return notoapi.MeetingHits{}, false
-	}
-	return m.matched[m.cursor], true
 }

@@ -35,10 +35,16 @@ func BreakpointFor(width int) Breakpoint {
 type Panel struct {
 	Title    string
 	Subtitle string
-	Width    int
-	Height   int
-	Focused  bool
-	Body     string
+	// Right is an opt-in, PRE-STYLED right-aligned header segment, rendered
+	// as-is (NOT re-wrapped in Muted the way Subtitle is) so a caller can place
+	// its own colored content there — e.g. a meeting's status flag whose colour
+	// the Muted wrap would otherwise clobber. When set it owns the right-aligned
+	// slot (in place of Subtitle); empty leaves the header byte-for-byte as before.
+	Right   string
+	Width   int
+	Height  int
+	Focused bool
+	Body    string
 }
 
 // Render draws the panel. Width/Height include the border; Body is
@@ -56,7 +62,14 @@ func (p Panel) Render(s theme.Styles) string {
 	header := ""
 	if p.Title != "" {
 		title := s.PanelTitle.Render(p.Title)
-		if p.Subtitle != "" {
+		if p.Right != "" {
+			// Pre-styled segment: place it as-is at the far right.
+			pad := innerW - lipgloss.Width(title) - lipgloss.Width(p.Right)
+			if pad < 1 {
+				pad = 1
+			}
+			title += strings.Repeat(" ", pad) + p.Right
+		} else if p.Subtitle != "" {
 			pad := innerW - lipgloss.Width(title) - lipgloss.Width(p.Subtitle)
 			if pad < 1 {
 				pad = 1
@@ -92,6 +105,20 @@ func (p Panel) Render(s theme.Styles) string {
 		}
 	}
 	return style.Width(p.Width).Height(boxH).MaxWidth(p.Width).MaxHeight(boxH).Render(rendered)
+}
+
+// BodyOffset returns the (x, y) offset from a panel's top-left corner to the
+// first cell of its Body — past the border and padding, and past the title +
+// rule rows when a Title is set. Use it to map a body-relative position (e.g. a
+// clicked list row or tab) back to an absolute screen cell for hit-testing, so
+// the math stays in lock-step with Render instead of being guessed at the call
+// site.
+func (p Panel) BodyOffset() (x, y int) {
+	x, y = 2, 1 // left border + left padding ; top border
+	if p.Title != "" {
+		y += 2 // title row + rule row (see Render)
+	}
+	return x, y
 }
 
 // HStack lays children side-by-side with a single-cell gap. The gap here
@@ -143,6 +170,30 @@ func FlexMin(weight, min int) Slot {
 		min = 0
 	}
 	return Slot{weight: weight, min: min}
+}
+
+// SidebarSplit divides total cells into a [sidebar, content] pair separated by
+// the usual 1-cell gap, the way every two-pane screen (dashboard, people,
+// config) lays out its left/right columns. pref is the desired sidebar width in
+// cells; it is clamped so the sidebar never drops below minSidebar and the
+// content never drops below minContent. The two returned widths sum to total-1.
+//
+// It exists so the clamp logic lives in one tested place instead of being
+// re-derived (and drifting) in each screen's view; the screens pass their
+// shared, persisted sidebar preference straight through.
+func SidebarSplit(total, pref, minSidebar, minContent int) (sidebar, content int) {
+	maxSidebar := total - 1 - minContent
+	if maxSidebar < minSidebar {
+		maxSidebar = minSidebar
+	}
+	if pref < minSidebar {
+		pref = minSidebar
+	}
+	if pref > maxSidebar {
+		pref = maxSidebar
+	}
+	cols := Split(total, 1, Fixed(pref), FlexMin(1, minContent))
+	return cols[0], cols[1]
 }
 
 // Split divides total cells among slots, reserving gap cells between each

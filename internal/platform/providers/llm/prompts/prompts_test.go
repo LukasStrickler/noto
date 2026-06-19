@@ -34,14 +34,44 @@ func TestPromptBuilder_Build(t *testing.T) {
 	if !strings.Contains(prompt, "mtg_test_001") {
 		t.Error("Build() should include meeting ID")
 	}
-	if !strings.Contains(prompt, "Speaker 0") {
-		t.Error("Build() should include speaker labels")
+	if !strings.Contains(prompt, "@S1") {
+		t.Error("Build() should refer to speakers by their @S<n> token")
 	}
 	if !strings.Contains(prompt, "seg_000001") {
 		t.Error("Build() should include segment IDs")
 	}
 	if !strings.Contains(prompt, "Let's start with the roadmap") {
 		t.Error("Build() should include segment text")
+	}
+}
+
+// The model must only ever see the anonymous per-meeting token — never a real
+// person's name. Names are resolved back into the UI locally, so a display name
+// (or a linked profile name) must not appear anywhere in the prompt.
+func TestPromptBuilder_Build_OmitsRealNames(t *testing.T) {
+	builder := NewPromptBuilder("test.v1")
+	transcript := artifacts.Transcript{
+		SchemaVersion: "transcript.v1",
+		MeetingID:     "mtg_test_002",
+		Speakers: []artifacts.Speaker{
+			{ID: "spk_0", Label: "Speaker A", Origin: "local_speaker", DisplayName: "Alice Nguyen"},
+			{ID: "spk_1", Label: "Speaker B", Origin: "participant", DisplayName: "Bob Martins"},
+		},
+		Segments: []artifacts.Segment{
+			{ID: "seg_000001", SpeakerID: "spk_0", StartSeconds: 0, EndSeconds: 5, Text: "Let's lock the plan."},
+		},
+	}
+	prompt, err := builder.Build("You are a meeting analyst.", transcript)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, name := range []string{"Alice Nguyen", "Bob Martins", "Alice", "Bob"} {
+		if strings.Contains(prompt, name) {
+			t.Errorf("prompt leaked a real name %q — names must stay local:\n%s", name, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "@S1") || !strings.Contains(prompt, "@S2") {
+		t.Errorf("prompt should refer to speakers by their fixed @S<n> tokens; got:\n%s", prompt)
 	}
 }
 
@@ -131,8 +161,8 @@ func TestPromptBuilder_DecisionPrompt(t *testing.T) {
 	if !strings.Contains(req.Messages[0].Content, "decisions") {
 		t.Error("Decision prompt should mention decisions")
 	}
-	if !strings.Contains(req.Messages[0].Content, "spk_0") || !strings.Contains(req.Messages[0].Content, "spk_1") {
-		t.Error("Decision prompt should include few-shot examples with speaker IDs")
+	if !strings.Contains(req.Messages[0].Content, "@S1") || !strings.Contains(req.Messages[0].Content, "@S2") {
+		t.Error("Decision prompt should include few-shot examples using @S<n> speaker tokens")
 	}
 }
 
@@ -161,8 +191,8 @@ func TestPromptBuilder_ActionItemPrompt(t *testing.T) {
 		t.Fatalf("BuildSummaryRequest() error = %v", err)
 	}
 
-	if !strings.Contains(req.Messages[0].Content, "@person") {
-		t.Error("Action item prompt should mention @person format")
+	if !strings.Contains(req.Messages[0].Content, "@S1") {
+		t.Error("Action item prompt should instruct using @S<n> speaker tokens for owners")
 	}
 	if !strings.Contains(req.Messages[0].Content, "action_items") {
 		t.Error("Action item prompt should mention action items")

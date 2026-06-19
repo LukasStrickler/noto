@@ -20,10 +20,10 @@ func TestDefaultRegistry_ReturnsExpectedProviders(t *testing.T) {
 	sort.Strings(ids)
 
 	expected := []string{
-		"assemblyai",
 		"fake-llm",
 		"fake-stt",
 		"openrouter",
+		"parakeet-local",
 	}
 
 	if len(ids) != len(expected) {
@@ -47,7 +47,7 @@ func TestDefaultRegistry_ContainsSpeechProviders(t *testing.T) {
 
 	// fake-stt has ProviderKindFake, not speech, so it's excluded.
 	expectedSpeech := []string{
-		"assemblyai",
+		"parakeet-local",
 	}
 
 	if len(speechIDs) != len(expectedSpeech) {
@@ -93,7 +93,7 @@ func TestDefaultRegistry_ContainsExpectedLLMProviders(t *testing.T) {
 func TestDefaultRegistry_GetExistingProvider(t *testing.T) {
 	reg := DefaultRegistry()
 
-	providers := []string{"assemblyai", "openrouter", "fake-stt"}
+	providers := []string{"parakeet-local", "openrouter", "fake-stt"}
 	for _, id := range providers {
 		suite, ok := reg.Get(id)
 		if !ok {
@@ -120,7 +120,7 @@ func TestDefaultRegistry_GetMissingProvider(t *testing.T) {
 func TestDefaultRegistry_MustGetExistingProvider(t *testing.T) {
 	reg := DefaultRegistry()
 
-	for _, id := range []string{"assemblyai", "openrouter"} {
+	for _, id := range []string{"parakeet-local", "openrouter"} {
 		suite, err := reg.MustGet(id)
 		if err != nil {
 			t.Errorf("MustGet(%q) returned error: %v", id, err)

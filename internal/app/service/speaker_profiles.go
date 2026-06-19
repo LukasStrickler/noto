@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lukasstrickler/noto/internal/core/speakers"
 	"github.com/lukasstrickler/noto/internal/platform/speakerstore"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
@@ -17,6 +18,27 @@ func (s *Service) ListSpeakerProfiles(_ context.Context) ([]notoapi.SpeakerProfi
 	return s.profilesToAPI(profiles), nil
 }
 
+// countPeopleToReview counts profiles that carry at least one unconfirmed
+// mapping (auto-created/linked but not yet reviewed) — the People nav pill's
+// attention signal. Person-centric, so it stays distinct from the meeting-side
+// CountUnresolved that drives SpeakersToID.
+func (s *Service) countPeopleToReview() int {
+	if s.speakerProfiles == nil {
+		return 0
+	}
+	profs, err := s.ListSpeakerProfiles(context.Background())
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, p := range profs {
+		if p.UnconfirmedMeetings > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Service) GetSpeakerProfile(_ context.Context, id string) (notoapi.SpeakerProfile, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return notoapi.SpeakerProfile{}, notoapi.NewError(notoapi.CodeInvalidRequest, "profile id is not a valid UUID", map[string]any{"id": id})
@@ -25,7 +47,30 @@ func (s *Service) GetSpeakerProfile(_ context.Context, id string) (notoapi.Speak
 	if err != nil {
 		return notoapi.SpeakerProfile{}, notoapi.NewError(notoapi.CodeNotFound, "speaker profile not found", map[string]any{"id": id})
 	}
-	return s.profileToAPI(p), nil
+	api := s.profileToAPI(p)
+	api.Meetings = s.profileMeetings(id)
+	return api, nil
+}
+
+// profileMeetings lists the meetings a profile appears in (newest first), with
+// titles resolved from the meeting repo — for the People screen detail.
+func (s *Service) profileMeetings(profileID string) []notoapi.ProfileMeetingRef {
+	maps, err := s.meetingMappings.ListByProfile(context.Background(), profileID)
+	if err != nil || len(maps) == 0 {
+		return nil
+	}
+	out := make([]notoapi.ProfileMeetingRef, 0, len(maps))
+	for _, m := range maps {
+		ref := notoapi.ProfileMeetingRef{MeetingID: m.MeetingID, MatchStatus: m.MatchStatus}
+		if mid, perr := uuid.Parse(m.MeetingID); perr == nil {
+			if sm, gerr := s.repo.GetMeeting(context.Background(), mid); gerr == nil {
+				ref.Title = sm.Title
+				ref.CreatedAt = sm.CreatedAt
+			}
+		}
+		out = append(out, ref)
+	}
+	return out
 }
 
 func (s *Service) CreateSpeakerProfile(_ context.Context, req notoapi.CreateSpeakerProfileRequest) (notoapi.SpeakerProfile, error) {
@@ -34,18 +79,57 @@ func (s *Service) CreateSpeakerProfile(_ context.Context, req notoapi.CreateSpea
 	}
 	now := time.Now()
 	p := speakerstore.SpeakerProfile{
-		ID:          uuid.New().String(),
-		DisplayName: req.DisplayName,
-		Email:       req.Email,
-		Pronouns:    req.Pronouns,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		LastSeenAt:  nil,
+		ID:           uuid.New().String(),
+		DisplayName:  req.DisplayName,
+		Email:        req.Email,
+		Pronouns:     req.Pronouns,
+		Notes:        req.Notes,
+		Affiliations: affiliationsFromAPI(req.Affiliations),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		LastSeenAt:   nil,
+	}
+	// Seed the voiceprint from a meeting-speaker when assigning "+ new person",
+	// and link that mapping to the freshly-created profile in one step.
+	if req.FromMeetingID != "" && req.FromSpeakerID != "" {
+		if maps, err := s.meetingMappings.ListByMeeting(context.Background(), req.FromMeetingID); err == nil {
+			for _, m := range maps {
+				if m.MeetingSpeakerID == req.FromSpeakerID && len(m.EmbeddingVector) > 0 {
+					p.EmbeddingVector = m.EmbeddingVector
+					p.EmbeddingDim = m.EmbeddingDim
+					p.EmbeddingModel = s.embedderModelID()
+					p.LastSeenAt = &now
+					break
+				}
+			}
+		}
 	}
 	if err := s.speakerProfiles.Create(context.Background(), p); err != nil {
 		return notoapi.SpeakerProfile{}, err
 	}
+	if req.FromMeetingID != "" && req.FromSpeakerID != "" {
+		_ = s.assignMeetingSpeaker(req.FromMeetingID, req.FromSpeakerID, p.ID)
+	}
+	s.emitStatusBar() // a new/linked person changes the "to identify" count
 	return s.profileToAPI(p), nil
+}
+
+// assignMeetingSpeaker links a meeting speaker to a profile and marks it manual.
+func (s *Service) assignMeetingSpeaker(meetingID, speakerID, profileID string) error {
+	maps, err := s.meetingMappings.ListByMeeting(context.Background(), meetingID)
+	if err != nil {
+		return err
+	}
+	for _, m := range maps {
+		if m.MeetingSpeakerID == speakerID {
+			pid := profileID
+			m.ProfileID = &pid
+			m.MatchStatus = "manual"
+			m.UpdatedAt = time.Now()
+			return s.meetingMappings.Upsert(context.Background(), m)
+		}
+	}
+	return nil
 }
 
 func (s *Service) PatchSpeakerProfile(_ context.Context, id string, patch notoapi.SpeakerProfilePatch) (notoapi.SpeakerProfile, error) {
@@ -65,6 +149,12 @@ func (s *Service) PatchSpeakerProfile(_ context.Context, id string, patch notoap
 	if patch.Pronouns != nil {
 		p.Pronouns = *patch.Pronouns
 	}
+	if patch.Notes != nil {
+		p.Notes = *patch.Notes
+	}
+	if patch.Affiliations != nil {
+		p.Affiliations = affiliationsFromAPI(*patch.Affiliations)
+	}
 	p.UpdatedAt = time.Now()
 	if err := s.speakerProfiles.Update(context.Background(), p); err != nil {
 		return notoapi.SpeakerProfile{}, err
@@ -79,6 +169,7 @@ func (s *Service) DeleteSpeakerProfile(_ context.Context, id string) error {
 	if err := s.speakerProfiles.Delete(context.Background(), id); err != nil {
 		return notoapi.NewError(notoapi.CodeNotFound, "speaker profile not found", map[string]any{"id": id})
 	}
+	s.emitStatusBar() // unlinking a person can re-open speakers as unresolved
 	return nil
 }
 
@@ -109,12 +200,47 @@ func (s *Service) MergeSpeakerProfiles(_ context.Context, targetID, sourceID str
 	if target.Pronouns == "" && source.Pronouns != "" {
 		target.Pronouns = source.Pronouns
 	}
+	if target.Notes == "" && source.Notes != "" {
+		target.Notes = source.Notes
+	}
+	target.Affiliations = mergeAffiliations(target.Affiliations, source.Affiliations)
+	// Combine voiceprints so the surviving profile represents both enrollments.
+	if len(source.EmbeddingVector) > 0 {
+		if len(target.EmbeddingVector) == 0 {
+			target.EmbeddingVector = source.EmbeddingVector
+			target.EmbeddingDim = source.EmbeddingDim
+		} else if c, cerr := speakers.Centroid([]speakers.Embedding{target.EmbeddingVector, source.EmbeddingVector}); cerr == nil && len(c) > 0 {
+			target.EmbeddingVector = c
+			target.EmbeddingDim = len(c)
+		}
+	}
 	target.UpdatedAt = time.Now()
 	if err := s.speakerProfiles.Update(context.Background(), target); err != nil {
 		return notoapi.SpeakerProfile{}, err
 	}
+	// Re-point every mapping that referenced source so nothing dangles at the
+	// soon-to-be-deleted profile, then drop source.
+	if err := s.meetingMappings.ReassignProfile(context.Background(), sourceID, targetID); err != nil {
+		return notoapi.SpeakerProfile{}, err
+	}
 	_ = s.speakerProfiles.Delete(context.Background(), sourceID)
+	s.emitStatusBar() // merging folds two people into one — recount unresolved
 	return s.profileToAPI(target), nil
+}
+
+// mergeAffiliations concatenates two affiliation lists, dropping exact dupes.
+func mergeAffiliations(a, b []speakerstore.Affiliation) []speakerstore.Affiliation {
+	seen := map[speakerstore.Affiliation]bool{}
+	var out []speakerstore.Affiliation
+	for _, list := range [][]speakerstore.Affiliation{a, b} {
+		for _, af := range list {
+			if !seen[af] {
+				seen[af] = true
+				out = append(out, af)
+			}
+		}
+	}
+	return out
 }
 
 func (s *Service) GetMeetingSpeakerMappings(_ context.Context, meetingID string) (notoapi.MeetingSpeakerMappings, error) {
@@ -124,7 +250,7 @@ func (s *Service) GetMeetingSpeakerMappings(_ context.Context, meetingID string)
 	}
 	return notoapi.MeetingSpeakerMappings{
 		MeetingID: meetingID,
-		Mappings:  s.mappingsToAPI(mappings),
+		Mappings:  s.enrichMappings(meetingID, mappings),
 	}, nil
 }
 
@@ -158,21 +284,57 @@ func (s *Service) PatchMeetingSpeakerMappings(_ context.Context, meetingID strin
 			return notoapi.MeetingSpeakerMappings{}, notoapi.NewError(notoapi.CodeNotFound, "speaker mapping not found", map[string]any{"meeting_speaker_id": entry.MeetingSpeakerID})
 		}
 	}
+	s.emitStatusBar() // assigning/reassigning a speaker changes the "to identify" count
 	return s.GetMeetingSpeakerMappings(context.Background(), meetingID)
 }
 
 func (s *Service) profileToAPI(p speakerstore.SpeakerProfile) notoapi.SpeakerProfile {
-	return notoapi.SpeakerProfile{
-		ID:             p.ID,
-		DisplayName:    p.DisplayName,
-		Email:          p.Email,
-		Pronouns:       p.Pronouns,
-		EmbeddingDim:   p.EmbeddingDim,
-		EmbeddingModel: p.EmbeddingModel,
-		CreatedAt:      p.CreatedAt,
-		UpdatedAt:      p.UpdatedAt,
-		LastSeenAt:     p.LastSeenAt,
+	count, unconfirmed := 0, 0
+	if maps, err := s.meetingMappings.ListByProfile(context.Background(), p.ID); err == nil {
+		count = len(maps)
+		for _, m := range maps {
+			if m.MatchStatus != "auto" && m.MatchStatus != "manual" {
+				unconfirmed++ // auto-linked but not yet reviewed (e.g. a "new" mint)
+			}
+		}
 	}
+	return notoapi.SpeakerProfile{
+		ID:                  p.ID,
+		DisplayName:         p.DisplayName,
+		Email:               p.Email,
+		Pronouns:            p.Pronouns,
+		Notes:               p.Notes,
+		Affiliations:        affiliationsToAPI(p.Affiliations),
+		EmbeddingDim:        p.EmbeddingDim,
+		EmbeddingModel:      p.EmbeddingModel,
+		MeetingCount:        count,
+		UnconfirmedMeetings: unconfirmed,
+		CreatedAt:           p.CreatedAt,
+		UpdatedAt:           p.UpdatedAt,
+		LastSeenAt:          p.LastSeenAt,
+	}
+}
+
+func affiliationsToAPI(in []speakerstore.Affiliation) []notoapi.Affiliation {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]notoapi.Affiliation, len(in))
+	for i, a := range in {
+		out[i] = notoapi.Affiliation{Context: a.Context, Organization: a.Organization, Email: a.Email}
+	}
+	return out
+}
+
+func affiliationsFromAPI(in []notoapi.Affiliation) []speakerstore.Affiliation {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]speakerstore.Affiliation, len(in))
+	for i, a := range in {
+		out[i] = speakerstore.Affiliation{Context: a.Context, Organization: a.Organization, Email: a.Email}
+	}
+	return out
 }
 
 func (s *Service) profilesToAPI(profiles []speakerstore.SpeakerProfile) []notoapi.SpeakerProfile {

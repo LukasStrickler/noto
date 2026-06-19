@@ -24,5 +24,33 @@
     "sources": null,
     "mic_db": 0,
     "participant_db": 0
+  },
+  "system": {
+    "schema_version": "system.v1",
+    "mode": "local",
+    "hostname": "golden-host",
+    "os": "darwin",
+    "arch": "arm64",
+    "accelerator": "coreml",
+    "accelerator_ok": true,
+    "model_tier": "accurate",
+    "storage_type": "local",
+    "capture_available": true,
+    "version": "golden",
+    "compute": {
+      "speech": {
+        "location": ""
+      },
+      "diarize": {
+        "location": ""
+      },
+      "embed": {
+        "location": ""
+      }
+    },
+    "data_plane": {
+      "location": "",
+      "storage": ""
+    }
   }
 }

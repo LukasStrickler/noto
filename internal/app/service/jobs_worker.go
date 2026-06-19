@@ -109,6 +109,8 @@ func (s *Service) runJob(parentCtx context.Context, job notoapi.Job) {
 		err = s.runVerify(ctx, &job)
 	case notoapi.JobPipeline:
 		err = s.runPipeline(ctx, &job)
+	case notoapi.JobDownloadModel:
+		err = s.runDownloadModel(ctx, &job)
 	default:
 		err = fmt.Errorf("unknown job kind %q", job.Kind)
 	}
@@ -197,5 +199,14 @@ func (s *Service) emitStatusBar() {
 	_ = row.Scan(&running, &queued)
 	bar.JobsRunning = int(running.Int64)
 	bar.JobsQueued = int(queued.Int64)
+	if s.meetingMappings != nil {
+		if n, err := s.meetingMappings.CountUnresolved(context.Background()); err == nil {
+			bar.SpeakersToID = n
+		}
+	}
+	// Per-screen attention: the nav strip flags each page that owns work, so
+	// these route to People (provisional profiles) and Config (broken routes).
+	bar.PeopleToReview = s.countPeopleToReview()
+	bar.ConfigIssues = s.countConfigIssues(context.Background())
 	s.events.publish(notoapi.Event{Kind: notoapi.EventStatusBar, StatusBar: &bar})
 }

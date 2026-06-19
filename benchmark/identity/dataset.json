@@ -1,0 +1,571 @@
+{
+ "name": "ami-personas",
+ "description": "Curated AMI Meeting Corpus subset: scenario series (same participants across sessions) chosen so each speaker appears in multiple meetings. Mix-Headset single-channel audio + pyannote AMI-diarization-setup RTTM (global speaker IDs = cross-meeting ground truth). Media is re-downloadable via fetch.py, never committed.",
+ "sessions_per_series": 3,
+ "num_speakers": 52,
+ "num_meetings": 39,
+ "approx_total_mb": 1736,
+ "speakers": [
+  "FEE019",
+  "FEE028",
+  "FEE036",
+  "FEE037",
+  "FEE038",
+  "FEE039",
+  "FEE040",
+  "FEE041",
+  "FEE042",
+  "FEE043",
+  "FEE044",
+  "FEE046",
+  "FEE047",
+  "FEO026",
+  "FIE038",
+  "FIE073",
+  "FIE088",
+  "FIO017",
+  "FIO041",
+  "FIO074",
+  "FIO084",
+  "FIO087",
+  "FIO089",
+  "MEE017",
+  "MEE018",
+  "MEE025",
+  "MEE027",
+  "MEE033",
+  "MEE034",
+  "MEE035",
+  "MEE045",
+  "MEE048",
+  "MEO020",
+  "MIE085",
+  "MIO005",
+  "MIO008",
+  "MIO012",
+  "MIO020",
+  "MIO023",
+  "MIO025",
+  "MIO035",
+  "MIO040",
+  "MIO043",
+  "MIO049",
+  "MIO072",
+  "MIO075",
+  "MIO078",
+  "MIO086",
+  "MTD037PM",
+  "MTD038ID",
+  "MTD039UID",
+  "MTD040ME"
+ ],
+ "meetings": [
+  {
+   "id": "ES2005a",
+   "split": "train",
+   "approx_mb": 9.8,
+   "speakers": [
+    "FEE019",
+    "MEE017",
+    "MEE018",
+    "MEO020"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2005a/audio/ES2005a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2005a.rttm"
+  },
+  {
+   "id": "ES2005c",
+   "split": "train",
+   "approx_mb": 73.4,
+   "speakers": [
+    "FEE019",
+    "MEE017",
+    "MEE018",
+    "MEO020"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2005c/audio/ES2005c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2005c.rttm"
+  },
+  {
+   "id": "ES2005d",
+   "split": "train",
+   "approx_mb": 53.3,
+   "speakers": [
+    "FEE019",
+    "MEE017",
+    "MEE018",
+    "MEO020"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2005d/audio/ES2005d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2005d.rttm"
+  },
+  {
+   "id": "ES2007a",
+   "split": "train",
+   "approx_mb": 38.6,
+   "speakers": [
+    "FEE028",
+    "FEO026",
+    "MEE025",
+    "MEE027"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2007a/audio/ES2007a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2007a.rttm"
+  },
+  {
+   "id": "ES2007b",
+   "split": "train",
+   "approx_mb": 53.8,
+   "speakers": [
+    "FEE028",
+    "FEO026",
+    "MEE025",
+    "MEE027"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2007b/audio/ES2007b.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2007b.rttm"
+  },
+  {
+   "id": "ES2007d",
+   "split": "train",
+   "approx_mb": 39.9,
+   "speakers": [
+    "FEE028",
+    "FEO026",
+    "MEE025",
+    "MEE027"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2007d/audio/ES2007d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2007d.rttm"
+  },
+  {
+   "id": "ES2009a",
+   "split": "train",
+   "approx_mb": 44.8,
+   "speakers": [
+    "FEE036",
+    "MEE033",
+    "MEE034",
+    "MEE035"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2009a/audio/ES2009a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2009a.rttm"
+  },
+  {
+   "id": "ES2009b",
+   "split": "train",
+   "approx_mb": 45.7,
+   "speakers": [
+    "FEE036",
+    "MEE033",
+    "MEE034",
+    "MEE035"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2009b/audio/ES2009b.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2009b.rttm"
+  },
+  {
+   "id": "ES2009c",
+   "split": "train",
+   "approx_mb": 62.5,
+   "speakers": [
+    "FEE036",
+    "MEE033",
+    "MEE034",
+    "MEE035"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2009c/audio/ES2009c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2009c.rttm"
+  },
+  {
+   "id": "ES2010a",
+   "split": "train",
+   "approx_mb": 20.5,
+   "speakers": [
+    "FEE037",
+    "FEE038",
+    "FEE039",
+    "FEE040"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2010a/audio/ES2010a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2010a.rttm"
+  },
+  {
+   "id": "ES2010b",
+   "split": "train",
+   "approx_mb": 56.1,
+   "speakers": [
+    "FEE037",
+    "FEE038",
+    "FEE039",
+    "FEE040"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2010b/audio/ES2010b.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2010b.rttm"
+  },
+  {
+   "id": "ES2010d",
+   "split": "train",
+   "approx_mb": 31.0,
+   "speakers": [
+    "FEE037",
+    "FEE038",
+    "FEE039",
+    "FEE040"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2010d/audio/ES2010d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2010d.rttm"
+  },
+  {
+   "id": "ES2011a",
+   "split": "dev",
+   "approx_mb": 35.6,
+   "speakers": [
+    "FEE041",
+    "FEE042",
+    "FEE043",
+    "FEE044"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2011a/audio/ES2011a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/dev/ES2011a.rttm"
+  },
+  {
+   "id": "ES2011b",
+   "split": "dev",
+   "approx_mb": 50.3,
+   "speakers": [
+    "FEE041",
+    "FEE042",
+    "FEE043",
+    "FEE044"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2011b/audio/ES2011b.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/dev/ES2011b.rttm"
+  },
+  {
+   "id": "ES2011c",
+   "split": "dev",
+   "approx_mb": 51.6,
+   "speakers": [
+    "FEE041",
+    "FEE042",
+    "FEE043",
+    "FEE044"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2011c/audio/ES2011c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/dev/ES2011c.rttm"
+  },
+  {
+   "id": "ES2012a",
+   "split": "train",
+   "approx_mb": 35.3,
+   "speakers": [
+    "FEE046",
+    "FEE047",
+    "MEE045",
+    "MEE048"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2012a/audio/ES2012a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2012a.rttm"
+  },
+  {
+   "id": "ES2012c",
+   "split": "train",
+   "approx_mb": 70.6,
+   "speakers": [
+    "FEE046",
+    "FEE047",
+    "MEE045",
+    "MEE048"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2012c/audio/ES2012c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2012c.rttm"
+  },
+  {
+   "id": "ES2012d",
+   "split": "train",
+   "approx_mb": 30.3,
+   "speakers": [
+    "FEE046",
+    "FEE047",
+    "MEE045",
+    "MEE048"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2012d/audio/ES2012d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/ES2012d.rttm"
+  },
+  {
+   "id": "IS1001a",
+   "split": "train",
+   "approx_mb": 28.9,
+   "speakers": [
+    "FIO074",
+    "MIO012",
+    "MIO020",
+    "MIO043"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1001a/audio/IS1001a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1001a.rttm"
+  },
+  {
+   "id": "IS1001c",
+   "split": "train",
+   "approx_mb": 45.6,
+   "speakers": [
+    "FIO074",
+    "MIO012",
+    "MIO020",
+    "MIO043"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1001c/audio/IS1001c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1001c.rttm"
+  },
+  {
+   "id": "IS1001d",
+   "split": "train",
+   "approx_mb": 24.1,
+   "speakers": [
+    "FIO074",
+    "MIO012",
+    "MIO020",
+    "MIO043"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1001d/audio/IS1001d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1001d.rttm"
+  },
+  {
+   "id": "IS1003a",
+   "split": "train",
+   "approx_mb": 26.2,
+   "speakers": [
+    "FIO017",
+    "MIO005",
+    "MIO023",
+    "MIO035"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1003a/audio/IS1003a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1003a.rttm"
+  },
+  {
+   "id": "IS1003b",
+   "split": "train",
+   "approx_mb": 51.6,
+   "speakers": [
+    "FIO017",
+    "MIO005",
+    "MIO023",
+    "MIO035"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1003b/audio/IS1003b.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1003b.rttm"
+  },
+  {
+   "id": "IS1003c",
+   "split": "train",
+   "approx_mb": 58.8,
+   "speakers": [
+    "FIO017",
+    "MIO005",
+    "MIO023",
+    "MIO035"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1003c/audio/IS1003c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1003c.rttm"
+  },
+  {
+   "id": "IS1006a",
+   "split": "train",
+   "approx_mb": 26.3,
+   "speakers": [
+    "FIO041",
+    "MIO008",
+    "MIO040",
+    "MIO078"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1006a/audio/IS1006a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1006a.rttm"
+  },
+  {
+   "id": "IS1006c",
+   "split": "train",
+   "approx_mb": 61.5,
+   "speakers": [
+    "FIO041",
+    "MIO008",
+    "MIO040",
+    "MIO078"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1006c/audio/IS1006c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1006c.rttm"
+  },
+  {
+   "id": "IS1006d",
+   "split": "train",
+   "approx_mb": 57.9,
+   "speakers": [
+    "FIO041",
+    "MIO008",
+    "MIO040",
+    "MIO078"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1006d/audio/IS1006d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1006d.rttm"
+  },
+  {
+   "id": "IS1007a",
+   "split": "train",
+   "approx_mb": 29.5,
+   "speakers": [
+    "MIO025",
+    "MIO049",
+    "MIO072",
+    "MIO075"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1007a/audio/IS1007a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1007a.rttm"
+  },
+  {
+   "id": "IS1007b",
+   "split": "train",
+   "approx_mb": 40.4,
+   "speakers": [
+    "MIO025",
+    "MIO049",
+    "MIO072",
+    "MIO075"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1007b/audio/IS1007b.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1007b.rttm"
+  },
+  {
+   "id": "IS1007d",
+   "split": "train",
+   "approx_mb": 63.7,
+   "speakers": [
+    "MIO025",
+    "MIO049",
+    "MIO072",
+    "MIO075"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1007d/audio/IS1007d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/IS1007d.rttm"
+  },
+  {
+   "id": "IS1008a",
+   "split": "dev",
+   "approx_mb": 28.9,
+   "speakers": [
+    "FIE038",
+    "FIE073",
+    "MIE085",
+    "MIO086"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1008a/audio/IS1008a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/dev/IS1008a.rttm"
+  },
+  {
+   "id": "IS1008c",
+   "split": "dev",
+   "approx_mb": 48.5,
+   "speakers": [
+    "FIE038",
+    "FIE073",
+    "MIE085",
+    "MIO086"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1008c/audio/IS1008c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/dev/IS1008c.rttm"
+  },
+  {
+   "id": "IS1008d",
+   "split": "dev",
+   "approx_mb": 46.1,
+   "speakers": [
+    "FIE038",
+    "FIE073",
+    "MIE085",
+    "MIO086"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1008d/audio/IS1008d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/dev/IS1008d.rttm"
+  },
+  {
+   "id": "IS1009a",
+   "split": "test",
+   "approx_mb": 25.8,
+   "speakers": [
+    "FIE088",
+    "FIO084",
+    "FIO087",
+    "FIO089"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1009a/audio/IS1009a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/test/IS1009a.rttm"
+  },
+  {
+   "id": "IS1009c",
+   "split": "test",
+   "approx_mb": 57.3,
+   "speakers": [
+    "FIE088",
+    "FIO084",
+    "FIO087",
+    "FIO089"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1009c/audio/IS1009c.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/test/IS1009c.rttm"
+  },
+  {
+   "id": "IS1009d",
+   "split": "test",
+   "approx_mb": 61.6,
+   "speakers": [
+    "FIE088",
+    "FIO084",
+    "FIO087",
+    "FIO089"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1009d/audio/IS1009d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/test/IS1009d.rttm"
+  },
+  {
+   "id": "TS3010a",
+   "split": "train",
+   "approx_mb": 30.2,
+   "speakers": [
+    "MTD037PM",
+    "MTD038ID",
+    "MTD039UID",
+    "MTD040ME"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/TS3010a/audio/TS3010a.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/TS3010a.rttm"
+  },
+  {
+   "id": "TS3010b",
+   "split": "train",
+   "approx_mb": 62.6,
+   "speakers": [
+    "MTD037PM",
+    "MTD038ID",
+    "MTD039UID",
+    "MTD040ME"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/TS3010b/audio/TS3010b.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/TS3010b.rttm"
+  },
+  {
+   "id": "TS3010d",
+   "split": "train",
+   "approx_mb": 56.9,
+   "speakers": [
+    "MTD037PM",
+    "MTD038ID",
+    "MTD039UID",
+    "MTD040ME"
+   ],
+   "audio_url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/TS3010d/audio/TS3010d.Mix-Headset.wav",
+   "rttm_url": "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/train/TS3010d.rttm"
+  }
+ ]
+}

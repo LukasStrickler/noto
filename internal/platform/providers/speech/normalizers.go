@@ -436,14 +436,25 @@ func (s *SpeakerLabelNormalizer) canonicalLabel(providerLabel string) string {
 // TranscriptNormalizers is a chain of normalizers that applies each in sequence.
 type TranscriptNormalizers []TranscriptNormalizer
 
-// NewTranscriptNormalizers creates a new chain with the default normalizers.
+// NewTranscriptNormalizers creates the default chain. It deliberately runs only
+// the normalizers that are SAFE to apply to provider output that is then sent
+// to the LLM and the search index verbatim:
+//
+//   - DiarizationNormalizer  — merges adjacent same-speaker turns (structural).
+//   - SpeakerLabelNormalizer — canonicalizes the human-readable Label only;
+//     never touches Segment.Text or the IDs segments reference.
+//
+// The remaining normalizers (Timestamp gap-flagging, Confidence "[low
+// confidence]" tags, Format filler/partial-word edits, Punctuation) rewrite or
+// inject markers INTO Segment.Text. AssemblyAI already returns punctuated,
+// formatted text, so re-processing it corrupted real content (mangled
+// hyphenated words, dropped "like", fabricated "[potential gap]" segments the
+// model could cite) and leaked display markers into both the LLM prompt and FTS
+// index. They remain available as standalone components for callers that want
+// them, but are not in the default transcript path.
 func NewTranscriptNormalizers() TranscriptNormalizers {
 	return TranscriptNormalizers{
 		NewDiarizationNormalizer(),
-		NewTimestampNormalizer(),
-		NewConfidenceNormalizer(),
-		NewFormatNormalizer(),
-		NewPunctuationNormalizer(),
 		NewSpeakerLabelNormalizer(),
 	}
 }

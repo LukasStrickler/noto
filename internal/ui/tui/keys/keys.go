@@ -24,6 +24,13 @@ type Map struct {
 	Tab      key.Binding
 	ShiftTab key.Binding
 
+	// Sidebar resize — keyboard parity for the draggable divider shared by
+	// the dashboard/people/config two-pane screens. All non-letter (ctrl+…)
+	// so they fire even while a text input is focused, like ctrl+c.
+	SidebarWider    key.Binding
+	SidebarNarrower key.Binding
+	SidebarReset    key.Binding
+
 	// NOTE: top-level screen nav keys (the 1/2/3 digits + r/, aliases)
 	// are NOT here. They are auto-numbered from the screen registry in
 	// screen.go (topScreens) so adding a screen can't create a gap. This
@@ -55,6 +62,10 @@ type Map struct {
 	Edit   key.Binding
 	Test   key.Binding
 	Remove key.Binding
+
+	// People — profile management + speaker assignment.
+	Merge  key.Binding
+	Assign key.Binding
 }
 
 func New() Map {
@@ -76,6 +87,10 @@ func New() Map {
 		Tab:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next pane")),
 		ShiftTab: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇤", "prev pane")),
 
+		SidebarWider:    key.NewBinding(key.WithKeys("ctrl+right"), key.WithHelp("ctrl+→", "widen sidebar")),
+		SidebarNarrower: key.NewBinding(key.WithKeys("ctrl+left"), key.WithHelp("ctrl+←", "narrow sidebar")),
+		SidebarReset:    key.NewBinding(key.WithKeys("ctrl+0"), key.WithHelp("ctrl+0", "reset sidebar")),
+
 		TabNext:    key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "next tab")),
 		TabPrev:    key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "prev tab")),
 		Transcript: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "transcript")),
@@ -95,5 +110,8 @@ func New() Map {
 		Edit:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		Test:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test")),
 		Remove: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove")),
+
+		Merge:  key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge")),
+		Assign: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "assign")),
 	}
 }

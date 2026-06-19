@@ -195,6 +195,130 @@ func TestOpen_FileExists(t *testing.T) {
 	}
 }
 
+func TestSpeakerProfile_AffiliationsRoundTrip(t *testing.T) {
+	db, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewSQLiteSpeakerProfileRepository(db)
+	ctx := context.Background()
+
+	p := SpeakerProfile{
+		ID:          "aff-1",
+		DisplayName: "Dr. Vega",
+		Pronouns:    "they/them",
+		Notes:       "leads the audio group",
+		Affiliations: []Affiliation{
+			{Context: "University", Organization: "ETH", Email: "vega@ethz.ch"},
+			{Context: "Project Noto", Organization: "Acme", Email: "vega@acme.io"},
+		},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := repo.Create(ctx, p); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := repo.Get(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Notes != "leads the audio group" {
+		t.Errorf("Notes: got %q", got.Notes)
+	}
+	if len(got.Affiliations) != 2 || got.Affiliations[1].Email != "vega@acme.io" {
+		t.Fatalf("Affiliations round-trip: got %+v", got.Affiliations)
+	}
+}
+
+func TestMeetingSpeakerMapping_EmbeddingAndProfileQueries(t *testing.T) {
+	db, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewSQLiteMeetingSpeakerMappingRepository(db)
+	ctx := context.Background()
+
+	// two meetings both linked to profile-1, one to profile-2
+	mk := func(meeting, spk, profile string) MeetingSpeakerMapping {
+		return MeetingSpeakerMapping{
+			MeetingID: meeting, MeetingSpeakerID: spk, ProviderLabel: spk,
+			ProfileID: strPtr(profile), MatchStatus: "auto",
+			EmbeddingVector: []float64{0.1, 0.2, 0.3}, EmbeddingDim: 3,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+	}
+	for _, m := range []MeetingSpeakerMapping{mk("m1", "A", "profile-1"), mk("m2", "A", "profile-1"), mk("m3", "A", "profile-2")} {
+		if err := repo.Upsert(ctx, m); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+	}
+
+	// embedding persisted
+	got, _ := repo.ListByMeeting(ctx, "m1")
+	if len(got) != 1 || got[0].EmbeddingDim != 3 || len(got[0].EmbeddingVector) != 3 {
+		t.Fatalf("embedding round-trip: %+v", got)
+	}
+
+	// ListByProfile
+	byProf, err := repo.ListByProfile(ctx, "profile-1")
+	if err != nil {
+		t.Fatalf("ListByProfile: %v", err)
+	}
+	if len(byProf) != 2 {
+		t.Fatalf("ListByProfile: got %d, want 2", len(byProf))
+	}
+
+	// ReassignProfile moves profile-2 → profile-1
+	if err := repo.ReassignProfile(ctx, "profile-2", "profile-1"); err != nil {
+		t.Fatalf("ReassignProfile: %v", err)
+	}
+	byProf, _ = repo.ListByProfile(ctx, "profile-1")
+	if len(byProf) != 3 {
+		t.Fatalf("after reassign: got %d, want 3", len(byProf))
+	}
+}
+
+func TestMeetingSpeakerMapping_StatusCountsByMeeting(t *testing.T) {
+	db, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewSQLiteMeetingSpeakerMappingRepository(db)
+	ctx := context.Background()
+
+	mk := func(meeting, spk, status string) MeetingSpeakerMapping {
+		return MeetingSpeakerMapping{
+			MeetingID: meeting, MeetingSpeakerID: spk, ProviderLabel: spk,
+			MatchStatus: status, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+	}
+	for _, m := range []MeetingSpeakerMapping{
+		mk("m1", "A", "auto"), mk("m1", "B", "auto"), mk("m1", "C", "pending"),
+		mk("m2", "A", "new"), mk("m2", "B", "unmatched"),
+	} {
+		if err := repo.Upsert(ctx, m); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+	}
+
+	counts, err := repo.StatusCountsByMeeting(ctx)
+	if err != nil {
+		t.Fatalf("StatusCountsByMeeting: %v", err)
+	}
+	if counts["m1"]["auto"] != 2 || counts["m1"]["pending"] != 1 {
+		t.Errorf("m1 counts = %+v, want auto:2 pending:1", counts["m1"])
+	}
+	if counts["m2"]["new"] != 1 || counts["m2"]["unmatched"] != 1 {
+		t.Errorf("m2 counts = %+v, want new:1 unmatched:1", counts["m2"])
+	}
+	if _, ok := counts["m3"]; ok {
+		t.Error("m3 has no mappings; it should be absent from the rollup")
+	}
+}
+
 func strPtr(s string) *string {
 	return &s
 }

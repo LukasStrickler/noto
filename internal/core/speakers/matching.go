@@ -2,6 +2,7 @@ package speakers
 
 import (
 	"math"
+	"sort"
 
 	"github.com/lukasstrickler/noto/internal/core/notoerr"
 )
@@ -62,7 +63,46 @@ func Centroid(embeddings []Embedding) (Embedding, error) {
 	return Normalize(result), nil
 }
 
+// MatchConfig tunes the decision boundaries. Margin is the minimum lead the
+// top candidate must hold over the runner-up to AUTO-confirm: when two stored
+// profiles are within Margin of each other the query is ambiguous (the
+// same-gender confusion seen in the AMI persona bench), so we downgrade an
+// otherwise-automatic match to pending for human review instead of silently
+// merging into the wrong profile. Margin 0 preserves legacy behavior.
+type MatchConfig struct {
+	Auto    float64
+	Pending float64
+	Margin  float64
+}
+
+// DefaultAutoMargin is the guardrail used on the live matching path. Kept small
+// so it only catches genuinely ambiguous top-2s, not ordinary matches.
+const DefaultAutoMargin = 0.05
+
+// DefaultMatchConfig mirrors the shipped thresholds with no margin, so Match
+// behaves exactly as before.
+func DefaultMatchConfig() MatchConfig {
+	return MatchConfig{Auto: AutoThreshold, Pending: PendingThreshold, Margin: 0}
+}
+
+// Match keeps the original behavior (no margin gate) for existing callers.
 func Match(query Embedding, candidates []Candidate) (MatchDecision, error) {
+	return MatchWithConfig(query, candidates, DefaultMatchConfig())
+}
+
+// MatchConfident is the recommended live-path matcher: shipped thresholds plus
+// the ambiguity margin, so a close call between two profiles never auto-merges.
+func MatchConfident(query Embedding, candidates []Candidate) (MatchDecision, error) {
+	cfg := DefaultMatchConfig()
+	cfg.Margin = DefaultAutoMargin
+	return MatchWithConfig(query, candidates, cfg)
+}
+
+// MatchWithConfig classifies query against candidates under cfg, returning the
+// best candidate plus an auto/pending/new status. With cfg.Margin > 0 an
+// otherwise-auto match whose lead over the second-best is below the margin is
+// downgraded to pending.
+func MatchWithConfig(query Embedding, candidates []Candidate, cfg MatchConfig) (MatchDecision, error) {
 	if len(query) == 0 {
 		return MatchDecision{Status: StatusNew, Reason: "empty query embedding"}, nil
 	}
@@ -70,7 +110,7 @@ func Match(query Embedding, candidates []Candidate) (MatchDecision, error) {
 		return MatchDecision{Status: StatusNew, Reason: "no candidates provided"}, nil
 	}
 	queryNorm := Normalize(query)
-	var bestScore float64
+	bestScore, secondScore := math.Inf(-1), math.Inf(-1)
 	var bestCandidate *Candidate
 
 	for i := range candidates {
@@ -79,9 +119,11 @@ func Match(query Embedding, candidates []Candidate) (MatchDecision, error) {
 			return MatchDecision{}, DimError(len(query), len(cand.Centroid))
 		}
 		score := Dot(queryNorm, cand.Centroid)
-		if score > bestScore || bestCandidate == nil {
-			bestScore = score
-			bestCandidate = cand
+		if score > bestScore {
+			secondScore = bestScore
+			bestScore, bestCandidate = score, cand
+		} else if score > secondScore {
+			secondScore = score
 		}
 	}
 
@@ -92,15 +134,23 @@ func Match(query Embedding, candidates []Candidate) (MatchDecision, error) {
 	var status MatchStatus
 	var reason string
 	switch {
-	case bestScore >= AutoThreshold:
+	case bestScore >= cfg.Auto:
 		status = StatusAuto
 		reason = "auto match"
-	case bestScore >= PendingThreshold:
+	case bestScore >= cfg.Pending:
 		status = StatusPending
 		reason = "pending confirmation"
 	default:
 		status = StatusNew
 		reason = "below threshold"
+	}
+
+	// Ambiguity guardrail: a confident auto-merge requires a clear lead over the
+	// runner-up, else fall back to human confirmation.
+	if status == StatusAuto && cfg.Margin > 0 && secondScore > math.Inf(-1) &&
+		bestScore-secondScore < cfg.Margin {
+		status = StatusPending
+		reason = "ambiguous: top-2 within margin"
 	}
 
 	return MatchDecision{
@@ -117,6 +167,25 @@ func MatchWithDuration(query EmbeddingWithDuration, candidates []Candidate) (Mat
 		return MatchDecision{}, notoerr.New("segment_too_short", "segment duration below minimum", map[string]any{"duration": query.Duration, "minimum": MinDuration})
 	}
 	return Match(query.Embedding, candidates)
+}
+
+// RankCandidates scores query against every candidate and returns the decisions
+// sorted by descending similarity, capped at topK (topK<=0 returns all). It is
+// the basis for the UI's "who is this most likely?" top-N suggestion list —
+// unlike Match, which collapses to a single best decision. Each decision keeps
+// its auto/pending/new status so the caller can render confidence bands.
+func RankCandidates(query Embedding, candidates []Candidate, topK int) ([]MatchDecision, error) {
+	decisions, err := MatchCandidates(query, candidates)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(decisions, func(i, j int) bool {
+		return decisions[i].Score > decisions[j].Score
+	})
+	if topK > 0 && len(decisions) > topK {
+		decisions = decisions[:topK]
+	}
+	return decisions, nil
 }
 
 func MatchCandidates(query Embedding, candidates []Candidate) ([]MatchDecision, error) {

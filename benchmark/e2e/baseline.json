@@ -1,0 +1,12 @@
+{
+  "runtime": "oracle",
+  "compute": "cpu",
+  "pinned": "2026-06-10",
+  "note": "PLACEHOLDER baseline: deterministic oracle (perfect ground-truth replay) numbers, not real-model numbers. It makes the regression gate live now (it catches breakage in metrics/merge/loaders, which must keep scoring a perfect chain at 0). Re-pin with real local-engine numbers via BENCH_REPIN=1 once a runtime is wired (and update runtime/compute).",
+  "metrics": {
+    "stt.wer": { "value": 0.0, "tolerance": 0.0 },
+    "diar.der": { "value": 0.0, "tolerance": 0.0 },
+    "e2e.cpwer": { "value": 0.0, "tolerance": 0.0 },
+    "e2e.sawer": { "value": 0.0, "tolerance": 0.0 }
+  }
+}

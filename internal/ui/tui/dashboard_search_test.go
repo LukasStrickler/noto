@@ -23,6 +23,14 @@ func testScreenCtx() screenCtx {
 	}
 }
 
+// screenCtxAt is testScreenCtx at a specific size — height is the body height the
+// root would hand a screen (terminal height minus chrome).
+func screenCtxAt(width, height int) screenCtx {
+	c := testScreenCtx()
+	c.width, c.height = width, height
+	return c
+}
+
 func TestSearchInputTabAdvancesWithinCurrentMeeting(t *testing.T) {
 	m := dashboardWithSearchMatches()
 	m.pane.id_ = "m1"
@@ -111,6 +119,24 @@ func TestSearchInputEscapeReturnsToList(t *testing.T) {
 	}
 }
 
+func TestSearchKeyFocusesFilterFromFocusedPane(t *testing.T) {
+	m := dashboardWithSearchMatches()
+	// Move focus into the detail pane (the right side of the dashboard),
+	// which previously swallowed `/` instead of opening the filter.
+	m.inputFocus = false
+	m.input.Blur()
+	m.paneOpen = true
+
+	_, _ = m.handleKey(testScreenCtx(), tea.KeyPressMsg{Code: '/', Text: "/"})
+
+	if !m.inputFocus {
+		t.Fatal("inputFocus = false; want `/` to focus the filter input from the pane")
+	}
+	if m.paneOpen {
+		t.Fatal("paneOpen = true; want focus to leave the pane when search is focused")
+	}
+}
+
 func TestDetailPaneRestoresRequestedMatchAfterRecompute(t *testing.T) {
 	d := newDetailPane()
 	d.id_ = "m1"
@@ -150,19 +176,36 @@ func TestAttendeeStripWrapsCompactSpeakerRows(t *testing.T) {
 		},
 	}
 
-	rendered := ansi.Strip(d.renderAttendeeStrip(theme.NewStyles(), 80))
+	s := theme.NewStyles()
+
+	// Wide pane: all four short "Name HH:MM" entries fit on a single row.
+	wide := ansi.Strip(d.renderAttendeeStrip(s, 80))
+	if got := strings.Count(wide, "\n") + 1; got != 1 {
+		t.Fatalf("at width 80 the roster should be one row; got %d:\n%s", got, wide)
+	}
+
+	// Narrow pane: the same roster wraps to MORE rows (measured greedy-wrap), and
+	// no rendered line spills past the width — the overflow bug this fixes.
+	const narrow = 26
+	rendered := d.renderAttendeeStrip(s, narrow)
 	lines := strings.Split(rendered, "\n")
-	if len(lines) != 2 {
-		t.Fatalf("rendered %d speaker lines; want 2:\n%s", len(lines), rendered)
+	if len(lines) < 2 {
+		t.Fatalf("at width %d the roster should wrap to >1 row; got %d:\n%s", narrow, len(lines), ansi.Strip(rendered))
 	}
-	if strings.ContainsAny(rendered, "●") {
-		t.Fatalf("speaker strip should not render identity ball markers: %q", rendered)
+	for _, ln := range lines {
+		if w := ansi.StringWidth(ln); w > narrow {
+			t.Fatalf("wrapped roster line overflows width %d (%d cells): %q", narrow, w, ansi.Strip(ln))
+		}
 	}
-	if !strings.ContainsAny(rendered, "█") {
-		t.Fatalf("speaker strip should keep the timeline graph: %q", rendered)
+
+	plain := ansi.Strip(rendered)
+	// No ● swatch — the full-width timeline (renderHeaderTimeline) carries colour,
+	// not these entries; and the timeline graph itself is NOT in this strip.
+	if strings.ContainsAny(plain, "●█") {
+		t.Fatalf("roster strip should carry neither swatch nor timeline glyphs: %q", plain)
 	}
-	if !strings.Contains(rendered, "Alice 01:00") || !strings.Contains(rendered, "Dan 00:15") {
-		t.Fatalf("speaker strip missing compact name/time entries: %q", rendered)
+	if !strings.Contains(plain, "Alice 01:00") || !strings.Contains(plain, "Dan 00:15") {
+		t.Fatalf("roster strip missing name/time entries: %q", plain)
 	}
 }
 
@@ -172,7 +215,7 @@ func TestDashboardRowOmitsDoneBadgeForSummarizedMeeting(t *testing.T) {
 		Title:     "Planning",
 		Status:    notoapi.StatusSummarized,
 		CreatedAt: time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
-	}, 80)
+	}, 80, countsFull)
 	rendered := ansi.Strip(strings.Join(rows, "\n"))
 
 	if strings.Contains(rendered, "done") || strings.Contains(rendered, "✓") {
@@ -189,7 +232,7 @@ func TestDashboardRowShowsTodoForRecordedMeeting(t *testing.T) {
 		Title:     "Needs transcript",
 		Status:    notoapi.StatusRecorded,
 		CreatedAt: time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
-	}, 80)
+	}, 80, countsFull)
 	rendered := ansi.Strip(strings.Join(rows, "\n"))
 
 	if !strings.Contains(rendered, "todo") {

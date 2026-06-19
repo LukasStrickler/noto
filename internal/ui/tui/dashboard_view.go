@@ -7,10 +7,69 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
+	"github.com/lukasstrickler/noto/internal/ui/tui/hit"
 	"github.com/lukasstrickler/noto/internal/ui/tui/layout"
+	"github.com/lukasstrickler/noto/internal/ui/tui/scroll"
 	"github.com/lukasstrickler/noto/internal/ui/tui/theme"
 )
+
+// --- mouse focus helpers ------------------------------------------
+//
+// These mutate focus the same way the keyboard paths do, so a click and a
+// keypress land in identical states. They're the onClick bodies for the
+// dashboard's clickable regions (registered in viewWide/viewNarrow +
+// renderList + the detail tab bar).
+
+// focusList moves focus to the meetings list (clicking the left pane).
+func (m *dashboardScreen) focusList() {
+	m.paneOpen = false
+	m.inputFocus = false
+	m.input.Blur()
+}
+
+// focusPane moves focus into the detail pane (clicking the right pane), but
+// only when a meeting is bound — an empty pane has nothing to drive.
+func (m *dashboardScreen) focusPane() {
+	if m.currentMeetingID() == "" {
+		return
+	}
+	m.paneOpen = true
+	m.inputFocus = false
+	m.input.Blur()
+}
+
+// focusFilter focuses the search input (clicking the filter row), mirroring `/`.
+func (m *dashboardScreen) focusFilter(ctx screenCtx) tea.Cmd {
+	m.paneOpen = false
+	m.inputFocus = true
+	m.input.Focus()
+	return m.refreshFocusedSearch(ctx)
+}
+
+// selectRow selects meeting i and loads it into the pane, keeping list focus —
+// a click is the pointer twin of arrow-key navigation.
+func (m *dashboardScreen) selectRow(ctx screenCtx, i int) tea.Cmd {
+	if i < 0 || i >= m.visibleCount() {
+		return nil
+	}
+	m.cursor = i
+	m.focusList()
+	return m.loadSelectedCmd(ctx)
+}
+
+// openTab focuses the pane AND switches it to tab t — so clicking "actions"
+// from the list both moves focus and navigates, not just one (the prioritised
+// behaviour: a click on a target acts on the target).
+func (m *dashboardScreen) openTab(t detailTab) {
+	m.focusPane()
+	if m.currentMeetingID() == "" {
+		return
+	}
+	m.pane.tab = t
+	m.pane.itemCur = 0
+}
 
 // --- view ---------------------------------------------------------
 
@@ -23,11 +82,18 @@ func (m *dashboardScreen) view(ctx screenCtx) string {
 		return panelEmpty(ctx, "dashboard", s.Danger.Render("✗ "+m.err.Error()))
 	}
 
-	bp := layout.BreakpointFor(ctx.width)
-	if bp == layout.Narrow {
-		return m.viewNarrow(ctx)
+	var content string
+	if layout.BreakpointFor(ctx.width) == layout.Narrow {
+		content = m.viewNarrow(ctx)
+	} else {
+		content = m.viewWide(ctx)
 	}
-	return m.viewWide(ctx)
+	// The identify/reassign dialog is owned by the pane but composited here so
+	// it dims the whole dashboard (same pattern as the People confirm overlay).
+	if m.pane.assignDialogOpen() {
+		content = overlayCenter(content, m.pane.assignDialogView(ctx), ctx.width, ctx.height, s.T.Faint)
+	}
+	return content
 }
 
 // bottomStripHeight is dynamic: hidden when idle, ~6 rows when there's
@@ -45,54 +111,79 @@ func (m *dashboardScreen) bottomStripHeight() int {
 
 func (m *dashboardScreen) viewWide(ctx screenCtx) string {
 	s := ctx.styles
-	// Left meetings column is ~1/3 (never below 28), details takes the
-	// rest; HStack reserves the same 1-cell gap the solver accounts for.
-	cols := layout.Split(ctx.width, 1, layout.FlexMin(1, 28), layout.Flex(2))
-	leftW, rightW := cols[0], cols[1]
+	// Left meetings column is the shared, draggable sidebar width (clamped so
+	// neither pane drops below its floor); details takes the rest. joinSidebar
+	// (below) reserves the same 1-cell gap the solver accounts for and draws the
+	// divider in it.
+	leftW, rightW := layout.SidebarSplit(ctx.width, sidebarPref(ctx), minSidebarW, minContentW)
 
 	// Left column splits vertically into the meetings list (flex) and the
 	// bottom strip (fixed; 0 collapses it entirely).
 	stripH := m.bottomStripHeight()
 	listH := layout.Split(ctx.height, 0, layout.FlexMin(1, 6), layout.Fixed(stripH))[0]
 
-	listPanel := layout.Panel{
-		Title:    "dashboard",
-		Subtitle: m.listSubtitle(),
-		Width:    leftW,
-		Height:   listH,
-		Focused:  !m.paneOpen,
-		Body:     m.renderList(ctx, leftW),
-	}.Render(s)
+	listP := layout.Panel{Title: "dashboard", Width: leftW, Height: listH}
+	// The detail panel's chrome carries the meeting identity now: "Details: <name>"
+	// on the left, muted date · time · status flag on the right (pre-styled so the
+	// flag keeps its colour). Title is fit to leave room for the meta.
+	paneMeta := m.pane.headerMeta(s)
+	paneP := layout.Panel{
+		Title: detailPaneTitle(m.pane, rightW-4, lipgloss.Width(paneMeta)),
+		Right: paneMeta,
+		Width: rightW, Height: ctx.height,
+	}
+
+	// Register clickable regions (skipped while a pane sub-mode owns input, so a
+	// stray click can't act behind the rename editor / identify dialog). Coarse
+	// pane-focus regions go in FIRST; the finer row/tab regions registered by
+	// renderList / the tab bar are added afterwards and win (last-added wins).
+	if !m.pane.inputActive() {
+		rightX := leftW + 1 // HStack 1-cell gap
+		ctx.hits.Add(hit.Rect{X: 0, Y: ctx.bodyTop, W: leftW, H: listH},
+			region{id: "dash:list", onClick: func() tea.Cmd { m.focusList(); return nil }})
+		ctx.hits.Add(hit.Rect{X: rightX, Y: ctx.bodyTop, W: rightW, H: ctx.height},
+			region{id: "dash:pane", onClick: func() tea.Cmd { m.focusPane(); return nil }})
+	}
+
+	listOX, listOY := listP.BodyOffset()
+	listPanel := func() string {
+		p := listP
+		p.Subtitle = m.listSubtitle()
+		p.Focused = !m.paneOpen
+		p.Body = m.renderList(ctx, leftW, listH-4, listOX, ctx.bodyTop+listOY)
+		return p.Render(s)
+	}()
 
 	leftCol := listPanel
 	if stripH > 0 {
 		leftCol = layout.VStack(listPanel, m.renderBottomStrip(ctx, leftW, stripH))
 	}
 
-	rightPanel := layout.Panel{
-		Title:    "details",
-		Subtitle: m.previewSubtitle(),
-		Width:    rightW,
-		Height:   ctx.height,
-		Focused:  m.paneOpen,
-		Body:     m.pane.view(ctx, rightW-4, ctx.height-2),
-	}.Render(s)
+	paneOX, paneOY := paneP.BodyOffset()
+	var onTab func(detailTab) clickAction
+	if !m.pane.inputActive() {
+		onTab = func(t detailTab) clickAction { return func() tea.Cmd { m.openTab(t); return nil } }
+	}
+	rightPanel := func() string {
+		p := paneP
+		p.Focused = m.paneOpen
+		p.Body = m.pane.view(ctx, rightW-4, ctx.height-2, (leftW+1)+paneOX, ctx.bodyTop+paneOY, onTab)
+		return p.Render(s)
+	}()
 
-	return layout.HStack(leftCol, rightPanel)
+	return joinSidebar(ctx, leftCol, rightPanel, leftW, ctx.height)
 }
 
 func (m *dashboardScreen) viewNarrow(ctx screenCtx) string {
 	s := ctx.styles
 	stripH := m.bottomStripHeight()
 	listH := layout.Split(ctx.height, 0, layout.FlexMin(1, 6), layout.Fixed(stripH))[0]
-	listPanel := layout.Panel{
-		Title:    "dashboard",
-		Subtitle: m.listSubtitle(),
-		Width:    ctx.width,
-		Height:   listH,
-		Focused:  true,
-		Body:     m.renderList(ctx, ctx.width),
-	}.Render(s)
+	listP := layout.Panel{Title: "dashboard", Width: ctx.width, Height: listH}
+	ox, oy := listP.BodyOffset()
+	listP.Subtitle = m.listSubtitle()
+	listP.Focused = true
+	listP.Body = m.renderList(ctx, ctx.width, listH-4, ox, ctx.bodyTop+oy)
+	listPanel := listP.Render(s)
 	if stripH == 0 {
 		return listPanel
 	}
@@ -199,27 +290,24 @@ func (m *dashboardScreen) renderRecordingBody(ctx screenCtx, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *dashboardScreen) previewSubtitle() string {
-	if !m.pane.hasID() {
-		return ""
+// detailPaneTitle is the detail panel's left title fit to leave room for the
+// right-aligned meta: "Details: <name>" truncated so title + 1-cell gap + meta
+// stay within the panel's inner width.
+func detailPaneTitle(d *detailPane, innerW, metaW int) string {
+	full := d.headerTitle()
+	avail := innerW - metaW - 1 // 1-cell minimum gap before the right meta
+	if avail < 1 {
+		avail = 1
 	}
-	mh, ok := m.currentMatchedRow()
-	if !ok {
-		return ""
+	if lipgloss.Width(full) <= avail {
+		return full
 	}
-	parts := []string{}
-	if mh.TranscriptCount > 0 {
-		parts = append(parts, fmt.Sprintf("%d in transcript", mh.TranscriptCount))
-	}
-	if mh.SummaryCount > 0 {
-		parts = append(parts, fmt.Sprintf("%d in summary", mh.SummaryCount))
-	}
-	return strings.Join(parts, " · ")
+	return fit(full, avail)
 }
 
 // --- list rendering -----------------------------------------------
 
-func (m *dashboardScreen) renderList(ctx screenCtx, width int) string {
+func (m *dashboardScreen) renderList(ctx screenCtx, width, bodyH, originX, originY int) string {
 	s := ctx.styles
 	// Panel padding+border consumes 4 cols; clip everything we draw to
 	// what's actually visible inside. Otherwise long titles, snippets,
@@ -229,11 +317,27 @@ func (m *dashboardScreen) renderList(ctx screenCtx, width int) string {
 		innerW = 20
 	}
 
+	// Mouse: the filter row is body line 0, meeting rows start at body line 2
+	// (a blank line sits between). originY is the absolute y of body line 0, so
+	// we register click regions as we lay rows out. Skipped while a pane
+	// sub-mode owns input (rename editor / identify dialog).
+	clickable := !m.pane.inputActive()
+	if clickable {
+		ctx.hits.Add(hit.Rect{X: originX, Y: originY, W: innerW, H: 1},
+			region{id: "dash:filter", onClick: func() tea.Cmd { return m.focusFilter(ctx) }})
+	}
+	const rowsTop = 2 // header line + blank line before the first row
+
 	// Filter and hints share the same left-edge as list rows (3-cell
 	// marker gutter) so titles, the search chip, and the hint bar all
 	// start at the same column. Without this the title text appears
 	// shifted relative to the search input.
 	header := clipLine("   "+m.renderFilterRow(ctx), innerW)
+	// Hover feedback on the filter row (the input never "selects", so it only
+	// ever hovers). Skipped while the search box is focused (clickable=false).
+	if clickable {
+		header = rowFeedback(header, ctx.pointer().state("dash:filter", false), s, innerW, 0)
+	}
 	hintBar := s.HintBar.Render(clipLine("   "+m.renderListHints(ctx, innerW-3), innerW))
 
 	if m.visibleCount() == 0 {
@@ -244,37 +348,95 @@ func (m *dashboardScreen) renderList(ctx screenCtx, width int) string {
 		return header + "\n\n" + clipLine(empty, innerW) + "\n\n" + hintBar
 	}
 
-	tokens := queryTokens(m.query)
-	rowInnerW := innerW - 3 // " ▸ " / "   " prefix
-	if rowInnerW < 14 {
-		rowInnerW = 14
+	// The rows are the one scrollable region; the filter and hint bar are fixed
+	// chrome above/below it. rowBudget is how many row-lines the panel can show
+	// (body height minus filter + blank + blank + hintBar).
+	rowBudget := bodyH - 4
+	if rowBudget < 1 {
+		rowBudget = 1
 	}
 
-	var rows []string
-	for i := 0; i < m.visibleCount(); i++ {
-		var lines []string
-		if m.query == "" {
-			lines = m.renderListRowDefault(s, m.all[i], rowInnerW)
-		} else {
-			lines = m.renderListRowSearch(s, m.matched[i], rowInnerW, tokens)
-		}
-		// Both prefix branches are exactly 3 visible cells so subsequent
-		// rows stay column-aligned. The styled cursor prefix only shows
-		// on the first line of multi-line search rows; snippet/wrap
-		// lines keep the plain 3-space indent.
-		prefix := "   "
-		if i == m.cursor {
-			prefix = s.RowSelected.Render(" ▸ ")
-		}
-		for j, line := range lines {
-			indent := prefix
-			if j > 0 {
-				indent = "   "
+	tokens := queryTokens(m.query)
+
+	// The meeting rows are the one scrollable region; rowList owns the windowing,
+	// the reserved scrollbar column and the per-row click regions — and renders
+	// ONLY the rows actually on screen. This screen keeps its own row LOOK: an
+	// amber attnGutter down rows needing triage, the cursor ▸, the counter strip,
+	// and the selection fill (rowFeedback). Each composed line is gutter + content
+	// clipped to rowInnerW, so it is at most contentW wide — leaving the bar its
+	// column. The counter-strip compaction tier is decided ONCE for the whole list
+	// (so every row breaks at the same width), the moment rowList hands us the
+	// final content width.
+	var rowInnerW int
+	var countsTierSel countsTier
+	list := rowList{
+		ctx: ctx, width: innerW, height: rowBudget,
+		originX: originX, originY: originY + rowsTop,
+		count: m.visibleCount(), cursor: m.cursor, offset: m.listScroll, clickable: clickable,
+		lineCount: m.rowLineCount,
+		rowID:     func(i int) string { return fmt.Sprintf("dash:row:%d", i) },
+		onClick:   func(i int) tea.Cmd { return m.selectRow(ctx, i) },
+		prepare: func(contentW int) {
+			rowInnerW = contentW - 3 // the 3-cell " ▸ " / "   " gutter
+			if rowInnerW < 14 {
+				rowInnerW = 14
 			}
-			rows = append(rows, indent+clipLine(line, rowInnerW))
-		}
+			countsTierSel = m.listCountsTier(s, rowInnerW)
+		},
+		render: func(i, contentW int, st uiState) []string {
+			var lines []string
+			attention := false
+			if m.query == "" {
+				lines = m.renderListRowDefault(s, m.all[i], rowInnerW, countsTierSel)
+				attention = identityNeedsAttention(m.all[i].Identity)
+			} else {
+				lines = m.renderListRowSearch(s, m.matched[i], rowInnerW, tokens)
+			}
+			first := attnGutter(s, i == m.cursor, attention)
+			rest := attnGutter(s, false, attention)
+			protect := 0
+			if attention {
+				protect = 1 // keep the amber ▍ beside the selection fill
+			}
+			composed := make([]string, len(lines))
+			for j, line := range lines {
+				indent := first
+				if j > 0 {
+					indent = rest
+				}
+				composed[j] = rowFeedback(indent+clipLine(line, rowInnerW), st, s, contentW, protect)
+			}
+			return composed
+		},
 	}
-	return header + "\n\n" + strings.Join(rows, "\n") + "\n\n" + hintBar
+	return header + "\n\n" + list.view() + "\n\n" + hintBar
+}
+
+// padCells right-pads a (possibly ANSI-styled) line with spaces to w display
+// cells; it never truncates. Used to anchor a trailing scrollbar to a fixed
+// column when a row renders shorter than the gutter width.
+func padCells(line string, w int) string {
+	if gap := w - ansi.StringWidth(line); gap > 0 {
+		return line + strings.Repeat(" ", gap)
+	}
+	return line
+}
+
+// attachScrollbar is the ONE composition step every scrollable region shares
+// after windowing: pad each already-windowed row to `width` cells, then join the
+// shared scroll.Bar gutter on the right — anchored to a fixed column even when a
+// row renders short. The meeting list and every detail-pane body go through it,
+// so a scrolled region looks identical everywhere (the same way scroll.Bar owns
+// the glyph). The caller has already reserved the column (rows rendered at
+// inner-1) and decided — via scroll.Needed — that the bar is warranted; the bar's
+// height is len(rows), so the gutter always matches the block it rides beside.
+func attachScrollbar(rows []string, width, total, offset int, s theme.Styles) string {
+	padded := make([]string, len(rows))
+	for i, ln := range rows {
+		padded[i] = padCells(ln, width)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		strings.Join(padded, "\n"), scroll.Bar(len(rows), total, offset, s))
 }
 
 // renderListHints picks a hint set that fits the available width.
@@ -319,28 +481,165 @@ func (m *dashboardScreen) renderFilterRow(ctx screenCtx) string {
 //	row 1: title · date · status_badge
 //	row 2: ◆ N decisions   ▸ N actions   ⚠ N risks   ? N questions  (omits zero counts)
 //
-// Width budget for row 1: title (flexible) + date (12) + status (8) → leave a 20-cell shoulder
-// for the meta cells, the rest goes to the title.
-func (m *dashboardScreen) renderListRowDefault(s theme.Styles, mt notoapi.Meeting, width int) []string {
-	titleBudget := width - 22
-	if titleBudget < 10 {
-		titleBudget = 10
+// The meta cells (date + status) are MEASURED and the title gets whatever's left,
+// so the row fits `width` exactly without a hand-tuned shoulder constant. compact
+// is decided ONCE for the whole list (see listCountsTier) and passed in, so
+// every row breaks to the same form at the SAME width — a flagged row (its ⚑N is
+// wider) never compacts a step earlier than its unflagged neighbour.
+func (m *dashboardScreen) renderListRowDefault(s theme.Styles, mt notoapi.Meeting, width int, tier countsTier) []string {
+	when := s.Muted.Render(mt.CreatedAt.Format("Jan 02 15:04"))
+	badge := dashboardStatusBadge(s, mt.Status)
+	// Trailing meta, with its leading 2-space gaps, is fixed-width; the title
+	// flexes into the remainder.
+	meta := "  " + when
+	if badge != "" {
+		meta += "  " + badge
 	}
-	title := fit(mt.Title, titleBudget)
-	when := mt.CreatedAt.Format("Jan 02 15:04")
-	rowParts := []string{
-		s.HeaderEm.Render(title),
-		s.Muted.Render(when),
+	titleBudget := width - lipgloss.Width(meta)
+	if titleBudget < 6 {
+		titleBudget = 6 // a stub title beats none on a very narrow column
 	}
-	if badge := dashboardStatusBadge(s, mt.Status); badge != "" {
-		rowParts = append(rowParts, badge)
+	row1 := s.HeaderEm.Render(fit(mt.Title, titleBudget)) + meta
+	// row 2 is the counts + the attention flag (⚑N) for speakers still needing
+	// identity work; a resolved meeting adds nothing.
+	var counts string
+	switch tier {
+	case countsIcon:
+		counts = renderCounterStripIcons(s, mt.DecisionCount, mt.ActionCount, mt.RiskCount, mt.QuestionCount)
+	case countsIconNum:
+		counts = renderCounterStripCompact(s, mt.DecisionCount, mt.ActionCount, mt.RiskCount, mt.QuestionCount)
+	default:
+		counts = renderCounterStrip(s, mt.DecisionCount, mt.ActionCount, mt.RiskCount, mt.QuestionCount)
 	}
-	row1 := strings.Join(rowParts, "  ")
-	counters := renderCounterStrip(s, mt.DecisionCount, mt.ActionCount, mt.RiskCount, mt.QuestionCount)
-	if counters == "" {
-		counters = s.Muted.Render("·")
+	row2 := joinRow2(counts, identityCluster(s, mt.Identity))
+	if row2 == "" {
+		row2 = s.Muted.Render("·")
 	}
-	return []string{row1, counters}
+	return []string{row1, row2}
+}
+
+// countsTier is the rendering fidelity of a list row's counter strip, decided
+// ONCE for the whole list (listCountsTier). The three-step responsive family,
+// mirroring the nav pills' full → mid → min: spelled words, icon+count, then the
+// icon alone.
+type countsTier int
+
+const (
+	countsFull    countsTier = iota // ◆ 2 decisions   ▸ 3 actions   …
+	countsIconNum                   // ◆2 ▸3 ⚠1 ?2
+	countsIcon                      // ◆ ▸ ⚠ ?
+)
+
+// listCountsTier decides — for the WHOLE browse list at once — which counter
+// form the row-2 strips use. It's all-or-nothing so the list reads cleanly: it
+// returns the widest tier whose EVERY row (counts + identity flag) fits the
+// column, so the break point is identical across rows (flagged or not) instead of
+// ragged. Returns countsFull in search mode (those rows carry no counter strip).
+func (m *dashboardScreen) listCountsTier(s theme.Styles, width int) countsTier {
+	if m.query != "" {
+		return countsFull
+	}
+	// A row's strip width is a pure function of its counts + the identity
+	// attention total (the only inputs to the two strips and identityCluster), and
+	// most rows share one signature — so measure each DISTINCT signature once
+	// rather than re-rendering a strip per meeting. That keeps this O(distinct
+	// rows), so a long library costs about the same here as the windowed row
+	// render does. Early-exit the moment the worst tier is forced.
+	type sig struct{ d, a, r, q, attn int }
+	seen := make(map[sig]struct{})
+	fullFits, iconNumFits := true, true
+	for i := 0; i < m.visibleCount(); i++ {
+		mt := m.all[i]
+		attn := 0
+		if mt.Identity != nil {
+			attn = mt.Identity.Likely + mt.Identity.New + mt.Identity.Unset
+		}
+		k := sig{mt.DecisionCount, mt.ActionCount, mt.RiskCount, mt.QuestionCount, attn}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		id := identityCluster(s, mt.Identity)
+		full := joinRow2(renderCounterStrip(s, mt.DecisionCount, mt.ActionCount, mt.RiskCount, mt.QuestionCount), id)
+		if lipgloss.Width(full) > width {
+			fullFits = false
+		}
+		iconNum := joinRow2(renderCounterStripCompact(s, mt.DecisionCount, mt.ActionCount, mt.RiskCount, mt.QuestionCount), id)
+		if lipgloss.Width(iconNum) > width {
+			iconNumFits = false
+		}
+		if !fullFits && !iconNumFits {
+			break // worst tier already forced; nothing left to learn
+		}
+	}
+	switch {
+	case fullFits:
+		return countsFull
+	case iconNumFits:
+		return countsIconNum
+	default:
+		return countsIcon
+	}
+}
+
+// joinRow2 joins the counter strip and identity rollup with a 3-space gap,
+// skipping either when empty so a meeting with only one of them has no dangling
+// separator.
+func joinRow2(counts, identity string) string {
+	switch {
+	case counts != "" && identity != "":
+		return counts + "   " + identity
+	case counts != "":
+		return counts
+	default:
+		return identity
+	}
+}
+
+// identityCluster renders the per-meeting speaker-identity rollup as the SAME
+// single amber ⚑N the rest of the attention system uses (nav pill, detail tab
+// bar, Speakers rollup): one count of speakers still needing identity work
+// (likely + new + not-set). Splitting it into separate ◐/✦/○ glyphs put two
+// near-identical amber chips on a row and broke the "one flag, traceable from
+// the nav strip to the item" language — the breakdown belongs in the detail
+// pane (identityRollupLine), not the glanceable list. A fully-resolved meeting
+// (or one with no mappings) renders NOTHING: the list flags only outstanding
+// work, never a "done" badge.
+func identityCluster(s theme.Styles, id *notoapi.SpeakerIdentitySummary) string {
+	if id == nil {
+		return ""
+	}
+	if n := id.Likely + id.New + id.Unset; n > 0 {
+		return attnCount(s, n)
+	}
+	// A fully-resolved meeting shows NOTHING here — a "done" badge on every
+	// finished row is just noise. The list flags only what still needs the user
+	// (the ⚑N); silence means resolved.
+	return ""
+}
+
+// identityNeedsAttention reports whether a meeting has any speaker still needing
+// identity work (likely / new / not-set). Drives the list row's attention bar.
+func identityNeedsAttention(id *notoapi.SpeakerIdentitySummary) bool {
+	return id != nil && (id.Likely > 0 || id.New > 0 || id.Unset > 0)
+}
+
+// outstandingStatusBadge flags only a meeting's UNFINISHED state for the detail
+// header — recording (in progress), recorded-but-not-yet-transcribed, or failed.
+// A transcribed/summarized meeting is "done" and carries no badge (the header
+// shouldn't shout a green check on every finished meeting). Mirrors the list's
+// "flag only outstanding work" rule, with header-appropriate wording.
+func outstandingStatusBadge(s theme.Styles, status notoapi.MeetingStatus) string {
+	switch status {
+	case notoapi.StatusRecording:
+		return badgeDanger(s, "● rec")
+	case notoapi.StatusRecorded:
+		return badgeWarn(s, "untranscribed")
+	case notoapi.StatusFailed:
+		return badgeDanger(s, "✗ failed")
+	default:
+		return ""
+	}
 }
 
 func dashboardStatusBadge(s theme.Styles, status notoapi.MeetingStatus) string {

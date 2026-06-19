@@ -59,6 +59,14 @@ func Run(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 		return app.runRecord(args[1:])
 	case "import-audio":
 		return app.runImportAudio(args[1:])
+	case "speaker-model":
+		return app.runSpeakerModel(args[1:])
+	case "models":
+		return app.runModels(args[1:])
+	case "modal":
+		return app.runModal(args[1:])
+	case "bench":
+		return app.runBench(args[1:])
 	case "stop":
 		return app.runStop(args[1:])
 	case "dev":
@@ -69,6 +77,8 @@ func Run(args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 		return app.runPing(args[1:])
 	case "seed":
 		return app.runSeed(args[1:])
+	case "reset":
+		return app.runReset(args[1:])
 	default:
 		fmt.Fprintf(errOut, "noto: unknown command %q. Run `noto help`.\n", args[0])
 		return 64
@@ -121,12 +131,21 @@ Usage:
   noto status
   noto providers [list|key-set|key-remove|test|active-speech|active-llm] ...
   noto verify
+  noto models [status|download <id>]
+                          Manage local STT/diarization models (backend-aware)
+  noto modal [status|setup|benchmark]
+                          Configure Modal GPU compute (no Modal CLI required)
+  noto bench [run|preflight|compare|audit|dataset|ledger]
+                          Benchmark measurement spine (cost/quality compare)
+  noto speaker-model [status|download]
+                          Manage the local voiceprint (ECAPA) model
   noto record [--title "..."]
   noto stop
   noto import-audio <path> [--title "..."] [--wait] [--json]
   noto jobs [--json]
   noto ping
-  noto seed                Insert fixture meetings (dev-only, local backend)
+  noto seed                Insert fixture meetings + a People directory (dev-only)
+  noto reset [--yes]       Wipe ALL local meetings + people (dev-only)
   noto dev [serve]     Run from a checked-out repo (alias of TUI, prints debug paths)
 
 Local lifecycle:

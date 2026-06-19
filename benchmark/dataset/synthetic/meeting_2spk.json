@@ -1,0 +1,49 @@
+{
+ "speakers": [
+  "2277",
+  "2035"
+ ],
+ "duration": 49.036,
+ "turns": [
+  {
+   "speaker_id": "2277",
+   "start": 0.0,
+   "end": 6.591
+  },
+  {
+   "speaker_id": "2035",
+   "start": 6.591,
+   "end": 15.612
+  },
+  {
+   "speaker_id": "2277",
+   "start": 15.612,
+   "end": 22.758
+  },
+  {
+   "speaker_id": "2035",
+   "start": 22.758,
+   "end": 26.684
+  },
+  {
+   "speaker_id": "2277",
+   "start": 26.684,
+   "end": 31.52
+  },
+  {
+   "speaker_id": "2035",
+   "start": 31.52,
+   "end": 40.361
+  },
+  {
+   "speaker_id": "2277",
+   "start": 40.361,
+   "end": 43.202
+  },
+  {
+   "speaker_id": "2035",
+   "start": 43.202,
+   "end": 49.043
+  }
+ ]
+}

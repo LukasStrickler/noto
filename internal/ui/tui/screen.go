@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
+	"github.com/lukasstrickler/noto/internal/ui/tui/hit"
 	"github.com/lukasstrickler/noto/internal/ui/tui/keys"
 	"github.com/lukasstrickler/noto/internal/ui/tui/theme"
 )
@@ -17,6 +18,7 @@ type screenID string
 
 const (
 	sDashboard screenID = "dashboard"
+	sPeople    screenID = "people"
 	sRecorder  screenID = "recorder"
 	sAgent     screenID = "agent"
 	sConfig    screenID = "config"
@@ -52,6 +54,7 @@ type screenReg struct {
 
 var topScreens = []screenReg{
 	{id: sDashboard, title: "dashboard", palette: "Dashboard (meetings + search)", new: newDashboardScreen},
+	{id: sPeople, title: "people", palette: "People (speaker profiles)", aliases: []string{"p"}, new: newPeopleScreen},
 	{id: sRecorder, title: "recorder", palette: "Recorder", aliases: []string{"r"}, new: newRecorderScreen},
 	{id: sConfig, title: "config", palette: "Config (routing, API keys, storage, paths)", hidden: []string{","}, new: newConfigScreen},
 }
@@ -100,6 +103,43 @@ type screenCtx struct {
 	styles theme.Styles
 	width  int
 	height int
+
+	// sidebarWidth is the user's persisted left-pane width in cells, shared by
+	// every two-pane screen. Pass it through layout.SidebarSplit (which clamps
+	// it to the current terminal) when laying out the two columns.
+	sidebarWidth int
+
+	// Interaction wiring (see interactive.go). A screen makes body elements
+	// clickable/hoverable exactly the way the chrome does — build a row with
+	// hitRow and place buttons into it. hits is the current frame's click map;
+	// bodyTop is the body's y-offset under the header, so hitRow can translate
+	// body-local coordinates into the absolute ones root resolves clicks
+	// against. hovered/pressed are the live pointer state. All zero/nil outside
+	// the view() path, where registering hits is meaningless anyway.
+	hits    *hit.Map[region]
+	bodyTop int
+	hovered string
+	pressed string
+}
+
+// hitRow starts a clickable row for body content. x is an absolute column
+// (the body spans the full width); y is relative to the top of the body. Place
+// buttons into the returned row just like the chrome does:
+//
+//	row := ctx.hitRow(0, lineIdx)
+//	button{id: "people:row:" + id, active: id == selected, onClick: ..., render: ...}.
+//	    place(row, ctx.pointer())
+//	line := row.String()
+//
+// Region ids must be unique across the whole frame (chrome + every screen), so
+// prefix them with the screen/element, e.g. "people:row:<id>".
+func (c screenCtx) hitRow(x, y int) *hit.Row[region] {
+	return hit.NewRow(c.hits, x, c.bodyTop+y)
+}
+
+// pointer is the live hover/press state to hand to button.place.
+func (c screenCtx) pointer() pointer {
+	return pointer{hovered: c.hovered, pressed: c.pressed}
 }
 
 // screen is what every page implements. Stateful; lives in the

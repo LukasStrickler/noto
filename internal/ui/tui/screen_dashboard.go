@@ -7,6 +7,8 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
+	"github.com/lukasstrickler/noto/internal/ui/tui/layout"
+	"github.com/lukasstrickler/noto/internal/ui/tui/scroll"
 )
 
 // dashboardScreen is the unified home: meetings list + search on the
@@ -49,6 +51,11 @@ type dashboardScreen struct {
 	preserveSearchSelection bool
 
 	cursor int
+	// listScroll is the top visible LINE of the meeting list — the view's own
+	// scroll position, kept SEPARATE from the cursor. The wheel moves this and
+	// nothing else (scroll ≠ select); arrow keys move the cursor and then nudge
+	// listScroll just enough to keep the selection visible (followCursor).
+	listScroll int
 
 	// Detail pane embedded as the right column. There is no separate
 	// detail screen — Enter shifts focus into the pane instead of
@@ -199,15 +206,104 @@ func (m *dashboardScreen) update(ctx screenCtx, msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return m, nil
 
-	case meetingLoadedMsg, summaryLoadedMsg, transcriptLoadedMsg, filesLoadedMsg, speakerRenamedMsg:
-		// All right-pane fetches and pane-emitted messages flow
-		// through the detail pane.
+	case meetingLoadedMsg, summaryLoadedMsg, transcriptLoadedMsg, filesLoadedMsg,
+		speakerRenamedMsg, speakerMappingsLoadedMsg, speakerIdentityMsg, speakerPersonOpenMsg,
+		profilesLoadedMsg:
+		// All right-pane fetches and pane-emitted messages flow through the
+		// detail pane. (speakerPersonOpenMsg comes back out as a navigation cmd
+		// the root router handles; profilesLoadedMsg feeds the assign dialog's
+		// directory — only the active screen receives it, so no clash with the
+		// People screen.)
 		return m, m.pane.update(ctx, msg)
 
 	case tea.KeyPressMsg:
 		return m.handleKey(ctx, v)
+
+	case mouseWheelMsg:
+		return m.handleWheel(ctx, v)
 	}
 	return m, nil
+}
+
+// handleWheel scrolls whatever the pointer is over. Over the detail pane (its
+// body or tab bar) it scrolls the pane's active tab WITHOUT stealing focus —
+// hover-to-scroll — by replaying the canonical up/down key into the pane, so the
+// per-tab scroll logic stays defined once. Anywhere else (the list, a row, the
+// filter) it scrolls the LIST VIEW only — it moves listScroll, never the cursor,
+// so the wheel pans the viewport while the selection (and detail pane) stay put.
+// Clicking a row is what changes the selection; scrolling never does.
+func (m *dashboardScreen) handleWheel(ctx screenCtx, w mouseWheelMsg) (screen, tea.Cmd) {
+	if w.over == "dash:pane" || strings.HasPrefix(w.over, "dash:tab:") {
+		if !m.pane.inputActive() {
+			k := tea.KeyPressMsg{Code: tea.KeyDown}
+			if w.up {
+				k.Code = tea.KeyUp
+			}
+			m.pane.handleKey(ctx, k)
+		}
+		return m, nil
+	}
+	const wheelStep = 3 // lines per notch — a touch more than one 2-line row
+	_, _, total := m.listLineLayout()
+	if w.up {
+		m.listScroll -= wheelStep
+	} else {
+		m.listScroll += wheelStep
+	}
+	m.listScroll = scroll.Clamp(m.listScroll, total, m.listRowBudget(ctx))
+	return m, nil
+}
+
+// listLineLayout reports the line geometry of the meeting list WITHOUT rendering
+// it, so Update can reconcile listScroll against the exact same geometry the view
+// windows with. Rows are a fixed height per mode (browse = title + status line;
+// a search hit = title + optional snippet), so the line count is derivable from
+// the data alone.
+func (m *dashboardScreen) listLineLayout() (cursorTop, cursorH, total int) {
+	for i := 0; i < m.visibleCount(); i++ {
+		h := m.rowLineCount(i)
+		if i == m.cursor {
+			cursorTop, cursorH = total, h
+		}
+		total += h
+	}
+	if cursorH == 0 {
+		cursorH = 1
+	}
+	return
+}
+
+// rowLineCount is how many lines meeting i occupies — kept in lock-step with
+// renderListRowDefault (always 2) / renderListRowSearch (1 + snippet).
+func (m *dashboardScreen) rowLineCount(i int) int {
+	if m.query == "" {
+		return 2
+	}
+	if i < len(m.matched) && m.matched[i].Snippet != "" {
+		return 2
+	}
+	return 1
+}
+
+// listRowBudget is how many list rows fit in the panel — the same arithmetic the
+// view uses (listH − panel chrome − filter/blank/blank/hint), so Update and View
+// agree on the window size.
+func (m *dashboardScreen) listRowBudget(ctx screenCtx) int {
+	stripH := m.bottomStripHeight()
+	listH := layout.Split(ctx.height, 0, layout.FlexMin(1, 6), layout.Fixed(stripH))[0]
+	b := listH - 8
+	if b < 1 {
+		b = 1
+	}
+	return b
+}
+
+// followCursor nudges listScroll the minimum needed to keep the selected row
+// visible — called after the ARROW keys move the cursor (selection drives the
+// view), never on a wheel scroll (which pans without selecting).
+func (m *dashboardScreen) followCursor(ctx screenCtx) {
+	top, h, total := m.listLineLayout()
+	m.listScroll = scroll.Follow(total, m.listRowBudget(ctx), top, h, m.listScroll)
 }
 
 func (m *dashboardScreen) handleKey(ctx screenCtx, v tea.KeyPressMsg) (screen, tea.Cmd) {
@@ -236,11 +332,13 @@ func (m *dashboardScreen) handleKey(ctx screenCtx, v tea.KeyPressMsg) (screen, t
 			if m.cursor > 0 {
 				m.cursor--
 			}
+			m.followCursor(ctx)
 			return m, m.loadSelectedCmd(ctx)
 		case "down":
 			if m.cursor < m.visibleCount()-1 {
 				m.cursor++
 			}
+			m.followCursor(ctx)
 			return m, m.loadSelectedCmd(ctx)
 		}
 		var cmd tea.Cmd
@@ -256,10 +354,28 @@ func (m *dashboardScreen) handleKey(ctx screenCtx, v tea.KeyPressMsg) (screen, t
 	// Pane has focus: all navigation keys go to it. Tab or Esc returns
 	// focus to the meetings list so the user can move up/down again.
 	if m.paneOpen {
+		// While the pane captures input (rename editor / assign picker), let
+		// it consume keys first — esc/tab close the sub-mode, digits assign —
+		// before the focus-management shortcuts below would steal them.
+		if m.pane.inputActive() {
+			if handled, cmd := m.pane.handleKey(ctx, v); handled {
+				return m, cmd
+			}
+		}
 		switch v.String() {
 		case "esc", "tab", "shift+tab":
 			m.paneOpen = false
 			return m, nil
+		}
+		// `/` focuses the filter input from anywhere on the dashboard,
+		// including while the pane holds focus — handled before forwarding
+		// so the pane can never swallow it (the list-focus branch below
+		// does the same).
+		if key.Matches(v, ctx.keys.Search) {
+			m.paneOpen = false
+			m.inputFocus = true
+			m.input.Focus()
+			return m, m.refreshFocusedSearch(ctx)
 		}
 		// Forward the key. If the pane handled it, swallow; otherwise
 		// fall through so global bindings like `q` still work.
@@ -291,11 +407,13 @@ func (m *dashboardScreen) handleKey(ctx screenCtx, v tea.KeyPressMsg) (screen, t
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		m.followCursor(ctx)
 		return m, m.loadSelectedCmd(ctx)
 	case key.Matches(v, ctx.keys.Down):
 		if m.cursor < m.visibleCount()-1 {
 			m.cursor++
 		}
+		m.followCursor(ctx)
 		return m, m.loadSelectedCmd(ctx)
 	case key.Matches(v, ctx.keys.Enter), key.Matches(v, ctx.keys.Tab):
 		// Enter (or Tab) shifts focus into the right pane instead of

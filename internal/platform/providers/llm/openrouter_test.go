@@ -12,6 +12,7 @@ import (
 
 	"github.com/lukasstrickler/noto/internal/core/artifacts"
 	"github.com/lukasstrickler/noto/internal/core/notoerr"
+	"github.com/lukasstrickler/noto/internal/platform/providers/llm/prompts"
 )
 
 // fakeDoer returns a canned response (or error) and counts invocations so
@@ -143,34 +144,109 @@ func TestSummarize_MissingAPIKey(t *testing.T) {
 	}
 }
 
-// The system prompt must be sourced from the internal/prompts package (the
-// versioned, few-shot/chain-of-thought templates), not a terse inline string.
-// "expert meeting analyst" is the prompts template's framing; the old inline
-// prompt opened with "You are a meeting summarization assistant" and is gone.
-func TestBuildSummaryMessages_UsesPromptsSystemPrompt(t *testing.T) {
-	msgs := buildSummaryMessages(testTranscript())
-	if len(msgs) != 2 || msgs[0].Role != "system" || msgs[1].Role != "user" {
-		t.Fatalf("expected [system,user] messages, got %+v", msgs)
+// capturingDoer records the last request body so tests can assert the wire
+// shape, and returns a canned structured response.
+type capturingDoer struct {
+	bodies []string
+	status int
+	body   string
+}
+
+func (c *capturingDoer) Do(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		b, _ := io.ReadAll(req.Body)
+		c.bodies = append(c.bodies, string(b))
 	}
-	if !strings.Contains(msgs[0].Content, "expert meeting analyst") {
-		t.Errorf("system prompt not sourced from prompts package:\n%s", msgs[0].Content)
+	return &http.Response{
+		StatusCode: c.status,
+		Body:       io.NopCloser(strings.NewReader(c.body)),
+		Header:     make(http.Header),
+	}, nil
+}
+
+// The transcript sent to the model must attribute speakers by their fixed @S
+// token (never the raw label), and the system prompt must come from the
+// versioned prompts package ("expert meeting analyst").
+func TestExtractMessages_TokenAttributedAndPromptSourced(t *testing.T) {
+	b := prompts.NewPromptBuilder("test")
+	if sys := b.SystemPrompt(prompts.SummaryTypeFull); !strings.Contains(sys, "expert meeting analyst") {
+		t.Errorf("system prompt not sourced from prompts package:\n%s", sys)
 	}
-	if strings.Contains(msgs[0].Content, "You are a meeting summarization assistant") {
-		t.Errorf("stale inline system prompt still present")
+	user := transcriptUserMessage(b, testTranscript())
+	if !strings.Contains(user, "@S1") {
+		t.Errorf("user message must attribute speakers by @S token, got:\n%s", user)
+	}
+	if strings.Contains(user, "Alice") {
+		t.Errorf("raw speaker label leaked into the model prompt:\n%s", user)
 	}
 }
 
-// Wiring the prompts package must NOT drop openrouter's transcript truncation:
-// prompts.Build does not truncate, so a transcript past the 150-segment cap has
-// to still produce a truncation marker, keeping the request under the 1MB guard.
-func TestBuildSummaryMessages_TruncatesLargeTranscript(t *testing.T) {
-	tr := testTranscript()
-	tr.Segments = make([]artifacts.Segment, 200)
-	for i := range tr.Segments {
-		tr.Segments[i] = artifacts.Segment{ID: "seg", SpeakerID: "spk_0", Text: "filler text for a long meeting"}
+// With privacy guards on, the request must carry structured-output +
+// provider-routing fields: response_format json_schema and a provider block
+// with zdr, data_collection=deny, require_parameters.
+func TestSummarize_RequestShapeHonorsPrivacy(t *testing.T) {
+	content := `{"short_summary":"s","decisions":[],"action_items":[],"risks":[],"open_questions":[]}`
+	doer := &capturingDoer{status: 200, body: chatResponse(content)}
+	a := &OpenRouterAdapter{APIKey: "key", HTTP: doer, ModelID: "google/gemini-3.1-flash-preview", ZDR: true, DenyDataCollection: true, RequireParameters: true}
+
+	if _, err := a.Summarize(context.Background(), testTranscript(), SummarizeOptions{MeetingID: "mtg_test"}); err != nil {
+		t.Fatalf("Summarize error: %v", err)
 	}
-	user := buildSummaryMessages(tr)[1].Content
-	if !strings.Contains(user, "... (truncated)") {
-		t.Errorf("expected truncation marker for a >150-segment transcript")
+	if len(doer.bodies) == 0 {
+		t.Fatal("no request captured")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(doer.bodies[0]), &payload); err != nil {
+		t.Fatalf("request body not JSON: %v", err)
+	}
+	if payload["model"] != "google/gemini-3.1-flash-preview" {
+		t.Errorf("model = %v", payload["model"])
+	}
+	rf, _ := payload["response_format"].(map[string]any)
+	if rf["type"] != "json_schema" {
+		t.Errorf("response_format type = %v, want json_schema", rf["type"])
+	}
+	prov, ok := payload["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing provider routing block: %v", payload["provider"])
+	}
+	if prov["zdr"] != true || prov["data_collection"] != "deny" || prov["require_parameters"] != true {
+		t.Errorf("provider routing = %v, want zdr/deny/require_parameters", prov)
+	}
+}
+
+// With privacy relaxed, no provider block is sent and we fall back to the
+// broadly-supported json_object response format.
+func TestSummarize_RequestShapeRelaxed(t *testing.T) {
+	content := `{"short_summary":"s","decisions":[],"action_items":[],"risks":[],"open_questions":[]}`
+	doer := &capturingDoer{status: 200, body: chatResponse(content)}
+	a := &OpenRouterAdapter{APIKey: "key", HTTP: doer}
+
+	if _, err := a.Summarize(context.Background(), testTranscript(), SummarizeOptions{MeetingID: "mtg_test"}); err != nil {
+		t.Fatalf("Summarize error: %v", err)
+	}
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(doer.bodies[0]), &payload)
+	if _, hasProvider := payload["provider"]; hasProvider {
+		t.Errorf("expected no provider block when privacy guards are off")
+	}
+	rf, _ := payload["response_format"].(map[string]any)
+	if rf["type"] != "json_object" {
+		t.Errorf("response_format type = %v, want json_object", rf["type"])
+	}
+}
+
+// A model that wraps its JSON in a markdown code fence must still parse.
+func TestSummarize_StripsCodeFences(t *testing.T) {
+	fenced := "```json\n{\"short_summary\":\"fenced\",\"decisions\":[],\"action_items\":[],\"risks\":[],\"open_questions\":[]}\n```"
+	doer := &fakeDoer{status: 200, body: chatResponse(fenced)}
+	a := &OpenRouterAdapter{APIKey: "key", HTTP: doer}
+
+	sum, err := a.Summarize(context.Background(), testTranscript(), SummarizeOptions{MeetingID: "mtg_test"})
+	if err != nil {
+		t.Fatalf("Summarize error: %v", err)
+	}
+	if sum.ShortSummary != "fenced" {
+		t.Errorf("short summary = %q, want fenced (fence not stripped)", sum.ShortSummary)
 	}
 }

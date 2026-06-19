@@ -103,6 +103,9 @@ func EnsureDirs(layout DirectoryLayout) error {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return ErrDirCreate(dir, err)
 		}
+		if err := os.Chmod(dir, 0755); err != nil {
+			return ErrDirCreate(dir, err)
+		}
 	}
 
 	return nil

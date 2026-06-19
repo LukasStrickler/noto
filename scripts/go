@@ -59,7 +59,10 @@ echo "noto: fetching ${url}" >&2
 tmp="$(mktemp -t noto-go-XXXXXX.tar.gz)"
 trap 'rm -f "${tmp}"' EXIT
 
-if ! curl -fsSL "${url}" -o "${tmp}"; then
+# --retry alone does not cover mid-transfer HTTP/2 stream resets (curl exit 92,
+# seen twice from go.dev on Modal boxes — it killed two benchmark runs at
+# setup); --retry-all-errors makes those retryable too.
+if ! curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 "${url}" -o "${tmp}"; then
   echo "noto: failed to download Go from ${url}" >&2
   echo "      install Go manually (https://go.dev/dl/) or set \$NOTO_GO" >&2
   exit 1

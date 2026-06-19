@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lukasstrickler/noto/internal/platform/providers/computewire"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
 
@@ -46,6 +47,33 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Config
 	mux.HandleFunc("/v1/config", s.handleConfig)
 	mux.HandleFunc("/v1/config/paths", s.handleConfigPaths)
+
+	// System (backend capabilities / "connected to" discovery)
+	mux.HandleFunc("/v1/system", s.handleSystem)
+
+	// Compute — stateless STT/diarize offload (this `noto serve` as a compute backend)
+	mux.HandleFunc(computewire.TranscribePath, s.handleComputeTranscribe)
+	mux.HandleFunc(computewire.DiarizePath, s.handleComputeDiarize)
+	mux.HandleFunc("/v1/compute/modal/status", s.handleModalComputeStatus)
+	mux.HandleFunc("/v1/compute/modal/setup", s.handleModalComputeSetup)
+	mux.HandleFunc("/v1/compute/modal/benchmark", s.handleModalBenchmark)
+
+	// Benchmark measurement spine (Program A)
+	mux.HandleFunc("/v1/bench/estimate", s.handleBenchEstimate)
+	mux.HandleFunc("/v1/bench/preflight", s.handleBenchPreflight)
+	mux.HandleFunc("/v1/bench/run", s.handleBenchRun)
+	mux.HandleFunc("/v1/bench/compare", s.handleBenchCompare)
+	mux.HandleFunc("/v1/bench/ledger/winners", s.handleBenchLedgerWinners)
+	mux.HandleFunc("/v1/bench/ledger/append", s.handleBenchLedgerAppend)
+	mux.HandleFunc("/v1/bench/dataset/list", s.handleBenchDatasetList)
+	mux.HandleFunc("/v1/bench/audit", s.handleBenchAudit)
+	mux.HandleFunc("/v1/bench/retrace", s.handleBenchRetrace)
+	mux.HandleFunc("/v1/bench/scale", s.handleBenchScale)
+	mux.HandleFunc("/v1/bench/insights", s.handleBenchInsights)
+
+	// Repo — artifact store over HTTP (this `noto serve` as a remote data plane)
+	mux.HandleFunc("/v1/repo/meetings", s.handleRepoMeetings)
+	mux.HandleFunc("/v1/repo/meetings/", s.handleRepoMeetingByID)
 
 	// Storage
 	mux.HandleFunc("/v1/storage", s.handleStorage)
@@ -338,9 +366,26 @@ func (s *Server) handleSpeakerProfileByID(w http.ResponseWriter, r *http.Request
 
 // --- Imports ---
 
+// maxUploadBytes caps a remote audio upload (a long meeting is well under this).
+const maxUploadBytes = 4 << 30 // 4 GiB
+
 func (s *Server) handleImportAudio(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+		return
+	}
+	// Remote clients upload bytes (octet-stream); local/UDS clients send a
+	// path (JSON). Branch on Content-Type so one endpoint serves both.
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/octet-stream") {
+		title := r.Header.Get("X-Noto-Title")
+		filename := r.Header.Get("X-Noto-Filename")
+		body := http.MaxBytesReader(w, r.Body, maxUploadBytes)
+		m, job, err := s.svc.ImportAudioStream(r.Context(), body, filename, title)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, notoapi.ImportAudioResult{Meeting: m, Job: job})
 		return
 	}
 	var body notoapi.ImportAudioOpts

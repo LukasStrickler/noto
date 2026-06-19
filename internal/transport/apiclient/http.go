@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +64,9 @@ func NewHTTP(opts HTTPOptions) notoapi.Client {
 		client:           hc,
 		stream:           stream,
 		heartbeatTimeout: defaultHeartbeatTimeout,
+		// A UDS client always sets SocketPath; a bare BaseURL means a real TCP
+		// (remote) server whose filesystem this client cannot reach.
+		remote: opts.SocketPath == "",
 	}
 }
 
@@ -71,6 +76,7 @@ type httpClient struct {
 	client           *http.Client
 	stream           *http.Client
 	heartbeatTimeout time.Duration
+	remote           bool
 }
 
 // do issues a JSON request and unmarshals the response into out.
@@ -200,8 +206,53 @@ func (c *httpClient) Search(ctx context.Context, opts notoapi.SearchOpts) (notoa
 // ---- Recording ----
 
 func (c *httpClient) ImportAudio(ctx context.Context, opts notoapi.ImportAudioOpts) (notoapi.ImportAudioResult, error) {
+	if c.remote {
+		// The server can't see this client's filesystem — stream the bytes up.
+		return c.uploadAudio(ctx, opts)
+	}
+	// Local daemon over UDS: same filesystem, send the path (zero-copy).
 	var out notoapi.ImportAudioResult
 	err := c.do(ctx, http.MethodPost, "/v1/imports/audio", opts, &out)
+	return out, err
+}
+
+// uploadAudio streams a local file to a remote backend as the request body.
+func (c *httpClient) uploadAudio(ctx context.Context, opts notoapi.ImportAudioOpts) (notoapi.ImportAudioResult, error) {
+	var out notoapi.ImportAudioResult
+	f, err := os.Open(opts.Path)
+	if err != nil {
+		return out, notoapi.NewError(notoapi.CodeInvalidRequest, "open audio: "+err.Error(), nil)
+	}
+	defer f.Close()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/v1/imports/audio", f)
+	if err != nil {
+		return out, err
+	}
+	if fi, statErr := f.Stat(); statErr == nil {
+		req.ContentLength = fi.Size() // lets the server show progress + enforce a cap
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Noto-Filename", filepath.Base(opts.Path))
+	if opts.Title != "" {
+		req.Header.Set("X-Noto-Title", opts.Title)
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		var env notoapi.ErrorEnvelope
+		_ = json.NewDecoder(resp.Body).Decode(&env)
+		if env.Error != nil {
+			return out, env.Error
+		}
+		return out, fmt.Errorf("noto api: %s", resp.Status)
+	}
+	err = json.NewDecoder(resp.Body).Decode(&out)
 	return out, err
 }
 func (c *httpClient) StartRecording(ctx context.Context, opts notoapi.StartRecordingOpts) (notoapi.StartRecordingResult, error) {
@@ -340,7 +391,104 @@ func (c *httpClient) GetPaths(ctx context.Context) (notoapi.Paths, error) {
 	err := c.do(ctx, http.MethodGet, "/v1/config/paths", nil, &out)
 	return out, err
 }
+func (c *httpClient) GetModalComputeStatus(ctx context.Context) (notoapi.ModalStatus, error) {
+	var out notoapi.ModalStatus
+	err := c.do(ctx, http.MethodGet, "/v1/compute/modal/status", nil, &out)
+	return out, err
+}
+func (c *httpClient) SetupModalCompute(ctx context.Context, req notoapi.ModalSetupRequest) (notoapi.ModalStatus, error) {
+	var out notoapi.ModalStatus
+	err := c.do(ctx, http.MethodPost, "/v1/compute/modal/setup", req, &out)
+	return out, err
+}
+func (c *httpClient) RunModalBenchmark(ctx context.Context, req notoapi.ModalBenchmarkRequest) (notoapi.ModalBenchmarkResult, error) {
+	var out notoapi.ModalBenchmarkResult
+	err := c.do(ctx, http.MethodPost, "/v1/compute/modal/benchmark", req, &out)
+	return out, err
+}
+func (c *httpClient) BenchEstimate(ctx context.Context, req notoapi.BenchEstimateRequest) (notoapi.BenchEstimateResult, error) {
+	var out notoapi.BenchEstimateResult
+	err := c.do(ctx, http.MethodPost, "/v1/bench/estimate", req, &out)
+	return out, err
+}
+func (c *httpClient) BenchPreflight(ctx context.Context, req notoapi.BenchPreflightRequest) (notoapi.BenchPreflightResult, error) {
+	var out notoapi.BenchPreflightResult
+	err := c.do(ctx, http.MethodPost, "/v1/bench/preflight", req, &out)
+	return out, err
+}
+func (c *httpClient) BenchRun(ctx context.Context, req notoapi.BenchRunRequest) (notoapi.BenchRunResult, error) {
+	var out notoapi.BenchRunResult
+	err := c.do(ctx, http.MethodPost, "/v1/bench/run", req, &out)
+	return out, err
+}
+func (c *httpClient) BenchCompare(ctx context.Context, req notoapi.BenchCompareRequest) (notoapi.BenchCompareResult, error) {
+	var out notoapi.BenchCompareResult
+	err := c.do(ctx, http.MethodPost, "/v1/bench/compare", req, &out)
+	return out, err
+}
+func (c *httpClient) BenchLedgerWinners(ctx context.Context, opts notoapi.BenchLedgerWinnersOpts) (notoapi.BenchLedgerWinnersResult, error) {
+	var out notoapi.BenchLedgerWinnersResult
+	path := "/v1/bench/ledger/winners"
+	if opts.Profile != "" || opts.Mode != "" {
+		path += "?"
+		if opts.Profile != "" {
+			path += "profile=" + opts.Profile
+		}
+		if opts.Mode != "" {
+			if opts.Profile != "" {
+				path += "&"
+			}
+			path += "mode=" + opts.Mode
+		}
+	}
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+func (c *httpClient) BenchLedgerAppend(ctx context.Context, req notoapi.BenchLedgerAppendRequest) (notoapi.BenchLedgerAppendResult, error) {
+	var out notoapi.BenchLedgerAppendResult
+	err := c.do(ctx, http.MethodPost, "/v1/bench/ledger/append", req, &out)
+	return out, err
+}
+func (c *httpClient) BenchDatasetList(ctx context.Context) (notoapi.BenchDatasetListResult, error) {
+	var out notoapi.BenchDatasetListResult
+	err := c.do(ctx, http.MethodGet, "/v1/bench/dataset/list", nil, &out)
+	return out, err
+}
+func (c *httpClient) BenchAudit(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
+	var out notoapi.BenchAuditResult
+	q := url.Values{}
+	q.Set("run_id", runID)
+	err := c.do(ctx, http.MethodGet, "/v1/bench/audit?"+q.Encode(), nil, &out)
+	return out, err
+}
 
+func (c *httpClient) BenchRetrace(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
+	var out notoapi.BenchAuditResult
+	q := url.Values{}
+	q.Set("run_id", runID)
+	err := c.do(ctx, http.MethodPost, "/v1/bench/retrace?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+func (c *httpClient) BenchScale(ctx context.Context, req notoapi.BenchScaleRequest) (notoapi.BenchScaleResult, error) {
+	var out notoapi.BenchScaleResult
+	err := c.do(ctx, http.MethodPost, "/v1/bench/scale", req, &out)
+	return out, err
+}
+
+func (c *httpClient) BenchInsights(ctx context.Context, runID string) (notoapi.BenchInsightsResult, error) {
+	var out notoapi.BenchInsightsResult
+	q := url.Values{}
+	q.Set("run_id", runID)
+	err := c.do(ctx, http.MethodGet, "/v1/bench/insights?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+func (c *httpClient) GetSystem(ctx context.Context) (notoapi.System, error) {
+	var out notoapi.System
+	err := c.do(ctx, http.MethodGet, "/v1/system", nil, &out)
+	return out, err
+}
 func (c *httpClient) GetStorage(ctx context.Context) (notoapi.Storage, error) {
 	var out notoapi.Storage
 	err := c.do(ctx, http.MethodGet, "/v1/storage", nil, &out)
@@ -446,3 +594,8 @@ func (c *httpClient) AgentGetMeeting(ctx context.Context, id string) (notoapi.Ag
 	err := c.do(ctx, http.MethodGet, "/v1/agent/meetings/"+id, nil, &out)
 	return out, err
 }
+
+// IsRemote reports whether this client talks to a backend over the network (TCP)
+// rather than a local UDS/in-process backend. The TUI uses it to render the
+// deployment topology (a thin client vs an all-local setup).
+func (c *httpClient) IsRemote() bool { return c.remote }
