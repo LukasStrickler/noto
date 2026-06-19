@@ -194,8 +194,28 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     headroom note. NOTE: the ceiling is REFERENCE-guided (an upper bound), not the production number — it
     answers "how much could this alternate buy with perfect selection", the right "is it worth it" signal.
     Commit pending. Tests: oracleCeiling drops a seam-regressing candidate. Full suite green, vet clean.
-  - **NEXT (transcription):** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER than
-    0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
+  - **★ REPAIR-SOURCE VALIDATION COMPLETE (user asked: try perturbation; validate a valid step, not brute
+    force).** Built the audio-perturbation lever (`NOTO_PARAKEET_PERTURB=speed:R|noise:A`, same best model
+    on altered input, timestamps rescaled back — commit 17e2cb5). Ran `perturb=speed:0.9` (run
+    `20260619T215155Z-2e3c56`, with `BENCH_DIAR_WORKERS=2` after the same diar-VRAM OOM the 1.1b run hit).
+    Result: 52/103 spans differ, oracle ceiling **-0.0004 (2 real fixes)** — a VALID but WEAK repair step.
+    **The consistent picture across ALL four validated sources:** fp32 = identical (0 fixes), beam/maes =
+    identical (0), different model 1.1b = -0.0008 (4 fixes), perturbation speed:0.9 = -0.0004 (2 fixes).
+    So same-FAMILY transcription repair is **low-yield on AMI** (<0.5% WER) — the B6 oracle ceiling is ~40%
+    (lots of fixable error) but real same-family alternates deliver <1% of it, because the bottom-decile
+    errors are GENUINELY-HARD audio that a weaker model / perturbed decode of the same family fails on too.
+    Honest limitation: measured on ES2011b only (the one meeting with confidence; TDT-conf fault degraded
+    the rest). NOTE: the repair MACHINE is fully validated — it correctly extracts the real fixes that exist
+    and refuses the rest; the finding is about the SOURCES, not the machine.
+  - **STRATEGIC REDIRECT (validated):** high-yield accuracy repair needs a genuinely-different information
+    source, NOT a same-family decode: (a) a much stronger/different-arch model (whisper-large-v3 / canary —
+    needs a server adapter), (b) context/LLM correction (§10.5 context-biased re-decode using surrounding
+    text + glossary), or (c) **the diarization/overlap channel-separation half — 33% of DER error is
+    addressable in overlap regions (validated by `bench overlap`), a FAR bigger headroom than the <0.5%
+    transcription-repair ceiling.** The diar measurement spine (SpliceTurns + MeasureDiarSplice) is built;
+    the diar attempt loop is the highest-value next build.
+  - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
+    than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
     planner + ReDiarizer → diar attempt loop (mirror repair_attempt.go) on the validated MeasureDiarSplice
     spine. Cost discipline: ~$0.30 GPU this session built+validated the whole repair system AND surfaced a
