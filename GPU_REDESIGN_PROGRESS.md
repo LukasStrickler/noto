@@ -231,6 +231,21 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     change, full suite green, vet clean. Deliberately did NOT also merge the run-pair loaders (4 trivial
     lines, different cost models) or the `*Differ` funcs (divergent domain logic) — that would be premature
     DRY. The non-trivial *shared algorithm* was the right (and only) thing to de-duplicate.
+  - **DONE (this iter) — LLM/context-correction repair SOURCE built (commit bd80b37), the next §10.5 step.**
+    Investigated the diar knobs first (GPU-free): the pyannote server exposes only cost/perf knobs
+    (batch/compile/fp16/workers) + VAD + a whole-pipeline model swap — NO overlap-aware/clustering knob, so
+    the cheap diar levers are brute-force (a different model, the diar analog of the weak 1.1b STT swap) or a
+    real separation build. That redirected to the one genuinely-different source that needs NO new GPU and is
+    measurable on the EXISTING confidence run: a language model (priors over text/grammar/entities, a
+    different signal from any acoustic model). Built `repair_llm.go`: `SpanCorrector` interface (the single
+    network seam, injected) + `correctorReDecoder` adapting it to the validated ReDecoder seam — build span
+    context from the baseline words, correct it, map the text back onto in-span timestamps (`spreadWords`),
+    then the SAME attempt+measure+oracle-ceiling+gate loop scores it on the reference. `AttemptRepairsWithCorrector`.
+    6 fake-driven tests (fix accepted + WER drops; echo washes; error/unknown-meeting skip cleanly;
+    spreadWords stays in-span). Pure + offline, full suite green, vet clean. **NEXT for this source:** the
+    live OpenRouter `SpanCorrector` adapter (reuse the `chat()` path) + a small CLI surface, then run it on
+    the ES2011b confidence run → the first text-correction WER number (could be the first positive
+    transcription KPI, or another validated-weak source — either way the machine decides, not a guess).
   - **NEXT (diarization, the high-value half):** a real DER number needs a genuinely-DIFFERENT diarization
     alternate. The validated lesson from the transcription side (cheap same-family alternates are weak
     proxies) means a config-flip like `--knob vad=on` is likely ~null on AMI too — VAD trims silence, it
@@ -240,7 +255,8 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     GPU run is greenlit: produce that alternate diar run, then `diar-repair-attempt(baseline, <alt>)` → the
     first real "DER recovered by re-diarizing overlap" number. Ceiling (33% addressable) known from
     `bench overlap`. Both repair MACHINES (transcription + diarization) are built + validated; what remains
-    is a genuinely-different repair SOURCE, which is a real build/run decision for the user, not a knob.
+    is a genuinely-different repair SOURCE — the LLM corrector (above) is the first such source that needs
+    no GPU; separation is the diar one that does.
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
