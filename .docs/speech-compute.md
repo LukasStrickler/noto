@@ -193,8 +193,18 @@ accept/reject rule (`OutcomeFromDeltas`) and the oracle-ceiling idea.
 | --- | --- | --- |
 | **B6 calibration** | does confidence rank errors? (ECE/Brier, bottom-decile capture, admissibility) | `noto bench calibration --run <id>` |
 | **B7 dry-run preview** | which spans a second pass would attempt + projected cost | `noto bench repair --run <id>` |
-| **B7 attempt + measure** | actually re-decode the spans, measure the benchmark WER/cpWER each edit moves, gate it | `noto bench repair-attempt --run <baseline> --alt-run <alt>` |
+| **B7 attempt + measure (transcription)** | actually re-decode the spans, measure the benchmark WER/cpWER each edit moves, gate it | `noto bench repair-attempt --run <baseline> --alt-run <alt>` |
+| **B7 attempt + measure (diarization)** | re-diarize the overlap regions, measure the benchmark DER each edit moves, gate it | `noto bench diar-repair-attempt --run <baseline> --alt-run <alt>` |
 | **B8 production repair** | transcript v2 with provenance, behind a passing B7 gate | *(not built — gated)* |
+
+Repair is **GPU-based only** — the second pass is a GPU re-decode / re-diarize.
+(An earlier LLM/OpenRouter text-correction source was built and then removed; do
+not reintroduce it.) A separate, deterministic **entity-repair** runs in the
+production pipeline today — `internal/core/entityrepair` + `providers.RepairTranscriptEntities`,
+wired into `runTranscribe` — snapping low-confidence words to the meeting's known
+glossary/participant names (misspelled, split-compound, and standalone name
+parts). It needs no GPU and no model, is gated by the glossary's presence, and is
+conservative (exact matches and confident words are never touched).
 
 `repair-attempt` is DRY-RUN: it writes no production transcript, only scores
 against the reference. The alternate decode is a *second completed run* with a
@@ -223,10 +233,20 @@ captures two channels (your mic + all remote participants mixed on system
 audio), so you-over-room overlap is free; only ≥2 *remote* speakers overlapping
 within the system channel needs the expensive separate-and-re-diarize pass.
 `noto bench overlap` measures how much DER error lives in overlap regions
-(addressable headroom) and targeted-vs-blanket cost; `MeasureDiarSplice` scores
-the DER a re-diarization moves. DER is denominated in seconds, so whole-meeting
-DER is the per-span decision (no local measure — DER's speaker permutation makes
-a single-speaker-window DER spuriously zero).
+(addressable headroom — ~33% of DER on AMI) and targeted-vs-blanket cost;
+`MeasureDiarSplice` scores the DER a re-diarization moves. DER is denominated in
+seconds, so whole-meeting DER is the per-span decision (no local measure — DER's
+speaker permutation makes a single-speaker-window DER spuriously zero).
+
+**First real diar-repair number (no new spend).** Using a VAD-on run as the
+alternate diarization (`diar-repair-attempt(no-vad × vad)`), 101 of 621 overlap
+regions got a different re-diarization → net **DER Δ −0.0034** (naive == ceiling,
+so the diar accept-rule has no seam cost). The B7 gate still FAILS: 3 of 7
+differing regions regress, and the accept decision uses the *reference* — so
+−0.0034 is a reference-guided ceiling, and VAD is a weak overlap source (it trims
+silence, it does not *separate* overlap). The big headroom needs the
+separate-and-re-diarize pass, which is gated on real system-audio capture (today's
+capture is mic-only).
 
 **Alt-run note.** A repair alternate run only needs the STT words, not its own
 diarization; raising STT memory (a bigger model, or slowed audio) can OOM the
