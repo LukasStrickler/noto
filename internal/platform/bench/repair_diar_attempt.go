@@ -3,7 +3,6 @@ package bench
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 
 	"github.com/lukasstrickler/noto/benchmark/dataset"
 	"github.com/lukasstrickler/noto/benchmark/metrics"
@@ -172,26 +171,13 @@ func attemptDiarMeeting(refTurns []dataset.Turn, h MeetingHyp, dec ReDiarizer) (
 	return rep, len(regions), differed, true
 }
 
-// diarOracleCeiling greedily commits the accepted re-diarizations — strongest local
-// DER improvement first — keeping each only when it strictly lowers whole-meeting DER.
-// Returns that subset's DER delta (≤0) and size: the max a re-diarization could buy
-// with perfect selection (reference-guided, an upper bound). Mirrors oracleCeiling.
+// diarOracleCeiling is the diarization (DER over HypTurns) view of greedyCeiling: the
+// max a re-diarization could buy with perfect region selection. See greedyCeiling.
 func diarOracleCeiling(refTurns []dataset.Turn, base []HypTurn, cands []appliedDiarRepair) (float64, int) {
-	ordered := append([]appliedDiarRepair(nil), cands...)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].localDERDelta < ordered[j].localDERDelta })
-	baseDER := wholeDER(refTurns, base)
-	running := base
-	cur := baseDER
-	committed := 0
-	for _, c := range ordered {
-		trial := spliceHypTurns(running, c.startSec, c.endSec, c.repl)
-		if d := wholeDER(refTurns, trial); d < cur {
-			running = trial
-			cur = d
-			committed++
-		}
-	}
-	return round4(cur - baseDER), committed
+	return greedyCeiling(base, cands,
+		func(c appliedDiarRepair) float64 { return c.localDERDelta },
+		func(s []HypTurn, c appliedDiarRepair) []HypTurn { return spliceHypTurns(s, c.startSec, c.endSec, c.repl) },
+		func(s []HypTurn) float64 { return wholeDER(refTurns, s) })
 }
 
 // wholeDER is the whole-meeting DER of a hypothesis turn list against the reference.

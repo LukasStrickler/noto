@@ -2,7 +2,6 @@ package bench
 
 import (
 	"path/filepath"
-	"sort"
 
 	"github.com/lukasstrickler/noto/benchmark/dataset"
 	"github.com/lukasstrickler/noto/benchmark/metrics"
@@ -218,29 +217,13 @@ type appliedRepair struct {
 	localWERDelta float64
 }
 
-// oracleCeiling greedily commits the locally-accepted edits — strongest local
-// improvement first — keeping each only when it strictly lowers the WHOLE-transcript
-// WER. It returns that best subset's whole-transcript WER delta (<= 0) and its size:
-// the max accuracy the alternate could buy if selection were perfect, with the seam
-// cost neutralized (a locally-good splice that shifts boundaries and hurts the whole
-// transcript is dropped). Reference-guided, so it is a CEILING, not the production
-// number (production must approximate the selection from confidence, not the truth).
+// oracleCeiling is the transcription (WER over HypWords) view of greedyCeiling: the max
+// accuracy the alternate decode could buy with perfect span selection. See greedyCeiling.
 func oracleCeiling(ref dataset.Meeting, base []HypWord, cands []appliedRepair) (float64, int) {
-	ordered := append([]appliedRepair(nil), cands...)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].localWERDelta < ordered[j].localWERDelta })
-	baseWER := wholeWER(ref, base)
-	running := base
-	curWER := baseWER
-	committed := 0
-	for _, c := range ordered {
-		trial := spliceHypWords(running, c.startSec, c.endSec, c.repl)
-		if tw := wholeWER(ref, trial); tw < curWER {
-			running = trial
-			curWER = tw
-			committed++
-		}
-	}
-	return round4(curWER - baseWER), committed
+	return greedyCeiling(base, cands,
+		func(c appliedRepair) float64 { return c.localWERDelta },
+		func(s []HypWord, c appliedRepair) []HypWord { return spliceHypWords(s, c.startSec, c.endSec, c.repl) },
+		func(s []HypWord) float64 { return wholeWER(ref, s) })
 }
 
 // wholeWER is the whole-transcript WER of a hyp word list against the reference.
