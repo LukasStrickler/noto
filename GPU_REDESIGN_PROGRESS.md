@@ -70,6 +70,26 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
   `readiness_test.go` (3 tests: missing-everything, ready-when-configured, preflight gates live vs exempts
   integration-only). All green, vet clean.
 
+- **Iter ~13 (2026-06-19) — repair ceiling + targeted overlap cost (ACCURACY pivot):** User reframed:
+  accuracy is the product, cost is the constraint ("cheapest thing is bullshit if it's inaccurate").
+  Real data: avg word confidence mean 0.149 / median 0.075 (NeMo TDT confidence is an entropy score, not
+  a probability — use the RANKING, never the absolute); WER ~0.21, DER ~0.10, cpWER ~0.29 (cpWER is the
+  product-critical one — "who said what"). Shipped `core/bench/repair.go RepairCeiling` (oracle headroom:
+  bottom-10% repair → ~40% relative error drop on real data → repair IS worth the compute) — commit 730223e.
+  Then user clarified the OVERLAP architecture: **two channels only** (your mic + all remote participants
+  mixed on system audio; NO Zoom/Meet hooks). you-over-room overlap is FREE (separate channels); only
+  ≥2 REMOTE speakers overlapping WITHIN the system channel needs expensive separation. Built
+  `core/bench/overlap.go` (`OverlapRegions` sweep-line ≥2 distinct speakers; `PlanOverlapRepair` targeted
+  vs blanket spend; SavingsFactor = speech/overlap) — commit 603252e. **Grounded on 43 AMI RTTMs (GPU-free):
+  hard-overlap = 11.85% of speech → targeted repair +3.6–11.9% of base cost vs +30–100% blanket → 8.4×
+  cheaper.** AMI is the worst case (4-way in-person); real two-channel calls are far lower.
+  - **NEXT (durable, GPU-free first):** (1) platform `OverlapAnalysis(runID)` — load run hyps + RTTM refs,
+    compute overlap cost AND addressable DER (DER on overlap-only regions = `DefaultDEROptions` minus
+    `SkipOverlap:true`) → the "is overlap repair worth it" measurement, analog of `RepairPreview`. Wire
+    `noto bench overlap` (CLI-only). (2) B7 transcription attempt+measure: re-decode bottom-decile spans
+    (GPU), splice, score BENCHMARK WER delta (not confidence) → real `RepairReport`. (3) cheap overlap
+    DETECTOR for production (energy/VAD-based, runs on system channel) → gate the separation pass.
+
 ## Leads / findings (verify before acting)
 
 ### L1 — diar per-stage split is never captured (KPI honesty) — CHARACTERIZED iter 3; needs Python+GPU
