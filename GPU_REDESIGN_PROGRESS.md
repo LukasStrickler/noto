@@ -345,6 +345,14 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     source (separation) for the 33% headroom remains gated on system-audio capture ([[capture-is-mic-only]]).
     NOTE: cost shows $0 for this run — the VAD run's trace has the L1 diar-attribution gap (total≈asr), so
     the (now trace-derived) diar rate is 0; honest, not fabricated.
+  - **DONE (this iter) — hygiene + KPI-honesty (commits 6b9eeff, 6992167).** (1) Verified the OpenRouter
+    removal left NO orphans (the 3 unused `RepairMethod` consts are a legitimate §10.5 planned-method enum;
+    no stale docs). (2) Synced `.docs/speech-compute.md` repair section with the shipped GPU-repair system:
+    added `diar-repair-attempt`, documented the production deterministic entity-repair + that repair is
+    GPU-based only (LLM source removed), recorded the VAD diar −0.0034 finding. (3) Fixed the B7 gate to NOT
+    flag accepted-per-dollar when cost is UNKNOWN (CostUSD≤0 from the L1 trace gap) — that conflated unknown
+    cost with infinite inefficiency; the diar VAD repair now fails on its real reason (negative-rate) alone.
+    +tests, full suite green.
   - **NEXT (GPU repair / cost only):** transcription GPU-repair needs a genuinely-stronger GPU decode source
     (same-family is validated-weak; a different/bigger ASR is the lever — `--knob stt_model`); diarization
     GPU-repair needs overlap separation (gated on capture). Cost frontier on AMI largely exhausted ($0.01633
