@@ -37,6 +37,37 @@ func TestRepairTranscriptEntities_FixesWordsAndTouchedSegment(t *testing.T) {
 	}
 }
 
+func TestRepairTranscriptEntities_MergesSplitEntityAndRebuilds(t *testing.T) {
+	tr := &artifacts.Transcript{
+		Segments: []artifacts.Segment{
+			{ID: "s1", Text: "we use data dog", WordIDs: []string{"w1", "w2", "w3", "w4"}},
+		},
+		Words: []artifacts.Word{
+			{ID: "w1", SegmentID: "s1", Text: "we", StartSeconds: 0, EndSeconds: 1},
+			{ID: "w2", SegmentID: "s1", Text: "use", StartSeconds: 1, EndSeconds: 2},
+			{ID: "w3", SegmentID: "s1", Text: "data", StartSeconds: 2, EndSeconds: 3},
+			{ID: "w4", SegmentID: "s1", Text: "dog", StartSeconds: 3, EndSeconds: 4},
+		},
+	}
+	reps := RepairTranscriptEntities(tr, []string{"Datadog"}, entityrepair.DefaultOptions())
+	if len(reps) != 1 {
+		t.Fatalf("expected 1 merge repair, got %+v", reps)
+	}
+	if len(tr.Words) != 3 {
+		t.Fatalf("merged word should be dropped (4→3), got %d: %+v", len(tr.Words), tr.Words)
+	}
+	last := tr.Words[2]
+	if last.Text != "Datadog" || last.StartSeconds != 2 || last.EndSeconds != 4 {
+		t.Errorf("merged word should span the joined timestamps, got %+v", last)
+	}
+	if tr.Segments[0].Text != "we use Datadog" {
+		t.Errorf("segment text not rebuilt: %q", tr.Segments[0].Text)
+	}
+	if len(tr.Segments[0].WordIDs) != 3 || tr.Segments[0].WordIDs[2] != "w3" {
+		t.Errorf("segment word-ids not rebuilt to surviving words: %v", tr.Segments[0].WordIDs)
+	}
+}
+
 func TestRepairTranscriptEntities_NoOpWithoutTermsOrWords(t *testing.T) {
 	tr := &artifacts.Transcript{Words: []artifacts.Word{{Text: "kubernates"}}}
 	if reps := RepairTranscriptEntities(tr, nil, entityrepair.DefaultOptions()); reps != nil {

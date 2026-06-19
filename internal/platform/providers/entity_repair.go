@@ -26,37 +26,73 @@ func RepairTranscriptEntities(t *artifacts.Transcript, terms []string, opts enti
 		return nil
 	}
 
+	// Apply the corrected texts; a "" output marks a word merged away (a split entity
+	// rejoined), which we drop after extending the kept word to cover its span so the
+	// timeline stays gapless.
+	drop := make([]bool, len(t.Words))
 	touched := make(map[string]bool)
 	for _, r := range reps {
+		lastKept := r.Index
 		for k := 0; k < r.Length; k++ {
 			idx := r.Index + k
-			t.Words[idx].Text = out[idx]
+			if out[idx] == "" {
+				drop[idx] = true
+			} else {
+				t.Words[idx].Text = out[idx]
+				lastKept = idx
+			}
 			if sid := t.Words[idx].SegmentID; sid != "" {
 				touched[sid] = true
 			}
 		}
+		if end := r.Index + r.Length - 1; t.Words[end].EndSeconds > t.Words[lastKept].EndSeconds {
+			t.Words[lastKept].EndSeconds = t.Words[end].EndSeconds
+		}
 	}
-	rebuildSegmentText(t, touched)
+
+	if anyTrue(drop) {
+		kept := t.Words[:0:0]
+		for i, w := range t.Words {
+			if !drop[i] {
+				kept = append(kept, w)
+			}
+		}
+		t.Words = kept
+	}
+	rebuildTouchedSegments(t, touched)
 	return reps
 }
 
-// rebuildSegmentText regenerates Text for the given segment IDs by space-joining their
-// member words in transcript order. Only touched segments are rebuilt, so untouched
-// segments keep their original provider formatting; a corrected segment is re-joined
-// from its (now-fixed) words so its displayed text matches the word list.
-func rebuildSegmentText(t *artifacts.Transcript, touched map[string]bool) {
+func anyTrue(b []bool) bool {
+	for _, v := range b {
+		if v {
+			return true
+		}
+	}
+	return false
+}
+
+// rebuildTouchedSegments regenerates Text and WordIDs for the touched segments from their
+// (surviving) member words in transcript order. Only touched segments are rebuilt, so
+// untouched segments keep their original provider formatting; a corrected segment's text
+// and word-id list are re-derived so they stay consistent with the merged word list.
+func rebuildTouchedSegments(t *artifacts.Transcript, touched map[string]bool) {
 	if len(touched) == 0 {
 		return
 	}
-	parts := make(map[string][]string, len(touched))
+	texts := make(map[string][]string, len(touched))
+	ids := make(map[string][]string, len(touched))
 	for _, w := range t.Words {
 		if w.SegmentID != "" && touched[w.SegmentID] {
-			parts[w.SegmentID] = append(parts[w.SegmentID], w.Text)
+			texts[w.SegmentID] = append(texts[w.SegmentID], w.Text)
+			ids[w.SegmentID] = append(ids[w.SegmentID], w.ID)
 		}
 	}
 	for i := range t.Segments {
-		if toks, ok := parts[t.Segments[i].ID]; ok && len(toks) > 0 {
+		id := t.Segments[i].ID
+		if toks, ok := texts[id]; ok && len(toks) > 0 {
 			t.Segments[i].Text = strings.Join(toks, " ")
+			t.Segments[i].WordIDs = ids[id]
 		}
 	}
 }

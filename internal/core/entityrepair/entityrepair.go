@@ -61,10 +61,17 @@ type Repair struct {
 	Similarity float64 // normalized similarity of the match
 }
 
-// Apply returns the corrected word texts (same length and order as in) and the repairs
-// made. terms is the meeting glossary; order matters only for tie-breaking (first term
-// wins a window). A window already matching a term exactly, or matching none above the
-// bar, is left untouched.
+// mergeWindowSlack is how many EXTRA words past a term's token count Apply will consider,
+// to catch a recognizer that split one entity into several words ("Datadog" → "data dog",
+// "GitHub" → "git hub"). Two is enough for the common compound-name splits without opening
+// the door to long coincidental concatenations.
+const mergeWindowSlack = 2
+
+// Apply returns the corrected word texts and the repairs made. A returned token of ""
+// marks a word the repair MERGED AWAY (a split entity rejoined into fewer words) — callers
+// drop those entries and keep word/segment lengths consistent. For non-merge repairs the
+// output is the same length as in. terms is the meeting glossary; a window already
+// matching a term exactly, or matching none above the bar, is left untouched.
 func Apply(in []Word, terms []string, opts Options) (out []string, repairs []Repair) {
 	out = make([]string, len(in))
 	for i, w := range in {
@@ -81,37 +88,81 @@ func Apply(in []Word, terms []string, opts Options) (out []string, repairs []Rep
 
 	i := 0
 	for i < len(in) {
-		best, bestSim, bestLen := -1, 0.0, 0
-		for ti, t := range prepared {
-			n := len(t.tokens)
-			if i+n > len(in) {
-				continue
-			}
-			if opts.LowConfidence != nil && !windowUncertain(in[i:i+n], opts.LowConfidence) {
-				continue
-			}
-			window := wordTexts(in[i : i+n])
-			sim, exact := windowSimilarity(window, t.tokens)
-			if exact || sim < opts.MinSimilarity {
-				continue
-			}
-			if sim > bestSim {
-				best, bestSim, bestLen = ti, sim, n
-			}
-		}
-		if best < 0 {
+		// A word already exactly a known term is correct — never merge it away.
+		if exactAt(in, i, prepared) {
 			i++
 			continue
 		}
-		t := prepared[best]
-		from := strings.Join(wordTexts(in[i:i+bestLen]), " ")
-		for k, tok := range t.display {
-			out[i+k] = tok
+		bestTerm, bestWin, bestSim := -1, 0, 0.0
+		for ti, t := range prepared {
+			n := len(t.tokens)
+			// Equal-count near-miss: per-token MIN similarity, so every token of a
+			// multi-word term must be close (a right surname can't mask a wrong forename).
+			if i+n <= len(in) && (opts.LowConfidence == nil || windowUncertain(in[i:i+n], opts.LowConfidence)) {
+				if sim, exact := windowSimilarity(wordTexts(in[i:i+n]), t.tokens); !exact && sim >= opts.MinSimilarity && better(sim, n, bestSim, bestWin) {
+					bestTerm, bestWin, bestSim = ti, n, sim
+				}
+			}
+			// Merge: the entity was split into MORE words than the term — compare the
+			// concatenated, punctuation-free forms ("data"+"dog" → "datadog").
+			termNorm := strings.Join(t.tokens, "")
+			for w := n + 1; w <= n+mergeWindowSlack && i+w <= len(in); w++ {
+				if opts.LowConfidence != nil && !windowUncertain(in[i:i+w], opts.LowConfidence) {
+					continue
+				}
+				if sim := similarity(concatNorm(in[i:i+w]), termNorm); sim >= opts.MinSimilarity && better(sim, w, bestSim, bestWin) {
+					bestTerm, bestWin, bestSim = ti, w, sim
+				}
+			}
 		}
-		repairs = append(repairs, Repair{Index: i, Length: bestLen, From: from, To: t.canonical, Similarity: round2(bestSim)})
-		i += bestLen
+		if bestTerm < 0 {
+			i++
+			continue
+		}
+		t := prepared[bestTerm]
+		from := strings.Join(wordTexts(in[i:i+bestWin]), " ")
+		for k := range t.display {
+			out[i+k] = t.display[k]
+		}
+		for k := len(t.display); k < bestWin; k++ {
+			out[i+k] = "" // merged away — caller drops
+		}
+		repairs = append(repairs, Repair{Index: i, Length: bestWin, From: from, To: t.canonical, Similarity: round2(bestSim)})
+		i += bestWin
 	}
 	return out, repairs
+}
+
+// exactAt reports whether any term matches the words at i exactly (after normalization) —
+// the word is already correct and must be left alone, not merged into a neighbour.
+func exactAt(in []Word, i int, prepared []preparedTerm) bool {
+	for _, t := range prepared {
+		n := len(t.tokens)
+		if i+n > len(in) {
+			continue
+		}
+		if _, exact := windowSimilarity(wordTexts(in[i:i+n]), t.tokens); exact {
+			return true
+		}
+	}
+	return false
+}
+
+// better prefers a higher similarity, breaking ties toward the SMALLER window so a plain
+// near-miss is taken over a more-aggressive merge when both score equally.
+func better(sim float64, w int, bestSim float64, bestWin int) bool {
+	if sim > bestSim {
+		return true
+	}
+	return sim == bestSim && (bestWin == 0 || w < bestWin)
+}
+
+func concatNorm(ws []Word) string {
+	var b strings.Builder
+	for _, w := range ws {
+		b.WriteString(normalize(w.Text))
+	}
+	return b.String()
 }
 
 type preparedTerm struct {

@@ -111,6 +111,36 @@ func TestApply_InertOnEmptyInputs(t *testing.T) {
 	}
 }
 
+func TestApply_MergesSplitEntity(t *testing.T) {
+	// The recognizer split "Datadog" into two words — rejoin them.
+	in := words("we", "use", "data", "dog", "daily")
+	out, reps := Apply(in, []string{"Datadog"}, DefaultOptions())
+	if len(reps) != 1 || reps[0].Index != 2 || reps[0].Length != 2 {
+		t.Fatalf("expected one 2-word merge at index 2, got %+v", reps)
+	}
+	if out[2] != "Datadog" || out[3] != "" {
+		t.Errorf("merge should write the canonical token and blank the extra, got %q %q", out[2], out[3])
+	}
+}
+
+func TestApply_PrefersEqualCountOverMerge(t *testing.T) {
+	// "kubernates" alone is a clean near-miss; it must be fixed in place, never merged
+	// with the following word.
+	in := words("the", "kubernates", "cluster")
+	_, reps := Apply(in, []string{"Kubernetes"}, DefaultOptions())
+	if len(reps) != 1 || reps[0].Length != 1 {
+		t.Errorf("expected a single-word fix, not a merge: %+v", reps)
+	}
+}
+
+func TestApply_DoesNotMergeUnrelatedWords(t *testing.T) {
+	in := words("the", "data", "is", "good")
+	_, reps := Apply(in, []string{"Datadog"}, DefaultOptions())
+	if len(reps) != 0 {
+		t.Errorf("'data is' must not be merged into Datadog: %+v", reps)
+	}
+}
+
 func TestApply_DoesNotDoubleApplyOverlappingWindows(t *testing.T) {
 	in := words("foo", "kubernates", "kubernates", "bar")
 	out, reps := Apply(in, []string{"Kubernetes"}, DefaultOptions())
