@@ -83,12 +83,19 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
   vs blanket spend; SavingsFactor = speech/overlap) — commit 603252e. **Grounded on 43 AMI RTTMs (GPU-free):
   hard-overlap = 11.85% of speech → targeted repair +3.6–11.9% of base cost vs +30–100% blanket → 8.4×
   cheaper.** AMI is the worst case (4-way in-person); real two-channel calls are far lower.
-  - **NEXT (durable, GPU-free first):** (1) platform `OverlapAnalysis(runID)` — load run hyps + RTTM refs,
-    compute overlap cost AND addressable DER (DER on overlap-only regions = `DefaultDEROptions` minus
-    `SkipOverlap:true`) → the "is overlap repair worth it" measurement, analog of `RepairPreview`. Wire
-    `noto bench overlap` (CLI-only). (2) B7 transcription attempt+measure: re-decode bottom-decile spans
-    (GPU), splice, score BENCHMARK WER delta (not confidence) → real `RepairReport`. (3) cheap overlap
-    DETECTOR for production (energy/VAD-based, runs on system channel) → gate the separation pass.
+  - **DONE (commit 7730409):** (1) platform `OverlapAnalysis(runID)` + `noto bench overlap` CLI —
+    GPU-free "is overlap repair worth it" gate. AddressableFraction = `DER(full).Total −
+    DER(SkipOverlap).Total` (error seconds in overlap regions) + targeted-vs-blanket cost anchored to the
+    run's $/audio-hr. **Live on the real 20-meeting run: hard-overlap 11.3% of speech, but 33% of all DER
+    error is in those regions → targeted +5.7% of cost addresses a third of diarization error vs +50%
+    blanket (8.8× cheaper).** That ratio greenlights building the separation pass.
+  - **NEXT:** (2) B7 transcription attempt+measure: re-decode bottom-decile spans (GPU), splice, score
+    BENCHMARK WER delta (not confidence) → real `RepairReport`. (3) the overlap separation pass itself
+    (GPU): separate+re-transcribe the flagged overlap regions, splice, measure BENCHMARK cpWER/DER delta —
+    accept only if it improves (same benchmark-gated discipline as B7). (4) cheap production overlap
+    DETECTOR (energy/VAD on the system channel) → what fires the separation pass live. Both (2) and (3)
+    need a greenlit GPU run; the GPU-free gates (calibration admissible, repair ceiling ~40%, overlap
+    addressable ~33%) all now say the accuracy is there to recover.
 
 ## Leads / findings (verify before acting)
 
