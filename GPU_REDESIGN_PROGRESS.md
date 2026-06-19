@@ -132,16 +132,22 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     number, not a sum of differently-denominated per-span deltas. Tests: local-sensitivity vs whole
     (200-word fixture), run-pair disk-load fixture. Verified the machine accepts a real correction
     (unit test) and correctly washes identical input (the live fp32 result). Full suite green, vet clean.
-  - **NEXT — the only path to a POSITIVE number is a genuinely different DECODE, not a precision change:**
-    add **beam/maes decode** to the parakeet STT server (`scripts/parakeet_stt_server.py`, ~30-40 lines:
-    snapshot decoding cfg → `change_decoding_strategy(strategy="maes"|"beam", beam_size=N)` → transcribe →
-    revert, guarded like the confidence path so a TDT-beam failure degrades to greedy, never crashes).
-    Wire a `decode`/`redecode` knob (`modal_runner.go` knobLauncherEnv → `BENCH_PARAKEET_DECODE` →
-    `NOTO_PARAKEET_DECODE`). Then ONE `gate_ami --knob decode=beam` run → `repair-attempt(2f6cc5,
-    <beam-run>)` → first real positive WER delta (greedy→beam genuinely re-ranks hypotheses, so it CAN fix
-    the low-conf spans fp32 can't). RISK: NeMo TDT beam may be unsupported/slow — the revert-guard makes a
-    failed run degrade cleanly; validate offline-impossible, so write carefully then ONE bounded run.
-    After that: overlap separation pass (same MeasureSplice path on cpWER/DER), cheap production overlap
+  - **DONE (this iter) — beam/maes alternate decode built + wired.** `parakeet_stt_server.py`
+    `enable_beam_decode()`: `change_decoding_strategy(strategy=maes|beam|alsd|tsd, beam.beam_size=N,
+    compute_timestamps=True)`, gated by `NOTO_PARAKEET_DECODE`/`NOTO_PARAKEET_BEAM_SIZE`, guarded EXACTLY
+    like the confidence path — the decode-time revert now covers conf OR beam, degrading to validated
+    greedy on any failure (TDT-beam unsupported/config drift), never crashing. Word timestamps requested
+    under beam; if a build drops them, words_of emits text-only → Go falls back → run still completes.
+    Wired `decode`/`beam_size` knobs (`modal_runner.go` knobLauncherEnv → `BENCH_PARAKEET_DECODE/BEAM_SIZE`;
+    `modal_benchmark.py` KNOB_FORWARDS → `NOTO_PARAKEET_DECODE/BEAM_SIZE`), knob-mapping test added. Commit
+    92c6c98. Python py_compile OK, full Go suite green, vet clean.
+  - **IN FLIGHT — ONE `gate_ami --knob decode=beam` validation run** (run `b2ygoc7xd`, background). When it
+    lands: `noto bench repair-attempt --run 20260619T115608Z-2f6cc5 --alt-run <beam-run>` → the first real
+    POSITIVE WER delta (beam genuinely re-ranks hypotheses, so it CAN fix the low-conf spans fp32 can't).
+    WATCH: (1) did beam preserve word timestamps? (if the beam hyps carry no words, ES2011b yields no
+    re-decode → pivot to alternate-MODEL: wire an `stt_model` knob → `NOTO_PARAKEET_MODEL`, run a bigger
+    parakeet as the alternate); (2) beam wall/cost vs greedy (keep beam_size small). After a positive
+    number: overlap separation pass (same MeasureSplice path on cpWER/DER), cheap production overlap
     detector, B8 production write behind the passing B7 gate.
 
 ## Leads / findings (verify before acting)
