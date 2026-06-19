@@ -24,6 +24,7 @@ Usage:
   noto bench insights [--run <run_id>] [--json]   # one-command weighted-KPI snapshot
   noto bench repair --run <run_id> [--json]       # B7 dry-run repair preview (candidates + cost)
   noto bench calibration --run <run_id> [--json]  # B6 confidence calibration (ECE, capture, admissibility)
+  noto bench overlap --run <run_id> [--json]      # overlap repair: cost + addressable diarization error
   noto bench estimate --suite <id> [--tier <tier>] [--json]
   noto bench run --suite <id> [--tier <tier>] [--mode <mode>] [--integration-only] [--json]
   noto bench preflight --suite <id> --tier <tier> --mode <mode> [--json]
@@ -45,6 +46,8 @@ Set NOTO_AGENT_ID for spend accounting on runs.
 		return a.runBenchRepair(args[1:])
 	case "calibration":
 		return a.runBenchCalibration(args[1:])
+	case "overlap":
+		return a.runBenchOverlap(args[1:])
 	case "estimate":
 		return a.runBenchEstimate(args[1:])
 	case "run":
@@ -231,6 +234,53 @@ func (a *app) runBenchCalibration(args []string) int {
 	for _, r := range res.Reasons {
 		fmt.Fprintf(a.out, "    · %s\n", r)
 	}
+	return 0
+}
+
+// runBenchOverlap analyzes a run's hard-overlap cost + addressable diarization error
+// (the diarization side of the repair system): how much of the meeting is genuine
+// >=2-speaker overlap, how much DER error lives there, and what repairing ONLY those
+// seconds costs vs separating everything. Read-only, GPU-free.
+func (a *app) runBenchOverlap(args []string) int {
+	fs := flag.NewFlagSet("bench overlap", flag.ContinueOnError)
+	run := fs.String("run", "", "run id (required)")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return 64
+	}
+	if *run == "" {
+		fmt.Fprintln(a.errOut, "noto bench overlap --run <run_id>")
+		return 64
+	}
+	ctx := context.Background()
+	client, closeFn, code := a.connect(ctx)
+	if code != 0 {
+		return code
+	}
+	defer closeFn()
+	res, err := client.BenchOverlap(ctx, *run)
+	if err != nil {
+		return a.errExit(err)
+	}
+	if *jsonOut {
+		return a.emitJSON(res)
+	}
+	fmt.Fprintf(a.out, "bench overlap (diarization repair) — %s\n", res.RunID)
+	if res.Scored == 0 {
+		fmt.Fprintf(a.out, "  no scorable meetings (no references matched) — nothing to analyze.\n")
+		return 0
+	}
+	fmt.Fprintf(a.out, "  %d/%d meetings · hard-overlap %.2f%% of speech (%.0fs of %.0fs, peak %d concurrent)\n",
+		res.Scored, res.Meetings, res.OverlapFraction*100, res.TotalOverlapSec, res.TotalSpeechSec, res.PeakSpeakers)
+	if res.HasDiarization && res.TotalDERErrorSec > 0 {
+		fmt.Fprintf(a.out, "  addressable: %.1f%% of diarization error is in overlap regions (%.0fs of %.0fs DER error)\n",
+			res.AddressableFraction*100, res.OverlapDERErrorSec, res.TotalDERErrorSec)
+	} else {
+		fmt.Fprintf(a.out, "  addressable: run has no diarization hyp to score overlap error against\n")
+	}
+	fmt.Fprintf(a.out, "  cost @ sep %.1f× (base $%.4f/audio-hr): targeted +%.1f%% ($%.4f) vs blanket +%.0f%% ($%.4f) → %.1f× cheaper\n",
+		res.SepCostFactor, res.BaseCostPerAudioHourUSD,
+		res.TargetedExtraPct, res.TargetedExtraUSD, res.BlanketExtraPct, res.BlanketExtraUSD, res.SavingsFactor)
 	return 0
 }
 

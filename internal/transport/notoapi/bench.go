@@ -352,6 +352,37 @@ type BenchCalibrationResult struct {
 	RepairFixableErrors   int     `json:"repair_fixable_errors"`
 }
 
+// BenchOverlapResult is a run's targeted-overlap-repair analysis (GPU-free): how
+// much HARD overlap (>=2 distinct speakers) the references contain, how much
+// diarization error LIVES in those overlap regions (AddressableFraction — the
+// headroom a separation pass could recover), and what repairing ONLY those seconds
+// costs versus separating everywhere. The gate for spending GPU on an overlap
+// separation pass: build it only when the addressable error is meaningful AND the
+// targeted cost is small. noto captures two channels (your mic + all remote
+// participants on system audio), so you-over-room overlap is already free; this
+// measures the residual remote-vs-remote overlap that needs real separation.
+type BenchOverlapResult struct {
+	SchemaVersion           string  `json:"schema_version"`
+	RunID                   string  `json:"run_id"`
+	Meetings                int     `json:"meetings"`
+	Scored                  int     `json:"scored"`
+	HasDiarization          bool    `json:"has_diarization"`
+	OverlapFraction         float64 `json:"overlap_fraction"`
+	TotalOverlapSec         float64 `json:"total_overlap_sec"`
+	TotalSpeechSec          float64 `json:"total_speech_sec"`
+	PeakSpeakers            int     `json:"peak_speakers"`
+	AddressableFraction     float64 `json:"addressable_fraction"`
+	TotalDERErrorSec        float64 `json:"total_der_error_sec"`
+	OverlapDERErrorSec      float64 `json:"overlap_der_error_sec"`
+	BaseCostPerAudioHourUSD float64 `json:"base_cost_per_audio_hour_usd"`
+	SepCostFactor           float64 `json:"sep_cost_factor"`
+	TargetedExtraUSD        float64 `json:"targeted_extra_usd"`
+	TargetedExtraPct        float64 `json:"targeted_extra_pct"`
+	BlanketExtraUSD         float64 `json:"blanket_extra_usd"`
+	BlanketExtraPct         float64 `json:"blanket_extra_pct"`
+	SavingsFactor           float64 `json:"savings_factor"`
+}
+
 // BenchClient methods for measurement spine.
 type BenchClient interface {
 	// BenchInsights returns one run's full weighted-KPI snapshot (winner when runID empty).
@@ -360,6 +391,8 @@ type BenchClient interface {
 	BenchRepair(ctx context.Context, runID string) (BenchRepairResult, error)
 	// BenchCalibration scores a run's word-confidence calibration (B6).
 	BenchCalibration(ctx context.Context, runID string) (BenchCalibrationResult, error)
+	// BenchOverlap analyzes a run's hard-overlap cost + addressable diarization error.
+	BenchOverlap(ctx context.Context, runID string) (BenchOverlapResult, error)
 	BenchEstimate(ctx context.Context, req BenchEstimateRequest) (BenchEstimateResult, error)
 	BenchPreflight(ctx context.Context, req BenchPreflightRequest) (BenchPreflightResult, error)
 	BenchRun(ctx context.Context, req BenchRunRequest) (BenchRunResult, error)

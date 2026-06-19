@@ -487,6 +487,43 @@ func (s *Service) BenchCalibration(ctx context.Context, runID string) (notoapi.B
 	return res, nil
 }
 
+// BenchOverlap analyzes a run's hard-overlap cost and addressable diarization error
+// from the references (§10, diarization repair) — GPU-free, read-only. It answers
+// whether spending GPU on an overlap separation pass is worth it: how much error
+// lives in overlap regions (AddressableFraction) and what targeted repair costs vs
+// separating everywhere.
+func (s *Service) BenchOverlap(ctx context.Context, runID string) (notoapi.BenchOverlapResult, error) {
+	_ = ctx
+	if strings.TrimSpace(runID) == "" {
+		return notoapi.BenchOverlapResult{}, notoapi.NewError(notoapi.CodeInvalidRequest, "run_id required", nil)
+	}
+	a, err := s.benchRunner().OverlapAnalysis(runID, 0)
+	if err != nil {
+		return notoapi.BenchOverlapResult{}, notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
+	}
+	return notoapi.BenchOverlapResult{
+		SchemaVersion:           "bench_overlap.v1",
+		RunID:                   a.RunID,
+		Meetings:                a.Meetings,
+		Scored:                  a.Scored,
+		HasDiarization:          a.HasDiarization,
+		OverlapFraction:         a.OverlapFraction,
+		TotalOverlapSec:         a.TotalOverlapSec,
+		TotalSpeechSec:          a.TotalSpeechSec,
+		PeakSpeakers:            a.PeakSpeakers,
+		AddressableFraction:     a.AddressableFraction,
+		TotalDERErrorSec:        a.TotalDERErrorSec,
+		OverlapDERErrorSec:      a.OverlapDERErrorSec,
+		BaseCostPerAudioHourUSD: a.BaseCostPerAudioHourUSD,
+		SepCostFactor:           a.SepCostFactor,
+		TargetedExtraUSD:        a.Cost.TargetedExtraUSD,
+		TargetedExtraPct:        a.Cost.TargetedExtraPct,
+		BlanketExtraUSD:         a.Cost.BlanketExtraUSD,
+		BlanketExtraPct:         a.Cost.BlanketExtraPct,
+		SavingsFactor:           a.Cost.SavingsFactor,
+	}, nil
+}
+
 func (s *Service) BenchAudit(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
 	_ = ctx
 	if strings.TrimSpace(runID) == "" {
