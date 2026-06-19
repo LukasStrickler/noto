@@ -524,6 +524,40 @@ func (s *Service) BenchOverlap(ctx context.Context, runID string) (notoapi.Bench
 	}, nil
 }
 
+// BenchRepairAttempt runs the B7 attempt+measure loop (§10.4): re-decode runID's
+// low-confidence spans using altRunID (a second run with a different decode config)
+// and measure the benchmark WER/cpWER each edit moves — the REAL "how much accuracy
+// does repair buy, and at what cost" answer, on the reference, not on confidence.
+// Dry-run: writes no production transcript, only scores + the B7 gate.
+func (s *Service) BenchRepairAttempt(ctx context.Context, runID, altRunID string) (notoapi.BenchRepairAttemptResult, error) {
+	_ = ctx
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(altRunID) == "" {
+		return notoapi.BenchRepairAttemptResult{}, notoapi.NewError(notoapi.CodeInvalidRequest, "run_id and alt_run_id required", nil)
+	}
+	a, err := s.benchRunner().AttemptRepairsFromRun(runID, altRunID, 0, "")
+	if err != nil {
+		return notoapi.BenchRepairAttemptResult{}, notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
+	}
+	return notoapi.BenchRepairAttemptResult{
+		SchemaVersion:     "bench_repair_attempt.v1",
+		RunID:             a.RunID,
+		AltRunID:          a.AltRunID,
+		Method:            a.Method,
+		MeetingsAttempted: a.MeetingsAttempted,
+		SpansAttempted:    a.SpansAttempted,
+		AcceptedRepairs:   a.AcceptedRepairs,
+		NegativeRepairs:   a.NegativeRepairs,
+		CostUSD:           a.CostUSD,
+		AcceptedPerUSD:    a.AcceptedPerUSD,
+		NegativeRate:      a.NegativeRate,
+		NetWERDelta:       a.NetWERDelta,
+		NetCpWERDelta:     a.NetCpWERDelta,
+		AcceptedSec:       a.Report.AcceptedSec,
+		GatePass:          a.GatePass,
+		GateReasons:       a.GateReasons,
+	}, nil
+}
+
 func (s *Service) BenchAudit(ctx context.Context, runID string) (notoapi.BenchAuditResult, error) {
 	_ = ctx
 	if strings.TrimSpace(runID) == "" {

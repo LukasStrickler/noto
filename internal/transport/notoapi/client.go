@@ -68,6 +68,7 @@ type Client interface {
 	BenchRepair(ctx context.Context, runID string) (BenchRepairResult, error)
 	BenchCalibration(ctx context.Context, runID string) (BenchCalibrationResult, error)
 	BenchOverlap(ctx context.Context, runID string) (BenchOverlapResult, error)
+	BenchRepairAttempt(ctx context.Context, runID, altRunID string) (BenchRepairAttemptResult, error)
 
 	// Storage
 	GetStorage(ctx context.Context) (Storage, error)

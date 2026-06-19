@@ -179,6 +179,20 @@ func (s *Server) handleBenchOverlap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleBenchRepairAttempt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	out, err := s.svc.BenchRepairAttempt(r.Context(), q.Get("run_id"), q.Get("alt_run_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleBenchAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -40,6 +40,7 @@ type ReDecoder interface {
 // enough to justify a production repair (B8) — never auto-applied here.
 type RepairAttemptResult struct {
 	RunID             string                 `json:"run_id"`
+	AltRunID          string                 `json:"alt_run_id,omitempty"`
 	Method            string                 `json:"method"`
 	MeetingsAttempted int                    `json:"meetings_attempted"`
 	SpansAttempted    int                    `json:"spans_attempted"`
@@ -113,6 +114,24 @@ func (r *Runner) AttemptRepairs(runID string, dec ReDecoder, threshold float64, 
 	res.NetCpWERDelta = round4(agg.NetEntityDelta)
 	res.GatePass, res.GateReasons = agg.PassesB7Gate(b7MinAcceptedPerUSD, b7MaxNegativeRate)
 	return res, nil
+}
+
+// AttemptRepairsFromRun runs the B7 attempt+measure loop using a SECOND completed
+// run (altRunID) as the alternate decode source: each low-confidence span in runID
+// is re-decoded by slicing altRunID's words for the same meeting+span (see
+// runReDecoder). This is the cheapest path to a REAL RepairReport — the only GPU
+// spend is producing altRunID once with a different decode config; this call is
+// pure I/O over two runs' artifacts. The two runs must cover the same meetings, and
+// altRunID should differ in decode (precision/strategy) — an identical decode just
+// measures the plumbing (every splice a no-op wash).
+func (r *Runner) AttemptRepairsFromRun(runID, altRunID string, threshold float64, method corebench.RepairMethod) (RepairAttemptResult, error) {
+	dec, err := newRunReDecoder(r.Store.RunDir(altRunID))
+	if err != nil {
+		return RepairAttemptResult{RunID: runID, AltRunID: altRunID}, err
+	}
+	res, err := r.AttemptRepairs(runID, dec, threshold, method)
+	res.AltRunID = altRunID
+	return res, err
 }
 
 // attemptMeeting plans and attempts one meeting's repairs, returning the report, the

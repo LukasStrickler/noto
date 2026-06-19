@@ -508,6 +508,15 @@ func (c *httpClient) BenchOverlap(ctx context.Context, runID string) (notoapi.Be
 	return out, err
 }
 
+func (c *httpClient) BenchRepairAttempt(ctx context.Context, runID, altRunID string) (notoapi.BenchRepairAttemptResult, error) {
+	var out notoapi.BenchRepairAttemptResult
+	q := url.Values{}
+	q.Set("run_id", runID)
+	q.Set("alt_run_id", altRunID)
+	err := c.do(ctx, http.MethodGet, "/v1/bench/repair-attempt?"+q.Encode(), nil, &out)
+	return out, err
+}
+
 func (c *httpClient) GetSystem(ctx context.Context) (notoapi.System, error) {
 	var out notoapi.System
 	err := c.do(ctx, http.MethodGet, "/v1/system", nil, &out)

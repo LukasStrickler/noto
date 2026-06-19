@@ -383,6 +383,32 @@ type BenchOverlapResult struct {
 	SavingsFactor           float64 `json:"savings_factor"`
 }
 
+// BenchRepairAttemptResult is the B7 attempt+measure report (§10.4): the REAL
+// accuracy-vs-cost answer for transcription repair, measured on the benchmark
+// reference rather than on confidence. RunID is the baseline; AltRunID is the
+// second run whose different decode supplies the re-decoded words. Negative deltas
+// are improvements. GatePass is whether the dry-run beat do-nothing efficiently
+// enough (accepted-per-dollar, negative-rate) to justify a production repair (B8) —
+// it is never auto-applied here, this writes no transcript.
+type BenchRepairAttemptResult struct {
+	SchemaVersion     string   `json:"schema_version"`
+	RunID             string   `json:"run_id"`
+	AltRunID          string   `json:"alt_run_id"`
+	Method            string   `json:"method"`
+	MeetingsAttempted int      `json:"meetings_attempted"`
+	SpansAttempted    int      `json:"spans_attempted"`
+	AcceptedRepairs   int      `json:"accepted_repairs"`
+	NegativeRepairs   int      `json:"negative_repairs"`
+	CostUSD           float64  `json:"cost_usd"`
+	AcceptedPerUSD    float64  `json:"accepted_per_usd"`
+	NegativeRate      float64  `json:"negative_rate"`
+	NetWERDelta       float64  `json:"net_wer_delta"`
+	NetCpWERDelta     float64  `json:"net_cpwer_delta"`
+	AcceptedSec       float64  `json:"accepted_sec"`
+	GatePass          bool     `json:"gate_pass"`
+	GateReasons       []string `json:"gate_reasons,omitempty"`
+}
+
 // BenchClient methods for measurement spine.
 type BenchClient interface {
 	// BenchInsights returns one run's full weighted-KPI snapshot (winner when runID empty).
@@ -393,6 +419,9 @@ type BenchClient interface {
 	BenchCalibration(ctx context.Context, runID string) (BenchCalibrationResult, error)
 	// BenchOverlap analyzes a run's hard-overlap cost + addressable diarization error.
 	BenchOverlap(ctx context.Context, runID string) (BenchOverlapResult, error)
+	// BenchRepairAttempt re-decodes a run's low-confidence spans from a second run and
+	// measures the benchmark accuracy delta + B7 gate (the real with/without-repair KPI).
+	BenchRepairAttempt(ctx context.Context, runID, altRunID string) (BenchRepairAttemptResult, error)
 	BenchEstimate(ctx context.Context, req BenchEstimateRequest) (BenchEstimateResult, error)
 	BenchPreflight(ctx context.Context, req BenchPreflightRequest) (BenchPreflightResult, error)
 	BenchRun(ctx context.Context, req BenchRunRequest) (BenchRunResult, error)

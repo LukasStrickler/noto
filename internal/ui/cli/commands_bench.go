@@ -25,6 +25,7 @@ Usage:
   noto bench repair --run <run_id> [--json]       # B7 dry-run repair preview (candidates + cost)
   noto bench calibration --run <run_id> [--json]  # B6 confidence calibration (ECE, capture, admissibility)
   noto bench overlap --run <run_id> [--json]      # overlap repair: cost + addressable diarization error
+  noto bench repair-attempt --run <id> --alt-run <id> [--json]  # B7: re-decode low-conf spans, measure real WER delta + cost
   noto bench estimate --suite <id> [--tier <tier>] [--json]
   noto bench run --suite <id> [--tier <tier>] [--mode <mode>] [--integration-only] [--json]
   noto bench preflight --suite <id> --tier <tier> --mode <mode> [--json]
@@ -48,6 +49,8 @@ Set NOTO_AGENT_ID for spend accounting on runs.
 		return a.runBenchCalibration(args[1:])
 	case "overlap":
 		return a.runBenchOverlap(args[1:])
+	case "repair-attempt":
+		return a.runBenchRepairAttempt(args[1:])
 	case "estimate":
 		return a.runBenchEstimate(args[1:])
 	case "run":
@@ -281,6 +284,63 @@ func (a *app) runBenchOverlap(args []string) int {
 	fmt.Fprintf(a.out, "  cost @ sep %.1f× (base $%.4f/audio-hr): targeted +%.1f%% ($%.4f) vs blanket +%.0f%% ($%.4f) → %.1f× cheaper\n",
 		res.SepCostFactor, res.BaseCostPerAudioHourUSD,
 		res.TargetedExtraPct, res.TargetedExtraUSD, res.BlanketExtraPct, res.BlanketExtraUSD, res.SavingsFactor)
+	return 0
+}
+
+// runBenchRepairAttempt runs the B7 attempt+measure loop: it re-decodes the baseline
+// run's low-confidence spans using a SECOND run (--alt-run, captured with a different
+// decode config) and measures the BENCHMARK WER/cpWER each edit moves — the real
+// "what does repair buy, and at what cost" answer, scored against the reference, not
+// confidence. Dry-run: no transcript writes. The B7 gate says whether it beat
+// do-nothing efficiently enough to justify a production repair (B8).
+func (a *app) runBenchRepairAttempt(args []string) int {
+	fs := flag.NewFlagSet("bench repair-attempt", flag.ContinueOnError)
+	run := fs.String("run", "", "baseline run id (required)")
+	altRun := fs.String("alt-run", "", "alternate-decode run id (required)")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return 64
+	}
+	if *run == "" || *altRun == "" {
+		fmt.Fprintln(a.errOut, "noto bench repair-attempt --run <id> --alt-run <id>")
+		return 64
+	}
+	ctx := context.Background()
+	client, closeFn, code := a.connect(ctx)
+	if code != 0 {
+		return code
+	}
+	defer closeFn()
+	res, err := client.BenchRepairAttempt(ctx, *run, *altRun)
+	if err != nil {
+		return a.errExit(err)
+	}
+	if *jsonOut {
+		return a.emitJSON(res)
+	}
+	fmt.Fprintf(a.out, "bench repair-attempt (B7, dry-run) — %s\n", res.RunID)
+	fmt.Fprintf(a.out, "  alternate decode: %s   method: %s\n", res.AltRunID, res.Method)
+	if res.MeetingsAttempted == 0 {
+		fmt.Fprintf(a.out, "  no spans attempted — baseline has no low-confidence candidates (re-run baseline with\n")
+		fmt.Fprintf(a.out, "  `--knob confidence=1`) or the alternate run shares no meetings with it.\n")
+		return 0
+	}
+	fmt.Fprintf(a.out, "  attempted: %d spans across %d meetings (%.1fs accepted)\n",
+		res.SpansAttempted, res.MeetingsAttempted, res.AcceptedSec)
+	fmt.Fprintf(a.out, "  outcomes:  %d accepted · %d negative (rate %.4f)\n",
+		res.AcceptedRepairs, res.NegativeRepairs, res.NegativeRate)
+	fmt.Fprintf(a.out, "  accuracy:  net WER Δ %+.4f · net cpWER Δ %+.4f  (negative = improvement vs no repair)\n",
+		res.NetWERDelta, res.NetCpWERDelta)
+	fmt.Fprintf(a.out, "  cost:      $%.5f re-decode (STT-only)  →  %.1f accepted repairs/$\n",
+		res.CostUSD, res.AcceptedPerUSD)
+	gate := "PASS — repair beats do-nothing efficiently; eligible for B8 production write"
+	if !res.GatePass {
+		gate = "FAIL — not yet worth a production write"
+	}
+	fmt.Fprintf(a.out, "  B7 gate:   %s\n", gate)
+	for _, r := range res.GateReasons {
+		fmt.Fprintf(a.out, "    · %s\n", r)
+	}
 	return 0
 }
 

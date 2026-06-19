@@ -185,6 +185,10 @@ func (d *direct) BenchOverlap(ctx context.Context, runID string) (notoapi.BenchO
 	return d.svc.BenchOverlap(ctx, runID)
 }
 
+func (d *direct) BenchRepairAttempt(ctx context.Context, runID, altRunID string) (notoapi.BenchRepairAttemptResult, error) {
+	return d.svc.BenchRepairAttempt(ctx, runID, altRunID)
+}
+
 func (d *direct) GetSystem(ctx context.Context) (notoapi.System, error) {
 	return d.svc.GetSystem(ctx)
 }

@@ -73,6 +73,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/bench/repair", s.handleBenchRepair)
 	mux.HandleFunc("/v1/bench/calibration", s.handleBenchCalibration)
 	mux.HandleFunc("/v1/bench/overlap", s.handleBenchOverlap)
+	mux.HandleFunc("/v1/bench/repair-attempt", s.handleBenchRepairAttempt)
 
 	// Repo — artifact store over HTTP (this `noto serve` as a remote data plane)
 	mux.HandleFunc("/v1/repo/meetings", s.handleRepoMeetings)

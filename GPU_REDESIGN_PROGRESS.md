@@ -101,14 +101,29 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     negative-rate). DRY-RUN, no production writes. `ReDecoder` is the ONLY GPU seam — the whole loop is
     tested offline with a fake (oracle→accepted+WER drops; corrupting→negative; failed→skipped, no crash).
     Core `MergeRepairReports`; factored `repairWordsOf` + `loadRefMeeting`.
-  - **NEXT — the ONE remaining seam is GPU:** build the Modal-backed `ReDecoder`. Cheapest first method
-    (`MethodAlternateDecode`): re-transcribe the meeting audio via the existing STT path with an ALTERNATE
-    decode config (confidence/beam), cache it, and return the span's words sliced from it — no new
-    audio-slicing infra. Wire `noto bench repair-attempt --run <id>` (CLI) + the Modal impl together, then
-    ONE bounded validation run produces the first real `RepairReport` (accepted-per-$ + benchmark WER
-    delta). After that: span-targeted slicing (production-efficient), then the overlap separation pass
-    (same `MeasureSplice` path on cpWER/DER) + the cheap production overlap detector. The whole offline
-    chain (plan→splice→measure→gate) is complete and green; the next commit is the first GPU spend.
+  - **DONE (this iter) — the ReDecoder seam is built as a RUN-PAIR, no new GPU endpoint.** Key finding
+    from exploring the STT path: Parakeet TDT is **greedy-only** (no beam/temperature knob exposed) — the
+    only wired knob that changes the hypothesis is `nemo_precision` (bf16→fp32). So the cheap "same-model
+    alternate decode" has WEAK signal; a genuinely error-fixing alternate needs beam/maes (a Python change
+    to the parakeet server). Rather than an on-demand single-span Modal call, the `ReDecoder` is now a
+    **run-pair**: `internal/platform/bench/repair_redecode.go` `runReDecoder` loads a SECOND completed
+    run's hyps (a different decode config) and slices the span's words; cost is **STT-only** (asr$/audio-sec
+    from the alt run's trace_summary × span seconds — diar never re-runs). `AttemptRepairsFromRun(runID,
+    altRunID)` + full CLI `noto bench repair-attempt --run <baseline> --alt-run <alt>` wired through
+    service/notoapi/apiclient/routes. **Proven on REAL artifacts** (baseline 2f6cc5 confidence run + alt
+    47afb2 gate run): 103 low-conf spans on ES2011b, **targeted STT-only cost $0.00020**, 0 accepted/0
+    negative → **B7 gate correctly FAILS** ("no net improvement") because both runs share the identical
+    greedy bf16 decode → identical spliced words → zero WER change. The machine is correct and does NOT
+    fabricate a benefit. `repair_redecode_test.go` (3 tests). Full suite green, vet clean.
+  - **NEXT — ONE cheap alternate-decode GPU run to get the first POSITIVE number:** `noto bench run
+    --suite gate_ami --knob nemo_precision=fp32` (no confidence needed on the alt; baseline 2f6cc5 already
+    has it), then `noto bench repair-attempt --run 20260619T115608Z-2f6cc5 --alt-run <new-fp32-run>` →
+    first real WER delta on ES2011b's 103 spans. fp32 is the zero-risk, already-wired alternate;
+    EXPECTATION is the benefit is small (greedy TDT is near-deterministic across precision), which would
+    empirically justify the bigger lever: **add beam/maes decode to the parakeet STT server** (Python,
+    ~30-40 lines, guard-revert-to-greedy like the confidence path) as the real error-fixing alternate.
+    Then: overlap separation pass (same MeasureSplice on cpWER/DER), cheap production overlap detector, B8
+    production write behind the passing B7 gate.
 
 ## Leads / findings (verify before acting)
 
