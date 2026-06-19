@@ -275,6 +275,30 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     decides if it's a real positive KPI (language-predictable fixes the acoustic models can't make) or
     another validated-weak source — either way it's measured on the reference and gated, not guessed. (The
     user can run this directly; I can't, lacking the key here.)
+
+  - **USER REDIRECT (authoritative, 2026-06-20):** "no [TUI] or testing yet, just real transcription and
+    diarization optimization" + "we just use gpu optimization and repair techniques." Pivot from building
+    measurement/bench tooling to APPLIED transcription+diarization optimization via GPU-opt + repair.
+  - **DONE (this iter) — traced the PRODUCTION paths; shipped a real transcription optimization (commit
+    5417023).** Findings from reading the actual pipeline (not bench): (1) **capture is mic-only** —
+    `cmd/capture/main.swift` taps only the mic input node; system audio is an acknowledged stub ("requires
+    more complex setup with AudioHardware APIs"). So the two-channel premise (mic + system) has NO DATA yet;
+    overlap-diarization headroom is gated on implementing ScreenCaptureKit system capture (macOS work, can't
+    do/validate from this Linux box). (2) **entity/glossary biasing is wired but INERT** — terms flow
+    glossary→`contextBiasTerms`→`HeaderContextBias`→`routes_compute`→`opts.ContextBias`→ the local parakeet
+    engine, which IGNORES it (`parakeet_server.go` `Recognize(_, _, _ TranscribeOptions)`). (3) production
+    diar is single-stream. **Shipped:** `core/entityrepair` (deterministic, conservative near-miss→canonical
+    snap; 0.80 similarity bar, distinctive terms ≥4 chars, optional confidence gate off-by-default since TDT
+    conf is a ranking; equal-token windows keep IDs/timestamps aligned; 11 tests incl. false-positive
+    guards) + `providers.RepairTranscriptEntities` (rebuilds only touched segments) + wired into
+    `jobs_pipeline` after normalization, fed by the existing glossary (its presence is the gate → only ever
+    sharpens product-critical cpWER, no-op otherwise). Full suite green, vet clean. This makes the meeting's
+    known vocabulary actually reach the transcript — the inert biasing, fixed, GPU-free.
+  - **NEXT (real optimization):** (transcription) optionally forward `ContextBias` to the parakeet server as
+    true decode-time biasing (NeMo context-biasing — GPU, bigger); the entity-repair pass covers the
+    GPU-free win now. (diarization) the real overlap win needs **system-audio capture** (the mic-only stub
+    is the blocker) — once two channels exist, per-channel diarization makes you-vs-remote separation free
+    and only the system channel needs multi-speaker diar. That capture work is macOS/ScreenCaptureKit.
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
