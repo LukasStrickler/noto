@@ -159,6 +159,9 @@ KNOB_FORWARDS: list[tuple[str, str, str]] = [
     # NeMo word confidence (opt-in) → hyps carry per-word P(correct) for B6
     # calibration + B7 repair candidate selection.
     ("BENCH_PARAKEET_CONFIDENCE", "NOTO_PARAKEET_CONFIDENCE", ""),
+    # Stream the parakeet server's full stderr to the box stdout (diagnostic) so a
+    # NeMo fault surfaces in the run output instead of a truncated tail.
+    ("BENCH_PARAKEET_SERVER_STDERR", "NOTO_PARAKEET_SERVER_STDERR", ""),
     # Silero-VAD silence trimming in BOTH warm servers (TODO-7): GPU cost is
     # linear in audio-seconds, so feed only speech — the servers condense each
     # input to its (padded) speech regions and remap timestamps back to the

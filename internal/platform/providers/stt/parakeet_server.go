@@ -338,8 +338,18 @@ func (e *parakeetServerEngine) startLocked() error {
 	if err != nil {
 		return err
 	}
-	stderr := &serverTailBuffer{max: 4096}
-	cmd.Stderr = stderr
+	// 16 KiB tail keeps a full Python traceback (a NeMo CUDA/confidence fault is
+	// the failure we most need to read), not just the last frame.
+	stderr := &serverTailBuffer{max: 16384}
+	var stderrW io.Writer = stderr
+	// NOTO_PARAKEET_SERVER_STDERR=1 ALSO streams the server's stderr to the parent
+	// (mirrors the pyannote server), so a fault surfaces in the run output instead
+	// of being hidden behind a truncated tail — the diagnostic switch for the
+	// confidence-decode crash.
+	if os.Getenv("NOTO_PARAKEET_SERVER_STDERR") == "1" {
+		stderrW = io.MultiWriter(stderr, os.Stderr)
+	}
+	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("stt/parakeet: start %s %s: %w", e.python, e.script, err)
 	}

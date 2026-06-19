@@ -57,7 +57,14 @@ func (r *Runner) RepairPreview(runID string, threshold float64) (RepairPreviewRe
 	res := RepairPreviewResult{RunID: runID, Meetings: len(hyps), ConfidenceThreshold: threshold}
 	var spans []corebench.RepairSpan
 	for _, h := range hyps {
-		res.TotalSpeechSec += h.SpeechSec
+		// Repair budget is on speech seconds; fall back to total audio when the
+		// run carries no VAD-retained speech figure (the common no-VAD case),
+		// else the budget is 0 and every candidate is skipped.
+		speech := h.SpeechSec
+		if speech <= 0 {
+			speech = h.AudioSec
+		}
+		res.TotalSpeechSec += speech
 		words := make([]corebench.RepairWord, 0, len(h.Words))
 		for _, w := range h.Words {
 			rw := corebench.RepairWord{StartSec: w.Start, EndSec: w.End, ProductValue: 1}

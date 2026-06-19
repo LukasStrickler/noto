@@ -207,10 +207,26 @@ Don't add inert Go fields before step 1+2 produce the data — that's speculativ
   - So the full dry-run chain is now wired + tested: hyps → RepairWord → SpansFromWords → PlanRepairs →
     RepairPreview / RepairReport → PassesB7Gate.
 
+- **Iter 10 (2026-06-19):** Shipped `noto bench repair` + wired the confidence knob; found the B6 blocker.
+  - `noto bench repair --run <id>` — surfaces the B7 dry-run preview (candidates, seconds, projected cost),
+    full plumbing; graceful "no confidence — re-run with `--knob confidence=1`" path. Verified on a real run.
+  - Wired `confidence` knob → `BENCH_PARAKEET_CONFIDENCE` → `NOTO_PARAKEET_CONFIDENCE` (Go + Python), test.
+  - **BLOCKER found (cost ~$0.06 of GPU):** `--knob confidence=1` **crashes `TestAMICapture`** on some
+    meetings (ran twice: 2/5 then 3/5 failed; NOT duration-correlated). Tried leaning the NeMo confidence
+    config to word-only (`preserve_frame_confidence=False` — correct anyway, we never read frame conf) — did
+    NOT fix it. So the NeMo word-confidence decode is unstable on this corpus, likely a process-level fault
+    the bench error truncates the stderr for. The documented "degrade-not-crash" contract is violated.
+    Pushed (5938c39). **Do NOT keep re-running blind** — next attempt needs the parakeet server's stderr
+    (enable `NOTO_PARAKEET_SERVER_STDERR` capture into a savable artifact, or reproduce on a single meeting
+    with stderr visible) BEFORE spending more GPU. Repair system + CLI + knob are all ready; only the
+    confidence-DATA population is blocked.
+
 ## Repair + KPI system — roadmap (user directive: implement ALL items)
 
 Done: **B6 calibration** (scorers + CPU pipeline) · **B7 dry-run CORE** (repair.go) · **B7 wiring**
-(SpansFromWords + RepairPreview). Remaining, in order:
+(SpansFromWords + RepairPreview) · **`noto bench repair` CLI** + **confidence knob**. Remaining, in order:
+0. **UNBLOCK B6 confidence (do FIRST, but cheaply):** diagnose the `confidence=1` capture crash WITHOUT a
+   full gate run — get the parakeet stderr (server-stderr capture, or a 1-meeting repro). Only then re-run.
 1. **B6 confidence GPU run + CLI surface (next, paired):** run one Modal `gate_ami` with word confidence
    enabled (the parakeet server's confidence path) to populate real per-word confidence, THEN add
    `noto bench repair --run <id>` showing the RepairPreview (candidates, seconds, projected cost) — so the

@@ -207,7 +207,16 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
 
     # Word confidence is opt-in (NOTO_PARAKEET_CONFIDENCE=1) so the validated
     # default decode path is unchanged; it powers B6 calibration when requested.
-    want_conf = os.getenv("NOTO_PARAKEET_CONFIDENCE", "") == "1" and enable_word_confidence(model)
+    # We snapshot the PLAIN decoding cfg first so that if the confidence decode
+    # later raises — NeMo's TDT word-confidence aggregation fails on some inputs
+    # ("Something went wrong with word-level confidence aggregation") — transcribe()
+    # can revert to it and continue WITHOUT confidence, honoring the §B2.6 contract
+    # that confidence never crashes the validated decode path. `conf` is a mutable
+    # cell so that revert is visible to words_of() and later requests.
+    import copy as _copy
+
+    base_decoding_cfg = _copy.deepcopy(model.cfg.decoding)
+    conf = {"on": os.getenv("NOTO_PARAKEET_CONFIDENCE", "") == "1" and enable_word_confidence(model)}
 
     # Pass optional kwargs only when this NeMo version's transcribe() has them,
     # so a signature drift degrades to defaults instead of crashing the server.
@@ -230,7 +239,7 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
         # Per-word confidence, parallel to the raw word-timestamp list, when the
         # decoding was reconfigured to preserve it. Stays index-aligned to the
         # words below by reading from the SAME enumerate index before filtering.
-        word_conf = list(getattr(hyp, "word_confidence", None) or []) if want_conf else []
+        word_conf = list(getattr(hyp, "word_confidence", None) or []) if conf["on"] else []
         words: list[tuple[str, float, float]] = []
         confidences: list[float] = []
         for i, w in enumerate(stamps.get("word") or []):
@@ -282,11 +291,29 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
     def transcribe(paths: list[str]) -> list[dict]:
         scratch: list[str] = []
         amp = torch.autocast("cuda", dtype=torch.bfloat16) if use_bf16 else contextlib.nullcontext()
-        try:
+        wavs = [mono_path(p, scratch) for p in paths]
+
+        def _decode():
             with torch.inference_mode(), amp:
-                hyps = model.transcribe(
-                    audio=[mono_path(p, scratch) for p in paths], batch_size=min(batch, len(paths)), **opt
-                )
+                return model.transcribe(audio=wavs, batch_size=min(batch, len(paths)), **opt)
+
+        try:
+            try:
+                hyps = _decode()
+            except Exception as exc:
+                # Confidence is best-effort: NeMo's TDT word-confidence aggregation
+                # raises on some inputs. Revert to the validated plain decode and
+                # retry rather than erroring the request (§B2.6). One-way for the
+                # rest of this process — a later request never re-hits the same fault.
+                if not conf["on"]:
+                    raise
+                log(f"word-confidence decode failed ({exc}); reverting to plain decode")
+                try:
+                    model.change_decoding_strategy(base_decoding_cfg)
+                except Exception:
+                    pass
+                conf["on"] = False
+                hyps = _decode()
         finally:
             for p in scratch:
                 try:
