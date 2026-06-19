@@ -526,14 +526,6 @@ func (c *httpClient) BenchDiarRepairAttempt(ctx context.Context, runID, altRunID
 	return out, err
 }
 
-func (c *httpClient) BenchRepairCorrect(ctx context.Context, runID string) (notoapi.BenchRepairAttemptResult, error) {
-	var out notoapi.BenchRepairAttemptResult
-	q := url.Values{}
-	q.Set("run_id", runID)
-	err := c.do(ctx, http.MethodGet, "/v1/bench/repair-correct?"+q.Encode(), nil, &out)
-	return out, err
-}
-
 func (c *httpClient) GetSystem(ctx context.Context) (notoapi.System, error) {
 	var out notoapi.System
 	err := c.do(ctx, http.MethodGet, "/v1/system", nil, &out)

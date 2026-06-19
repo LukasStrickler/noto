@@ -449,10 +449,6 @@ type BenchClient interface {
 	// BenchDiarRepairAttempt re-diarizes a run's overlap regions from a second run and
 	// measures the DER recovered + B7 gate (the diarization with/without-repair KPI).
 	BenchDiarRepairAttempt(ctx context.Context, runID, altRunID string) (BenchDiarRepairAttemptResult, error)
-	// BenchRepairCorrect re-writes a run's low-confidence spans with an LLM (§10.5
-	// context correction) and measures the benchmark WER delta + B7 gate — a
-	// genuinely-different, GPU-free repair source scored on the same with/without KPI.
-	BenchRepairCorrect(ctx context.Context, runID string) (BenchRepairAttemptResult, error)
 	BenchEstimate(ctx context.Context, req BenchEstimateRequest) (BenchEstimateResult, error)
 	BenchPreflight(ctx context.Context, req BenchPreflightRequest) (BenchPreflightResult, error)
 	BenchRun(ctx context.Context, req BenchRunRequest) (BenchRunResult, error)

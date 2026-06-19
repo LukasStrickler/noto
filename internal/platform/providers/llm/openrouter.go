@@ -185,31 +185,6 @@ func unverifiedItems(s *artifacts.Summary) []string {
 // privacy provider-routing block, retrying transient failures with backoff.
 // Returns the assistant message content (code fences stripped).
 func (a *OpenRouterAdapter) chat(ctx context.Context, messages []prompts.ChatMessage) (string, error) {
-	return a.post(ctx, messages, a.responseFormat())
-}
-
-// CompleteText sends one optional system + one user turn and returns the model's
-// plain-text reply. Unlike the summary path it forces NO JSON schema, so a caller that
-// wants structure must prompt for it. Same auth/retry/transport as Summarize. It exists
-// for the bench context-correction repair source — a short, text-only span fix — and is
-// not used by the product pipeline.
-func (a *OpenRouterAdapter) CompleteText(ctx context.Context, system, user string) (string, error) {
-	if strings.TrimSpace(a.APIKey) == "" {
-		return "", notoerr.New("provider_config_invalid", "OpenRouter API key is required.", nil)
-	}
-	msgs := make([]prompts.ChatMessage, 0, 2)
-	if strings.TrimSpace(system) != "" {
-		msgs = append(msgs, prompts.ChatMessage{Role: "system", Content: system})
-	}
-	msgs = append(msgs, prompts.ChatMessage{Role: "user", Content: user})
-	return a.post(ctx, msgs, nil)
-}
-
-// post is the shared OpenRouter chat-completions transport: marshal + size-guard the
-// body, authenticate, retry with backoff on 429/5xx, and extract the assistant text.
-// responseFormat is sent only when non-nil — the summary path forces a JSON schema; a
-// text completion omits it so the model is free to reply in prose.
-func (a *OpenRouterAdapter) post(ctx context.Context, messages []prompts.ChatMessage, responseFormat map[string]any) (string, error) {
 	client := a.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 90 * time.Second}
@@ -232,13 +207,11 @@ func (a *OpenRouterAdapter) post(ctx context.Context, messages []prompts.ChatMes
 	}
 
 	payload := map[string]any{
-		"model":       modelID,
-		"messages":    messages,
-		"temperature": temperature,
-		"max_tokens":  maxTokens,
-	}
-	if responseFormat != nil {
-		payload["response_format"] = responseFormat
+		"model":           modelID,
+		"messages":        messages,
+		"temperature":     temperature,
+		"max_tokens":      maxTokens,
+		"response_format": a.responseFormat(),
 	}
 	if provider := a.providerRouting(); len(provider) > 0 {
 		payload["provider"] = provider

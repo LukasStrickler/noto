@@ -314,12 +314,28 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     pure `biasTermsFromNames`: each multi-word name also contributes its parts ("Lukas","Strickler"),
     particles <4 chars dropped, all dedup'd, title added whole (not split). 5 tests, green. Benefits both the
     entity-repair and the future ASR decode-time biasing (same term source).
-  - **NEXT (real optimization):** (transcription) the GPU-free entity-repair lever now covers misspelled
-    (equal-length), split-compound (merge), and standalone-name-part errors against a richer term list; the
-    remaining transcription win is true decode-time biasing (forward `ContextBias` to the parakeet server →
-    NeMo context-biasing, GPU) or the live LLM `repair-correct` (needs creds). (diarization) the real overlap
-    win needs **system-audio capture** ([[capture-is-mic-only]] — the mic-only stub is the blocker); GPU-free
-    diar post-processing (smoothing) is ruled out as invalid on AMI (reference has the same short turns).
+  - **DONE (this iter) — hardened entity-repair: never merge across a segment boundary (commit 58b7ba1).**
+    Caught a correctness gap in the shipped merge: a split entity whose two words landed in different
+    diarized segments would drop a word from one segment and desync (or empty) it. Added a within-one-segment
+    invariant (skip such repairs) and now return only the repairs actually applied (honest progress count).
+    +1 test. The transcription entity-repair lever (misspelled + split-compound + name-parts, segment-safe)
+    is now mature and hardened.
+  - **★ USER DIRECTIVE (authoritative, 2026-06-20): NO OpenRouter/LLM repair — GPU repair ONLY.** "make sure
+    no openrouter repair stuff, only gpu." REMOVED the entire LLM/OpenRouter context-correction repair path
+    built in prior iters: deleted `repair_llm.go` / `repair_llm_openrouter.go` (+tests), reverted
+    `OpenRouterAdapter` (dropped `CompleteText`, re-inlined the summary-only `chat()`), removed
+    `BenchRepairCorrect` + `benchLLMAdapter` (service), unwired the full transport + CLI (`repair-correct`
+    gone from client/bench interfaces, direct/http, routes, routes_bench, commands_bench). Full suite green,
+    vet clean. **Do NOT reintroduce.** See [[no-openrouter-repair-gpu-only]]. The GPU repair machine SURVIVES:
+    `noto bench repair-attempt` (run-pair re-decode) + `noto bench diar-repair-attempt` (run-pair re-diarize).
+    The deterministic CPU glossary entity-repair (`core/entityrepair`) was KEPT — it's a local pass, not an
+    LLM API call.
+  - **NEXT (GPU repair / cost only):** the repair direction is now GPU re-decode/re-diarize + GPU/cost
+    optimization. The transcription GPU-repair win needs a genuinely-stronger GPU decode source (the validated
+    same-family sources are weak; a different/bigger ASR model is the lever — `--knob stt_model`); the
+    diarization GPU-repair win is overlap separation, still gated on system-audio capture
+    ([[capture-is-mic-only]]). Cost frontier on AMI is largely exhausted ($0.01633 winner). All non-GPU,
+    non-OpenRouter levers (entity-repair) are shipped + hardened; stay on GPU.
   - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
     than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
     The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
