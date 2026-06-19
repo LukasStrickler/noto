@@ -57,32 +57,6 @@ func SpliceTurns(turns []SpeakerSpan, startSec, endSec float64, replacement []Sp
 	return out
 }
 
-// TurnsInSpan returns the baseline turns that overlap [startSec,endSec), each clipped
-// to the span — the local diarization a re-diarization is scored against (the
-// diarization analog of the word-span windowing the transcription measure uses).
-func TurnsInSpan(turns []SpeakerSpan, startSec, endSec float64) []SpeakerSpan {
-	var out []SpeakerSpan
-	if endSec <= startSec {
-		return out
-	}
-	for _, t := range turns {
-		if !t.valid() {
-			continue
-		}
-		s, e := t.Start, t.End
-		if s < startSec {
-			s = startSec
-		}
-		if e > endSec {
-			e = endSec
-		}
-		if e > s {
-			out = append(out, SpeakerSpan{Speaker: t.Speaker, Start: s, End: e})
-		}
-	}
-	return out
-}
-
 func sortTurns(ts []SpeakerSpan) {
 	sort.SliceStable(ts, func(i, j int) bool {
 		if ts[i].Start != ts[j].Start {

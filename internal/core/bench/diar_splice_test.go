@@ -54,23 +54,3 @@ func TestSpliceTurns_DropsTurnsEntirelyInsideSpan(t *testing.T) {
 	}
 }
 
-func TestTurnsInSpan_ClipsToWindow(t *testing.T) {
-	turns := []SpeakerSpan{
-		{Speaker: "A", Start: 0, End: 5},  // clipped to [3,5)
-		{Speaker: "B", Start: 5, End: 9},  // clipped to [5,7)
-		{Speaker: "C", Start: 9, End: 12}, // outside [3,7) — excluded
-	}
-	got := TurnsInSpan(turns, 3, 7)
-	want := []SpeakerSpan{
-		{Speaker: "A", Start: 3, End: 5},
-		{Speaker: "B", Start: 5, End: 7},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("got %d clipped turns, want %d: %+v", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("clipped %d = %+v, want %+v", i, got[i], want[i])
-		}
-	}
-}
