@@ -140,6 +140,12 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
   speakers transcribed individually). Tested now (`overlap_test.go`); wired when the deferred
   separation/refinement pass lands (gated on remote-compute, B2). Do NOT remove as "dead" — it's the
   documented [[ADR 0007]] consumer.
+- **`speakers.AssignStreams` + `SpeakerCandidate`** (`core/speakers/overlap_assign.go`): the ADR-0007
+  stream→speaker step — assigns each separated overlap stream to a meeting speaker by ECAPA cosine
+  (one-to-one for the equal-count case so the two streams get DISTINCT speakers). Tested now
+  (`overlap_assign_test.go`). Together with `MergeOverlapStreams` this completes the Linux-doable refinement
+  logic; the gated wire is just: separate (GPU) → ECAPA-embed streams (exists) → `AssignStreams` →
+  `MergeOverlapStreams`. Do NOT remove as "dead".
 
 ## ★ Overlap separation — the per-speaker-transcription direction (2026-06-20 loop: "2 people talk → transcribe both individually")
 
