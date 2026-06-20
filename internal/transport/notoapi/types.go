@@ -449,6 +449,23 @@ type ConfigCompute struct {
 	EndpointURL      string      `json:"endpoint_url,omitempty"`
 	EndpointTokenRef string      `json:"endpoint_token_ref,omitempty"`
 	Modal            ModalConfig `json:"modal,omitempty"`
+	// VAD is the Silero silence-trimming opt-in that cuts the dominant diar
+	// embedding cost. In a GET payload it is always populated; in a ConfigPatch
+	// a nil pointer means "leave VAD untouched" and a non-nil value sets the
+	// whole posture (Enabled + tuning), the same pointer-presence idiom Privacy
+	// uses for its bools.
+	VAD *ConfigVAD `json:"vad,omitempty"`
+}
+
+// ConfigVAD surfaces the production VAD silence-trimming knob to clients. Enabled
+// trims silence before diarization (shrinking the embedding work — ~90% of GPU
+// cost — without changing the transcript); the three tuning floats are advanced
+// and left at the worker's defaults when zero.
+type ConfigVAD struct {
+	Enabled       bool    `json:"enabled"`
+	PadSeconds    float64 `json:"pad_seconds,omitempty"`
+	MinGapSeconds float64 `json:"min_gap_seconds,omitempty"`
+	Threshold     float64 `json:"threshold,omitempty"`
 }
 
 type ModalConfig struct {

@@ -63,6 +63,15 @@ func (s *Service) PatchConfig(_ context.Context, patch notoapi.ConfigPatch) (not
 				cfg.Compute.Embed.Location = patch.Compute.EmbedLocation
 			}
 			patchModalConfig(&cfg.Compute.Modal, patch.Compute.Modal)
+			if v := patch.Compute.VAD; v != nil {
+				// Pointer presence = set the whole VAD posture (mirrors Privacy):
+				// a bool can't carry an "unset" sentinel, so the caller sends the
+				// full desired state — Enabled plus the tuning floats it read first.
+				cfg.Compute.VAD.Enabled = v.Enabled
+				cfg.Compute.VAD.PadSeconds = v.PadSeconds
+				cfg.Compute.VAD.MinGapSeconds = v.MinGapSeconds
+				cfg.Compute.VAD.Threshold = v.Threshold
+			}
 		}
 		if patch.Privacy != nil {
 			// Pointer presence = intent to set all three; bools can't carry an
@@ -74,6 +83,15 @@ func (s *Service) PatchConfig(_ context.Context, patch notoapi.ConfigPatch) (not
 	})
 	if err != nil {
 		return notoapi.Config{}, notoapi.NewError(notoapi.CodeInternal, err.Error(), nil)
+	}
+	// Persist-and-reapply the VAD posture: re-sync the NOTO_VAD* env from the
+	// now-saved config so the next diar-server incarnation picks it up (an
+	// already-warm server keeps its posture until it restarts — see reapplyVADEnv
+	// for the exact "live" scope). Unlike startup (set-only, to honor a manual
+	// override), an explicit UI toggle is authoritative, so this also unsets the
+	// keys when VAD is turned off.
+	if patch.Compute != nil && patch.Compute.VAD != nil {
+		s.reapplyVADEnv()
 	}
 	return s.publicConfig(), nil
 }
@@ -188,6 +206,12 @@ func publicComputeConfig(cfg config.Config) notoapi.ConfigCompute {
 			ScaledownWindowSeconds: cfg.Compute.Modal.ScaledownWindowSeconds,
 			MinContainers:          cfg.Compute.Modal.MinContainers,
 			ModelCache:             cfg.Compute.Modal.ModelCache,
+		},
+		VAD: &notoapi.ConfigVAD{
+			Enabled:       cfg.Compute.VAD.Enabled,
+			PadSeconds:    cfg.Compute.VAD.PadSeconds,
+			MinGapSeconds: cfg.Compute.VAD.MinGapSeconds,
+			Threshold:     cfg.Compute.VAD.Threshold,
 		},
 	}
 }

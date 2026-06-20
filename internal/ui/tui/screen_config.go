@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
@@ -47,8 +49,9 @@ type configScreen struct {
 	topoAnim      bool // true while the animation tick is scheduled
 	backendRemote bool // true when connected to a remote backend (thin client)
 
-	// cursors per-section (active routes, api keys, storage, paths, deployment)
-	cursors [5]int
+	// cursors per-section, indexed by section id (active routes, api keys,
+	// storage, paths, deployment, accuracy)
+	cursors [6]int
 
 	keyEdit  bool
 	editID   string
@@ -57,8 +60,13 @@ type configScreen struct {
 	err error
 }
 
+// Section ids are kept in the SAME order as sections() returns them: c.section
+// is a position index into that slice, and the rest of the screen treats these
+// ids as that position (e.g. cursors are id-keyed, c.sections()[c.section].id).
+// Insert a new section at the position you want it shown, here and in sections().
 const (
 	secActive = iota
+	secAccuracy
 	secAPIKeys
 	secStorage
 	secPaths
@@ -74,6 +82,7 @@ type configSection struct {
 func (c *configScreen) sections() []configSection {
 	return []configSection{
 		{secActive, "Active routes", "speech + LLM"},
+		{secAccuracy, "Accuracy", "VAD · entity repair"},
 		{secAPIKeys, "API keys", fmt.Sprintf("%d cloud providers", c.countKeyProviders())},
 		{secStorage, "Storage", "health · retention"},
 		{secPaths, "Paths", "where data lives"},
@@ -385,6 +394,8 @@ func (c *configScreen) updateKey(ctx screenCtx, v tea.KeyPressMsg) (screen, tea.
 	switch c.sections()[c.section].id {
 	case secActive:
 		return c.handleActiveKey(ctx, v)
+	case secAccuracy:
+		return c.handleAccuracyKey(ctx, v)
 	case secAPIKeys:
 		return c.handleAPIKeyKey(ctx, v)
 	}
@@ -435,6 +446,8 @@ func (c *configScreen) moveCursor(delta int) {
 	switch id {
 	case secActive:
 		n = len(c.activeRouteRows())
+	case secAccuracy:
+		n = len(c.accuracyToggles())
 	case secAPIKeys:
 		n = len(c.keyProviders())
 	case secDeployment:
@@ -523,6 +536,138 @@ func (c *configScreen) eligibleForKind(kind string) []notoapi.ProviderInfo {
 		}
 	}
 	return out
+}
+
+// --- Accuracy (compute optimizations) ---
+
+// accuracyToggle is one boolean speech-accuracy/cost optimization shown in the
+// Accuracy section. Kept as a table so the next GPU opt is one row, not a new
+// render path — the same single-definition spirit as the screen's other lists.
+type accuracyToggle struct {
+	key   string // stable id, e.g. "vad"
+	label string
+	on    bool
+	desc  string // what it does + the cost/accuracy tradeoff, one line
+}
+
+// accuracyToggles is the live set of toggleable optimizations. VAD is the only
+// production cost lever today; entity-repair is always-on (rendered below as
+// informational, not a toggle).
+func (c *configScreen) accuracyToggles() []accuracyToggle {
+	vadOn := c.cfg.Compute.VAD != nil && c.cfg.Compute.VAD.Enabled
+	return []accuracyToggle{
+		{
+			key:   "vad",
+			label: "VAD silence-trim",
+			on:    vadOn,
+			desc:  "drops silence before diarization — cuts the dominant embedding cost; transcript unchanged",
+		},
+	}
+}
+
+func (c *configScreen) handleAccuracyKey(ctx screenCtx, v tea.KeyPressMsg) (screen, tea.Cmd) {
+	if !key.Matches(v, ctx.keys.Enter) {
+		return c, nil
+	}
+	rows := c.accuracyToggles()
+	cur := c.cursors[secAccuracy]
+	if cur >= len(rows) {
+		return c, nil
+	}
+	switch rows[cur].key {
+	case "vad":
+		return c, c.toggleVADCmd(ctx, !rows[cur].on)
+	}
+	return c, nil
+}
+
+// toggleVADCmd patches the VAD posture. It's a read-modify-write: the current
+// tuning floats are carried through so flipping Enabled never blanks them (the
+// patch sets the whole posture, mirroring the service's pointer-presence rule).
+// The echoed Config returns as configLoadedMsg so the row reflects the new state.
+func (c *configScreen) toggleVADCmd(ctx screenCtx, enabled bool) tea.Cmd {
+	next := notoapi.ConfigVAD{}
+	if c.cfg.Compute.VAD != nil {
+		next = *c.cfg.Compute.VAD
+	}
+	next.Enabled = enabled
+	return func() tea.Msg {
+		cc, cancel := context.WithTimeout(ctx.ctx, 5*time.Second)
+		defer cancel()
+		cfg, err := ctx.client.PatchConfig(cc, notoapi.ConfigPatch{
+			Compute: &notoapi.ConfigCompute{VAD: &next},
+		})
+		if err != nil {
+			return bannerMsg{Kind: "error", Text: err.Error()}
+		}
+		state := "off"
+		if enabled {
+			state = "on"
+		}
+		return tea.Batch(
+			func() tea.Msg { return configLoadedMsg{Cfg: cfg} },
+			func() tea.Msg { return bannerMsg{Kind: "info", Text: "VAD silence-trim → " + state} },
+		)()
+	}
+}
+
+func (c *configScreen) renderAccuracy(ctx screenCtx, width, originX, originY int) string {
+	s, k := ctx.styles, ctx.keys
+	clickable := !c.inputActive()
+	ptr := pointer{}
+	if clickable {
+		ptr = ctx.pointer()
+	}
+	rows := []string{
+		s.HeaderEm.Render("Speech accuracy & cost optimizations"),
+		"",
+	}
+	cur := c.cursors[secAccuracy]
+	for i, tg := range c.accuracyToggles() {
+		selected := c.rightFocus && i == cur
+		stateWord := "○ off"
+		if tg.on {
+			stateWord = "● on"
+		}
+		var line string
+		if selected {
+			// Plain text inside the fill — RowSelected provides the highlight, so
+			// nested colours would just be clobbered (same as renderActive).
+			line = s.RowSelected.Render(" ▸ " + fmt.Sprintf("%-20s %s", tg.label, stateWord))
+		} else {
+			stateCell := s.Warning.Render(stateWord)
+			if tg.on {
+				stateCell = s.Success.Render(stateWord)
+			}
+			line = "  " + s.HeaderEm.Render(fmt.Sprintf("%-20s ", tg.label)) + stateCell
+		}
+		rowLine := len(rows)
+		if clickable {
+			i := i
+			id := fmt.Sprintf("config:acc:%d", i)
+			line = rowFeedback(line, ptr.state(id, selected), s, width, 0)
+			ctx.hits.Add(hit.Rect{X: originX, Y: originY + rowLine, W: width, H: 1},
+				region{id: id, onClick: func() tea.Cmd { c.focusContentRow(secAccuracy, i); return nil }})
+		}
+		// The desc is informational context for the row above, not its own hit
+		// target, so it sits on a muted line that the cursor never lands on.
+		rows = append(rows, line, "     "+s.Muted.Render(fit(tg.desc, max(20, width-6))), "")
+	}
+	rows = append(rows, s.Muted.Render("  Enter toggles the focused optimization."), "")
+	chipR := hit.NewRow(hitsIf(ctx, clickable), originX, originY+len(rows))
+	chipR.Add("  ")
+	placeChip(chipR, ptr, s, "config:acc:toggle", chipAs(s, k.Enter, "toggle"), c.actClick(k.Enter))
+	rows = append(rows, chipR.String(), "")
+
+	// Entity repair is unconditional (deterministic, on-device, free), so it's
+	// shown as status rather than a toggle — surfacing the optimization without
+	// implying a knob that doesn't exist.
+	rows = append(rows,
+		s.HeaderEm.Render("Entity repair")+s.Success.Render("   ● always on"),
+		"  "+s.Muted.Render("Snaps near-miss words to your meeting glossary +"),
+		"  "+s.Muted.Render("participant names. Deterministic, on-device, no extra cost."),
+	)
+	return strings.Join(rows, "\n")
 }
 
 // --- API keys ---
@@ -656,6 +801,8 @@ func (c *configScreen) renderRight(ctx screenCtx, width, originX, originY int) s
 	switch c.sections()[c.section].id {
 	case secActive:
 		return c.renderActive(ctx, width, originX, originY)
+	case secAccuracy:
+		return c.renderAccuracy(ctx, width, originX, originY)
 	case secAPIKeys:
 		return c.renderAPIKeys(ctx, width, originX, originY)
 	case secStorage:

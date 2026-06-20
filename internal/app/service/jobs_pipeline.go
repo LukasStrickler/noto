@@ -108,14 +108,22 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 			if provider == "" {
 				provider = config.DefaultSTTProvider
 			}
+			// The context-bias glossary (participant names + title terms) is
+			// identical for both consumers in this job; compute it once in the
+			// adapter-resolved branch and feed both the recognizer and the
+			// entity-repair pass below — one DB read, and the two stages can't drift
+			// onto different glossaries. Declared out here so it's in scope for the
+			// repair pass, which lives in the outer transcript block.
+			var biasTerms []string
 			adapter, aerr := s.resolveSTTAdapter(ctx, provider)
 			if aerr != nil {
 				s.publishProgress(job, "stt provider unavailable", 0.5, aerr.Error())
 			} else {
+				biasTerms = s.contextBiasTerms(ctx, title)
 				t, terr := adapter.Transcribe(ctx, audio, stt.TranscribeOptions{
 					Language:    jobOptString(job.Options, "language", ""),
 					MeetingID:   mid.String(),
-					ContextBias: s.contextBiasTerms(ctx, title),
+					ContextBias: biasTerms,
 				})
 				if terr != nil {
 					s.publishProgress(job, "transcription unavailable", 0.5, terr.Error())
@@ -140,12 +148,12 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 						transcript = normalized
 					}
 				}
-				// Entity repair: snap low-confidence words to the meeting's known
+				// Entity repair: snap near-miss words to the meeting's known
 				// vocabulary (participant names, product/jargon terms) — the same
-				// glossary the recognizer never sees. Conservative (near-miss only,
-				// confident words untouched) and a no-op without a glossary, so it
-				// only ever sharpens the product-critical "who/what" accuracy.
-				if reps := providers.RepairTranscriptEntities(transcript, s.contextBiasTerms(ctx, title), entityrepair.DefaultOptions()); len(reps) > 0 {
+				// glossary the recognizer never sees. Conservative (only
+				// close-but-not-exact matches change) and a no-op without a glossary,
+				// so it only ever sharpens the product-critical "who/what" accuracy.
+				if reps := providers.RepairTranscriptEntities(transcript, biasTerms, entityrepair.DefaultOptions()); len(reps) > 0 {
 					s.publishProgress(job, "entity repair", 0.55, fmt.Sprintf("%d term(s) corrected", len(reps)))
 				}
 			}

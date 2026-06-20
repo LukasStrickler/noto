@@ -50,6 +50,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   ("data dog"→"Datadog") + standalone name parts. Conservative (exact/confident words untouched,
   segment-safe), glossary-gated (`contextBiasTerms` now also emits individual name parts).
 - **OpenRouter/LLM repair path REMOVED** (per directive); summary path untouched.
+- **Optimizations embedded in the TUI ("embed it nicely in the tui").** New **Accuracy**
+  config section (`internal/ui/tui/screen_config.go`, `secAccuracy`) surfaces the production
+  opts that were previously config-file-only: **VAD silence-trim** is a live toggle (Enter /
+  click), **entity-repair** shows as always-on status. Toggle rides the existing `PatchConfig`
+  vertical: added `ConfigVAD` to the `notoapi.ConfigCompute` DTO (pointer = patch-presence sets
+  the whole posture, the Privacy idiom; never clobbers sibling Compute fields), `publicComputeConfig`
+  exposes it, `PatchConfig` applies it + `reapplyVADEnv` (symmetric set/unset via single-source
+  `config.VADEnvKeys()`) so a toggle re-syncs the env for the NEXT diar-server incarnation (a
+  not-yet-started server picks it up on first start; an already-warm local pyannote singleton keeps
+  its posture until it restarts — we don't kill a server mid-diarization). NOT a bench screen (the forbidden thing) — it's the
+  production cost lever (VAD trims the dominant diar-embedding cost) made visible + usable. Tested:
+  service patch (env both directions + sibling-preserve), TUI render-reflects-state + Enter-toggles
+  (read-modify-write carries tuning floats).
 
 ## Key validated findings (hard-won; don't re-derive)
 

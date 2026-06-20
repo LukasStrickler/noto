@@ -97,6 +97,13 @@ type VADConfig struct {
 	Threshold     float64 `mapstructure:"threshold"`
 }
 
+// VADEnvKeys lists every NOTO_VAD* variable Env can set, so a caller that toggles
+// VAD off at runtime can unset exactly the keys this config owns (and nothing
+// else) before re-applying — keeping the env key names defined in one place.
+func VADEnvKeys() []string {
+	return []string{"NOTO_VAD", "NOTO_VAD_PAD", "NOTO_VAD_MIN_GAP", "NOTO_VAD_THRESHOLD"}
+}
+
 // Env renders the VAD config as the NOTO_VAD* environment the diar server reads.
 // Empty when disabled; a parameter is emitted only when explicitly set (> 0),
 // leaving the server's own default in place otherwise.

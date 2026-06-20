@@ -263,21 +263,11 @@ func levenshtein(a, b string) int {
 			if ra[i-1] == rb[j-1] {
 				cost = 0
 			}
-			cur[j] = min3(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
 		}
 		prev = cur
 	}
 	return prev[len(rb)]
-}
-
-func min3(a, b, c int) int {
-	if b < a {
-		a = b
-	}
-	if c < a {
-		a = c
-	}
-	return a
 }
 
 // normalize lowercases and keeps only letters/digits, so comparison ignores case and

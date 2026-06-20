@@ -7,8 +7,9 @@ import (
 	"github.com/lukasstrickler/noto/internal/core/entityrepair"
 )
 
-// RepairTranscriptEntities snaps low-confidence transcript words to known glossary
-// entities (see internal/core/entityrepair) and keeps segment text consistent by
+// RepairTranscriptEntities snaps near-miss transcript words (close-but-not-exact to a
+// known glossary entity) to that entity (see internal/core/entityrepair) and keeps
+// segment text consistent by
 // rebuilding each TOUCHED segment's Text from its corrected member words. It is a no-op
 // when there are no glossary terms or the provider emitted no word-level output (the
 // segment-only offload path), so it is safe to call unconditionally — the glossary's

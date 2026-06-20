@@ -253,6 +253,26 @@ func (s *Service) applyVADEnv() {
 	}
 }
 
+// reapplyVADEnv makes the live NOTO_VAD* env match the persisted config exactly,
+// for an explicit runtime toggle (the Config screen). Unlike applyVADEnv it first
+// clears every key the config owns, so turning VAD OFF actually removes the env a
+// previous enable set; a deliberate UI toggle is authoritative (a startup manual
+// override is intentionally not preserved here).
+//
+// Scope of "live": a diar server reads NOTO_VAD from os.Environ at exec, so the new
+// posture reaches the NEXT diar-server incarnation. A server not yet started this
+// session picks it up on first start (the common first-run case). An already-WARM
+// local pyannote server is a long-lived singleton that captured os.Environ once at
+// exec, so it keeps its old posture until it next restarts (crash or app restart) —
+// we deliberately don't kill a warm server with diarizations possibly in flight.
+// (A Modal/remote worker reads VAD from its own deploy env, not this process.)
+func (s *Service) reapplyVADEnv() {
+	for _, k := range config.VADEnvKeys() {
+		_ = os.Unsetenv(k)
+	}
+	s.applyVADEnv()
+}
+
 // ComputePlan returns the accelerator plan resolved at startup. Used by the
 // /v1/system endpoint so a client can display the backend's capabilities.
 func (s *Service) ComputePlan() compute.Plan { return s.compute }
