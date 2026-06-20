@@ -81,14 +81,22 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 ## Blocked / Next (each needs a resource I can't supply autonomously)
 
 - **Stronger transcription repair (IN PROGRESS — user greenlit 2026-06-20).** Built the **canary multitask
-  ASR adapter** (commit 5b55b46): the server loads any NeMo model via the generic `ASRModel.restore_from` +
-  the `stt_model` knob; canary just needed its `source_lang`/`target_lang`/`pnc` transcribe prompts, added
-  via the existing signature-filter so the parakeet TDT path stays byte-identical. Launched a bounded
-  `gate_ami --knob stt_model=nvidia/canary-1b-flash` run (BENCH_DIAR_WORKERS=2 to avoid the ~1B-model diar
-  OOM; BENCH_PARAKEET_SERVER_STDERR=1 to capture the log). NEXT when it lands: `repair-attempt(2f6cc5,
-  canary-run)` → the first transcription-repair KPI from a genuinely STRONGER model (canary tops English ASR
-  leaderboards), plus canary's standalone WER vs the parakeet baseline. Risk: canary-1b-flash word-timestamp
-  support; if absent, words_of falls back to text-only and the alt hyps lack the words repair needs.
+  ASR adapter** (commit 5b55b46): server loads any NeMo model via generic `ASRModel.restore_from` + the
+  `stt_model` knob; canary needed its `source_lang`/`target_lang`/`pnc` prompts, added via the signature-
+  filter so the parakeet TDT path is byte-identical.
+  - **Run 1 (`20260620T081051Z-e2ba6f`) — KEY FINDING:** canary-1b-flash is a **40 s-context model**
+    (`max_duration=40`, confirmed in the run's raw.jsonl). Fed a whole 30-min meeting via naive transcribe()
+    it TRUNCATES — only **1178 of 4531 ref words (0.26×), WER 0.83** vs parakeet's 0.21 (DER identical 0.0837,
+    confirming only STT changed). BUT on the part it transcribed canary was CORRECT where parakeet was WRONG
+    (ref "okay so we'll try to zip through this since we're short on time" → canary nails it, parakeet
+    hallucinates "I was recording but it was very understandable"). So canary IS accurate; the blocker is
+    long-form handling + its punctuation (the " . " tokens inflated WER and would pollute a splice).
+  - **Fix (commit 2ec706c):** decode canary in fixed ≤30 s windows + stitch with per-window timestamp offsets
+    (`words_of` gained `time_offset`); default `pnc='no'` so output is plain lowercase like parakeet/the ref.
+  - **Run 2 (chunked, in flight):** validating. NEXT when it lands: standalone WER (expect ≪0.83 — is canary
+    actually stronger than parakeet 0.21?), then `repair-attempt(2f6cc5, canary2)` for the repair KPI. If
+    canary's standalone WER beats parakeet, the bigger result may be "canary is a better PRIMARY model", not
+    just a repair source.
 - **Diarization overlap (the 33% headroom)** → separate-and-re-diarize, GATED on real **system-audio
   capture**: `cmd/capture/main.swift` taps the mic only; system audio is an acknowledged stub
   ("requires AudioHardware APIs"). macOS/ScreenCaptureKit work; can't build/validate from this Linux box.
