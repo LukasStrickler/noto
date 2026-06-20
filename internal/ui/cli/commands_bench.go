@@ -698,7 +698,7 @@ func (a *app) runBenchPreflight(args []string) int {
 	tier := fs.String("tier", "gate", "budget tier")
 	mode := fs.String("mode", "batch_queue", "operating mode")
 	profile := fs.String("profile", "modal_cuda", "execution profile")
-	budget := fs.Float64("budget-usd", 1.5, "budget cap USD")
+	budget := fs.Float64("budget-usd", 0, "budget cap USD (0 = tier default)")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(args); err != nil {
 		return 64

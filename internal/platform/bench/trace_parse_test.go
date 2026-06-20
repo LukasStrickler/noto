@@ -36,6 +36,28 @@ func TestParsePyannoteStderr_NoMatch(t *testing.T) {
 	}
 }
 
+// The LIVE pyannote server logs the stages bracketed and prefixed with
+// [pyannote-server], with NO `stages_ms` token. The parser must read this real
+// format (the [pyannote-server] prefix has no '=', so it isn't mistaken for the
+// stage group) — previously StagesMS came back empty on every real run.
+func TestParsePyannoteStderr_BracketedLiveFormat(t *testing.T) {
+	line := "[pyannote-server] timing worker=1 wav=ES2002a.wav load=120.0ms vad=80.0ms kept=0.85 [segmentation=800 embeddings=4800 clustering=200]"
+	got := bench.ParsePyannoteStderr(line)
+
+	want := map[string]float64{"segmentation": 800, "embeddings": 4800, "clustering": 200}
+	if len(got.StagesMS) != len(want) {
+		t.Fatalf("StagesMS = %v, want %v", got.StagesMS, want)
+	}
+	for k, v := range want {
+		if got.StagesMS[k] != v {
+			t.Errorf("StagesMS[%q] = %v, want %v", k, got.StagesMS[k], v)
+		}
+	}
+	if got.VADKept != 0.85 {
+		t.Errorf("VADKept = %v, want 0.85", got.VADKept)
+	}
+}
+
 func TestParsePyannoteStderr_IgnoresMalformedNumbers(t *testing.T) {
 	// segmentation=abc has no numeric value, so the (\w+)=([\d.]+) pair regex
 	// skips it; the well-formed embeddings pair still parses.

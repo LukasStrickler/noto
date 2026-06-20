@@ -171,7 +171,15 @@ func (s *qualitySums) add(row qualityRow) {
 
 func addDuration(s *qualitySums, hyp MeetingHyp) {
 	s.AudioSec += hyp.AudioSec
-	s.SpeechSec += hyp.SpeechSec
+	// The real AMI hyp producer omits speech_sec, so SpeechSec deserializes to 0.
+	// Fall back to audio seconds (as the trace-summary and repair consumers already
+	// do) so the speech_hours denominator is never silently 0 — a 0 there makes
+	// every real comparison drop its speech-hours term.
+	sp := hyp.SpeechSec
+	if sp <= 0 {
+		sp = hyp.AudioSec
+	}
+	s.SpeechSec += sp
 }
 
 func scoreMeetingHyp(id string, hyp MeetingHyp, opts ScoreOptions) (qualityRow, error) {

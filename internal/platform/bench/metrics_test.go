@@ -112,6 +112,22 @@ func TestMetricsFromSummaryKPIs_ImportsSyntheticAggregate(t *testing.T) {
 // A perfect synthetic run (0.0 across the board) must be RECORDED as 0.0, not
 // dropped as "absent" — its reference denominators prove it was measured, and
 // downstream gates treat a missing key as "no data" / fail.
+// A real AMI hyp omits speech_sec (SpeechSec deserializes to 0). The speech_hours
+// denominator must fall back to audio seconds, not silently collapse to 0 (which
+// drops the speech-hours term from every real comparison). addDuration runs for
+// every hyp regardless of scoring, so refs aren't needed to exercise it.
+func TestScoreMeetingHyps_SpeechHoursFallsBackToAudio(t *testing.T) {
+	mf, err := bench.ScoreMeetingHyps("run_speechsec", []bench.MeetingHyp{
+		{MeetingID: "m1", AudioSec: 3600, SpeechSec: 0}, // 1 audio-hour, no speech_sec
+	}, bench.ScoreOptions{WordsDir: t.TempDir(), RTTMDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mf.Denominators["speech_hours"]; got != 1.0 {
+		t.Fatalf("speech_hours = %v; want 1.0 (fallback to audio when speech_sec absent)", got)
+	}
+}
+
 func TestMetricsFromSummaryKPIs_RecordsMeasuredZero(t *testing.T) {
 	metricsFile, ok := bench.MetricsFromSummaryKPIs("run_perfect", bench.ModalSummary{
 		ProcessedAudioHours: 0.5,

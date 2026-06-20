@@ -435,11 +435,15 @@ func loadMeetingHyps(dir string) ([]MeetingHyp, error) {
 		}
 		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			return nil, err
+			continue // skip an unreadable hyp rather than voiding the whole capture
 		}
 		var h MeetingHyp
 		if err := json.Unmarshal(b, &h); err != nil {
-			return nil, err
+			// Hyps are written incrementally (non-atomically) so a crash mid-run
+			// keeps finished meetings; a truncated/corrupt file is exactly that
+			// case. Skip it and score the rest, matching the Python producer's
+			// per-file try/except — one bad file must not void a whole capture.
+			continue
 		}
 		if h.MeetingID == "" {
 			if h.ID != "" {
@@ -453,7 +457,12 @@ func loadMeetingHyps(dir string) ([]MeetingHyp, error) {
 	return hyps, nil
 }
 
-var stagesMSLine = regexp.MustCompile(`stages_ms[^\n]+`)
+// stagesMSLine isolates the one timing line from a multi-line setup.log so the
+// per-line parsers don't sweep tokens from unrelated lines. It matches both the
+// live bracketed stage group (`[segmentation=… embeddings=…]`) and the legacy
+// `stages_ms …` form — the live server emits the former, so anchoring only on
+// `stages_ms` returned the whole log (a no-op isolation) on every real run.
+var stagesMSLine = regexp.MustCompile(`[^\n]*(?:stages_ms|\[[^\]\n]*=[^\]\n]*\])[^\n]*`)
 
 func extractPyannoteStderr(setupLog string) string {
 	if m := stagesMSLine.FindString(setupLog); m != "" {

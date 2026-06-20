@@ -1,1 +1,1 @@
-timing worker=1 wav=ES2002a.wav turns=4 load=120.0ms infer=5100.0ms serialize=15.0ms vad=80.0ms kept=0.85 stages_ms segmentation=800 embeddings=4800 clustering=200
+[pyannote-server] timing worker=1 wav=ES2002a.wav turns=4 load=120.0ms infer=5100.0ms serialize=15.0ms vad=80.0ms kept=0.85 [segmentation=800 embeddings=4800 clustering=200]

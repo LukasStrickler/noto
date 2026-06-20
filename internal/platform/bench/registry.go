@@ -43,6 +43,11 @@ type SuiteSpec struct {
 // runs whole-corpus (Hours == 0).
 const AMIAnchorAudioHours = 11.44
 
+// AMIQuickAudioHours is the ~2h subsample a --quick AMI run processes (the gate
+// slice). A quick AMI suite with no explicit Hours is projected against this, not
+// the full corpus, so the estimate matches what actually runs.
+const AMIQuickAudioHours = 2
+
 // KnownSuites is the registry agents query via dataset list (A8 subset).
 //
 // gate_ami caps to ~2h of audio (Hours: 2) so a gate iteration scores a
@@ -64,6 +69,12 @@ func SuiteAudioHours(suiteID string) float64 {
 		return s.Hours
 	}
 	if s.ModalSuite == "ami" {
+		// A quick AMI run with no explicit Hours (e.g. an unknown suite id) runs a
+		// subsample, not the whole corpus — project against the subsample so the
+		// estimate matches the run. Only the explicit non-quick anchor uses 11.44h.
+		if s.Quick {
+			return AMIQuickAudioHours
+		}
 		return AMIAnchorAudioHours
 	}
 	return 0

@@ -39,18 +39,31 @@ type PyannoteTiming struct {
 }
 
 var stagesMSRe = regexp.MustCompile(`stages_ms\s+([^\n]+)`)
+
+// stagesBracketRe captures the bracketed per-stage group the LIVE pyannote server
+// logs, e.g. `... kept=0.85 [segmentation=800 embeddings=4800 clustering=200]`.
+// Requiring an `=` inside the brackets skips the `[pyannote-server]` log prefix
+// (which has none). The server never writes the literal `stages_ms` token — that
+// is only a dict key — so without this the live format parsed to nothing.
+var stagesBracketRe = regexp.MustCompile(`\[([^\]\n]*=[^\]\n]*)\]`)
 var stagePairRe = regexp.MustCompile(`(\w+)=([\d.]+)`)
 var vadKeptRe = regexp.MustCompile(`kept=([\d.]+)`)
 
 // ParsePyannoteStderr extracts stage timing from a pyannote server stderr line.
+// It accepts BOTH the live bracketed format and the legacy `stages_ms <pairs>`
+// form so a real run actually populates StagesMS instead of leaving it empty.
 func ParsePyannoteStderr(line string) PyannoteTiming {
 	t := PyannoteTiming{StagesMS: map[string]float64{}}
-	if m := stagesMSRe.FindStringSubmatch(line); len(m) == 2 {
-		for _, part := range strings.Fields(m[1]) {
-			if kv := stagePairRe.FindStringSubmatch(part); len(kv) == 3 {
-				if v, err := strconv.ParseFloat(kv[2], 64); err == nil {
-					t.StagesMS[kv[1]] = v
-				}
+	stagesStr := ""
+	if m := stagesBracketRe.FindStringSubmatch(line); len(m) == 2 {
+		stagesStr = m[1]
+	} else if m := stagesMSRe.FindStringSubmatch(line); len(m) == 2 {
+		stagesStr = m[1]
+	}
+	for _, part := range strings.Fields(stagesStr) {
+		if kv := stagePairRe.FindStringSubmatch(part); len(kv) == 3 {
+			if v, err := strconv.ParseFloat(kv[2], 64); err == nil {
+				t.StagesMS[kv[1]] = v
 			}
 		}
 	}

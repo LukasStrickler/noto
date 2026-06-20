@@ -72,6 +72,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `CostWaterfall` buckets, so a cost move in any of them made the residual gate spuriously `retry` a real
   win; now tracks all buckets. **Bench KPI/cost/scale/compare/metrics math is now audited end-to-end
   (12 bugs fixed across 2 passes); spend + overlap verified clean.**
+- **Bench INGEST/parse audit (5 distinct bugs fixed, +7 tests).** Swept the data-IN layer that feeds
+  the (now-correct) math. ★ Biggest: the **pyannote stderr regex never matched the live server** —
+  it required a literal `stages_ms` token, but the server emits the stages BRACKETED
+  (`[segmentation=800 embeddings=4800 clustering=200]`); only the hand-authored fixture used the
+  fictional `stages_ms` form, so tests passed while every real run lost its per-stage diar timing.
+  Parser now accepts both forms (bracket requires an `=` inside, so the `[pyannote-server]` prefix is
+  skipped); fixture corrected to the real format. Also: (metrics) the real producer omits `speech_sec`
+  → `addDuration` now falls back to audio seconds (the other 2 consumers already did) so `speech_hours`
+  isn't silently 0; (modal_runner) a single truncated hyp file aborted the whole run → now skipped like
+  the Python sibling; (CLI) `bench preflight --budget-usd` defaulted to 1.5, under-capping non-gate
+  tiers vs `bench run` → now 0 (= tier default); (registry) an unknown suite ran `--quick` but projected
+  the full 11.44h corpus → now projects the ~2h subsample. **The bench spine is audited end-to-end
+  (math + ingest): 17 correctness bugs fixed across 3 passes.**
 - **Optimizations embedded in the TUI ("embed it nicely in the tui").** New **Accuracy**
   config section (`internal/ui/tui/screen_config.go`, `secAccuracy`) surfaces the production
   opts that were previously config-file-only: **VAD silence-trim** is a live toggle (Enter /
