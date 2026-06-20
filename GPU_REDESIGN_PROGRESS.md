@@ -80,9 +80,15 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Blocked / Next (each needs a resource I can't supply autonomously)
 
-- **Stronger transcription repair** → a genuinely different/stronger ASR decode (whisper-large-v3 /
-  canary-1b — different arch, needs a parakeet-server adapter since the path assumes NeMo TDT timestamps)
-  + a GPU run to validate. The machine makes any such source a one-command `repair-attempt`.
+- **Stronger transcription repair (IN PROGRESS — user greenlit 2026-06-20).** Built the **canary multitask
+  ASR adapter** (commit 5b55b46): the server loads any NeMo model via the generic `ASRModel.restore_from` +
+  the `stt_model` knob; canary just needed its `source_lang`/`target_lang`/`pnc` transcribe prompts, added
+  via the existing signature-filter so the parakeet TDT path stays byte-identical. Launched a bounded
+  `gate_ami --knob stt_model=nvidia/canary-1b-flash` run (BENCH_DIAR_WORKERS=2 to avoid the ~1B-model diar
+  OOM; BENCH_PARAKEET_SERVER_STDERR=1 to capture the log). NEXT when it lands: `repair-attempt(2f6cc5,
+  canary-run)` → the first transcription-repair KPI from a genuinely STRONGER model (canary tops English ASR
+  leaderboards), plus canary's standalone WER vs the parakeet baseline. Risk: canary-1b-flash word-timestamp
+  support; if absent, words_of falls back to text-only and the alt hyps lack the words repair needs.
 - **Diarization overlap (the 33% headroom)** → separate-and-re-diarize, GATED on real **system-audio
   capture**: `cmd/capture/main.swift` taps the mic only; system audio is an acknowledged stub
   ("requires AudioHardware APIs"). macOS/ScreenCaptureKit work; can't build/validate from this Linux box.
