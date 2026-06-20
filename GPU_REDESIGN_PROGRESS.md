@@ -154,10 +154,21 @@ mixes that match AMI far-field) → transcribe each stream → assign to the 2 d
 own answer is two-channel capture — you-vs-remote separates by channel — but that's macOS-gated; remote-vs-
 remote overlap still needs this, and AMI is the proving ground I have.)
 
-**Plan: (1) extract overlap regions + per-speaker ref words [build first — the eval ground truth]; (2) Modal
-separation+transcribe experiment on those regions; (3) score: does separation recover the 2nd speaker
-(overlap cpWER, separated vs current single-stream)? H10 is flagged "high-cost / oracle-confirm" — so prove
-the recovery on a small sample before any production wire.**
+**Plan: (1) extract overlap regions + per-speaker ref words [DONE — `overlap_regions.py`]; (2) Modal
+separation+transcribe experiment [DONE — `modal_overlap_sep.py` + `score_overlap_sep.py`, run ap-nmGhDy0];
+(3) score recovery vs single-stream baseline. H10 is "high-cost / prove-first" — proving on small samples.**
+
+**Step-2 first result (7 regions, ES2002a — INFRA WORKS, signal inconclusive but PROOF-OF-CONCEPT seen).**
+Pipeline end-to-end: slice overlap region from Mix-Headset → SepFormer-WHAMR16k → 2 streams → parakeet each
+→ region cpWER vs the single mixed transcript. On 7 regions: baseline 62.5% == separated 62.5% (null
+average), BUT **region 4 is a clear win**: REF A "allergic to animal" (simultaneous with B "ah") — the MIXED
+transcript garbled it to "Magic animals", the SEPARATED stream recovered "Allergic to animals". So
+separation CAN recover a speaker the mix destroys. The null average is a SAMPLE artifact: most AMI 2-speaker
+overlaps are one dominant speaker + a 1-word BACKCHANNEL ("first"/"uh"/"ah") — low separation value, and
+SepFormer (balanced-mix-trained) emits a short hallucination ("Thanks"/"No") for the faint 2nd talker.
+**Next: filter to SUBSTANTIVE overlaps (both speakers ≥3-4 words — where region 4 lives) + a bigger sample
+to measure the real recovery rate; the backchannel overlaps aren't the prize (the prize is two people saying
+real things at once).** Cost so far ~$0.05.
 
 ## GPU-efficiency / throughput frontier — grounded diagnosis (2026-06-20, user: "push throughput + strong accuracy")
 
