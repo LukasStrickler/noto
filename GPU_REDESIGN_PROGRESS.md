@@ -173,3 +173,29 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 The autonomous GPU-free + zero-spend work is essentially complete and hardened. Further substantive wins
 need a greenlit bounded GPU experiment, a stronger-ASR server adapter, or the macOS capture work.
+
+## Plan-verified gate status (2026-06-20 — checked against GPU_REDESIGN_PLAN.md; don't re-derive)
+
+The remaining phases are **gated by the PLAN'S OWN sequencing**, not just by judgment — so the loop is
+correctly at a gate, and building the gated phases now would VIOLATE the plan. For future iterations:
+
+- **Program A (measurement spine): COMPLETE** — §0.7 marks all exit criteria `[x]` (met 2026-06-19); the
+  spine is additionally audited end-to-end (20 correctness/display fixes) and verified clean.
+- **B1 VAD: probed, does NOT adopt on AMI** (dense audio; VAD trims silence and AMI has little). The plan
+  (§0.8) makes **B2–B5 production-wire/chunk/latency/throughput GATED until a B1 adopt path wins** — so
+  they must NOT be built until VAD adopts, which needs a **silence-heavy suite** (a dataset).
+- **B6 calibration: math done + confidence pipeline wired & tested** (§14/B6). The one residual step is a
+  Modal run with `NOTO_PARAKEET_CONFIDENCE=1` to populate live confidence — but B7 already validated 5
+  repair sources as weak on AMI, so that run would only re-confirm a known dead-end → NOT the "high-EV
+  one-knob" the plan requires for spending GPU. Don't run it speculatively.
+- **B7 repair: machinery built + validated; NO ROI on AMI** (parakeet is the best model there). **B8
+  production repair is gated behind B7 ROI** → not built (would be unused infra; the user's "apply
+  optimizations, don't just build measurement tools" applies).
+- **TUI: keep the contract STABLE** (plan line 20: "GPU work is an internal implementation swap, NOT a new
+  user workflow"). The VAD/entity-repair Accuracy config surface is the right "embed"; adding bench/cost
+  screens would violate the contract (and the "NO bench TUI" directive).
+
+**Net: the three real unblocks are all resource decisions (the user's call), not code I can write:**
+(1) a **silence-heavy suite** → B1 VAD adopt → unblocks B2–B5; (2) a **parakeet-weak dataset** → B7 repair
+ROI → unblocks B8 (the canary/perturbation adapters are built and waiting); (3) **macOS system-audio
+capture** → overlap separate-and-re-diarize → the 33% DER headroom.
