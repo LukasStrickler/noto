@@ -79,6 +79,40 @@ type ComputeConfig struct {
 	Embed    ComputeRoute       `mapstructure:"embed"`
 	Modal    ModalComputeConfig `mapstructure:"modal"`
 	VAD      VADConfig          `mapstructure:"vad"`
+	// JobConcurrency caps how many pipeline jobs (meetings) the worker pool runs
+	// at once. 0 = auto: a small pool when compute is LOCAL (each worker drives
+	// heavy in-process STT/diar models, so more would oversubscribe one machine),
+	// and a larger pool when STT+diar are OFFLOADED to a remote GPU (workers then
+	// block on a network POST, so the pool should feed the GPU at its measured
+	// batch optimum — jobs=10 on L40S — instead of capping hosted throughput at
+	// the local default). See JobWorkers for the resolution.
+	JobConcurrency int `mapstructure:"job_concurrency"`
+}
+
+const (
+	// DefaultLocalJobWorkers is the worker-pool size when compute runs in-process:
+	// each worker drives heavy local STT/diar models, so the pool stays small to
+	// avoid oversubscribing one machine.
+	DefaultLocalJobWorkers = 4
+	// DefaultOffloadJobWorkers is the pool size when STT+diar are offloaded to a
+	// remote GPU. Workers then block on a network POST, so the pool should feed the
+	// GPU at its measured batch optimum (jobs=10 on L40S, the anchor winner's
+	// contention point) instead of capping hosted throughput at the local default.
+	DefaultOffloadJobWorkers = 10
+)
+
+// JobWorkers resolves the effective pipeline worker-pool size from JobConcurrency
+// and the compute posture (see the JobConcurrency field doc). An explicit
+// JobConcurrency > 0 always wins; otherwise offloaded STT+diar (network-bound
+// workers) gets the GPU-batch optimum and local compute gets the small pool.
+func (c ComputeConfig) JobWorkers() int {
+	if c.JobConcurrency > 0 {
+		return c.JobConcurrency
+	}
+	if c.Speech.Location == ComputeLocationRemote && c.Diarize.Location == ComputeLocationRemote {
+		return DefaultOffloadJobWorkers
+	}
+	return DefaultLocalJobWorkers
 }
 
 // VADConfig enables Silero VAD silence-trimming before diarization on the GPU

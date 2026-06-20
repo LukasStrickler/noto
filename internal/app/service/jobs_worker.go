@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lukasstrickler/noto/internal/platform/config"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
 
@@ -14,9 +15,16 @@ import (
 const workerPollInterval = 500 * time.Millisecond
 
 func (s *Service) startWorkers(ctx context.Context) {
-	// Small fixed-size pool: 4 generic workers is plenty for V1 since
-	// most jobs are network-bound (STT/LLM API calls).
-	for i := 0; i < 4; i++ {
+	// Pool size is posture-aware (ComputeConfig.JobWorkers): a small local pool
+	// (heavy in-process models), or the GPU batch optimum when STT+diar are
+	// offloaded so hosted-batch throughput isn't capped below what the remote GPU
+	// can pack (jobs=10). Each worker blocks on its compute call, so N workers =
+	// at most N concurrent meetings in flight.
+	n := s.currentCfg().Compute.JobWorkers()
+	if n < 1 {
+		n = config.DefaultLocalJobWorkers
+	}
+	for i := 0; i < n; i++ {
 		go s.workerLoop(ctx)
 	}
 }
