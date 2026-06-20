@@ -1,605 +1,93 @@
-# GPU redesign — live implementation progress
+# GPU redesign — progress & current state
 
-**This is the running status log for the `/loop` implementing [GPU_REDESIGN_PLAN.md](GPU_REDESIGN_PLAN.md).**
-A new session fires every 5 min (cron, fresh context each time). **Read this file first**, then continue
-from "Next action". Keep it updated each iteration. Delete it when the loop's work is truly complete.
+**Running status for the `/loop` implementing [GPU_REDESIGN_PLAN.md](GPU_REDESIGN_PLAN.md).**
+A fresh-context session fires periodically. **Read this file first**, then continue from "Next /
+blocked". Keep it updated; the per-iteration blow-by-blow lives in `git log` (detailed commit
+messages), so this file stays a tight CURRENT-STATE doc, not an append-only log.
 
-## Loop mandate (refined by the user 2026-06-19)
+Toolchain is in-repo: `export PATH="$PWD/.tools/go/bin:$PATH"` before any `go` command (or `make`).
+Commit + push as you go on branch `refactor/codebase-layout` (this is the active working branch).
 
-Original: _implement the plan, push for high cost optimization with really good KPIs, remove the old
-system, embed it in the TUI, optimise benchmarks first, keep a maintainable codebase that is not slopped._
+## Authoritative user directives (most recent wins)
 
-**User course-correction (authoritative, iter 2):**
-- **NO TUI / no visual for benchmarks.** "we dont need a bench screen." Reverted; do not re-add.
-- **Bench is CLI-only.** "bench should be cli!" (`noto bench …` already is.)
-- **Focus:** "just optimise the bench and make the correct calls if the api keys etc are set." (done iter 2)
+- **GPU repair ONLY — no OpenRouter/LLM repair** (2026-06-20). The LLM context-correction repair path
+  was built then REMOVED at user request; do not reintroduce. Test: if a repair calls an external
+  LLM/OpenRouter, don't. (The deterministic CPU glossary entity-repair is NOT that, and was kept.)
+- **Real transcription + diarization optimization via GPU optimization + repair techniques** — not TUI,
+  not test scaffolding. Apply optimizations; don't just build measurement tools.
+- **NO bench TUI. Bench is CLI-only** (`noto bench …`). Reverted an early bench screen; do not re-add.
+- **Accuracy is the product, cost is the constraint** — "the cheapest thing is bullshit if it's
+  inaccurate." cpWER ("who said what") is the product-critical metric.
+- **Two-channel capture** (your mic + all remote participants mixed on system audio; NO Zoom/Meet hooks).
+  you-over-room overlap is free; only ≥2 REMOTE speakers overlapping within the system channel needs the
+  expensive separate-and-re-diarize. **BUT capture is currently MIC-ONLY** — see blockers.
 
-**User directives (authoritative, iter 4) — the current priority queue:**
-1. **Do the VAD implementation — "it is needed for production."** Wire VAD (silence trimming) into the
-   PRODUCTION transcribe path, not just bench. ← NEXT, the explicit #1.
-2. **Utilize the GPU best — idle time / low utilization is "money not well spent."** Reduce idle (raise
-   busy%) so the bill buys compute, not idle. (Surfaced now by `bench insights`; the levers come next.)
-3. **Good tracking & tracing** to understand utilization + "how accurate we are on perf." (Started: the
-   insights snapshot; estimate-vs-billed drift is the perf-accuracy KPI to wire in next.)
-4. **Weighted KPI + 1-command helper tool** to develop against; load/compare artifacts. ✅ DONE iter 4.
+## Ground state (verified green)
 
-## Ground state (verified green 2026-06-19)
+- `go build ./...`, `go test ./...`, `go vet ./...` all clean.
+- **Cost north star MET:** 30-meeting AMI anchor is the ledger winner at **$0.01633/audio-hr** (busy
+  82.3%), beating the $0.0194 target. Cost is ~90% diarization embedding.
+- Live Modal GPU IS reachable here (`.venv-modal` + `~/.modal.toml`); real gate runs (~$0.03) execute.
+  Be sparing — only run bounded, high-EV, one-knob gate experiments (the plan's workflow).
 
-- `go build ./...`, `go test ./...`, `go vet ./internal/platform/bench/...` all clean.
-- Toolchain in-repo: `export PATH="$PWD/.tools/go/bin:$PATH"` before any `go` command.
-- Program A ~95% done; 30-meeting AMI anchor frozen as ledger winner ($0.01633/audio-hr, 82.3% busy).
-- **Live Modal GPU IS reachable from this machine** (corrected iter 3 — earlier "not available" was wrong):
-  `.venv-modal` + `~/.modal.toml` are present, and a real `gate_ami` run executed ($/hr 0.0292, busy 53.2%,
-  unattributed 0%). So billable runs ARE possible here. **Be sparing with them** — each costs money; only
-  run when the user has asked for cost-optimization work, and follow the plan's one-knob-per-gate rigor.
-- The bench Go code is well-written — NOT slopped. Be surgical.
+## Done (autonomous, GPU-free where possible)
 
-## Repo/working-tree note
+- **Program A measurement spine:** `noto bench run/preflight/compare/estimate/scale/audit/retrace/
+  insights/ledger`, credential-aware routing, weighted KPI (`ScoreRun`), GPU util + idle-cost + cost
+  attribution, scale-readiness gate. All tested.
+- **VAD shipped to PRODUCTION** (`Compute.VAD` config → `applyVADEnv` → diar server `NOTO_VAD*`), default
+  off, guardrail-checked.
+- **B6 calibration** wired + surfaced (`noto bench calibration`): TDT confidence is an entropy RANKING,
+  not a probability (ECE 0.81) — but admissible (bottom-decile capture 0.396 vs 0.10 random, 0 high-conf
+  errors), good enough to select repair candidates.
+- **GPU repair machine (B7 dry-run, reference-scored, gated):** `noto bench repair-attempt --run --alt-run`
+  (run-pair re-decode) + `noto bench diar-repair-attempt --run --alt-run` (run-pair re-diarize). Shared
+  core (`OutcomeFromDeltas`, oracle ceiling, `PassesB7Gate`). Validated end-to-end on real data: accepts
+  real fixes, rejects regressions, measures the true whole-transcript aggregate, gate is honest.
+- **Production entity-repair (deterministic, GPU-free, KEPT):** `core/entityrepair` +
+  `providers.RepairTranscriptEntities`, wired into `jobs_pipeline` after normalization. Snaps
+  low-confidence words to the meeting glossary/participant names — misspelled + split-compound
+  ("data dog"→"Datadog") + standalone name parts. Conservative (exact/confident words untouched,
+  segment-safe), glossary-gated (`contextBiasTerms` now also emits individual name parts).
+- **OpenRouter/LLM repair path REMOVED** (per directive); summary path untouched.
 
-Branch `refactor/codebase-layout` has a large **uncommitted** tree: `internal/platform/bench/` is an
-untracked new dir; ~85 tracked files modified; doc moves under `.docs/`. **Do not `git commit`** (user
-hasn't asked; committing would entangle this with 135 untracked files we don't own). Never `git add -A`.
+## Key validated findings (hard-won; don't re-derive)
 
-## Plan of attack (CLI-only)
+- **Transcription repair sources are weak on AMI (<0.5% WER).** fp32 vs bf16 = byte-identical (greedy TDT
+  deterministic on content); beam/maes = byte-identical (greedy already beam-optimal for
+  parakeet-tdt-0.6b-v3); different model parakeet-tdt-1.1b = genuinely different but WEAKER/older
+  (net-negative, oracle ceiling −0.0008); audio perturbation speed:0.9 = weak (ceiling −0.0004). The
+  bottom-decile errors are genuinely-hard AUDIO that same-family decodes fail on too. The two numbers:
+  naive (apply all accepted) vs oracle ceiling (keep only whole-transcript improvers) — the gap is
+  selector headroom; production needs a better selector than "apply every flagged span".
+- **Diar repair, first real KPI (VAD alt, no new spend):** `diar-repair-attempt(no-vad × vad)` →
+  **net DER Δ −0.0034 @ $0.0056** (101/621 overlap regions differed; 4 accepted/3 negative; accepted-per-$
+  714). Gate FAILS on negative-rate: the accept decision uses the REFERENCE, so −0.0034 is a
+  reference-guided CEILING; VAD trims silence, it doesn't SEPARATE overlap → weak overlap source. (Cost
+  needed `noto bench retrace` on the VAD run first — its trace had the L1 diar-attribution gap.)
+- **~33% of AMI DER lives in overlap regions** (`noto bench overlap`) — the high-headroom half, addressable
+  only by real separate-and-re-diarize.
+- **DER measurement:** whole-meeting DER is the per-span decision (DER's speaker-permutation makes a
+  single-speaker-window local DER spuriously 0). Diar accept-rule has no seam cost (naive == ceiling).
+- **Cost frontier largely exhausted on AMI:** H3 emb-compile / H4 bigger-GPU / H6 emb_batch all REJECTED,
+  H2 L40S settled. $0.01 is unreachable by scale (marginal floor > $0.01) — needs a *rate* win on diar
+  embedding. VAD (the one un-falsified rate lever) needs a silence-heavy suite to show a cost win; AMI is
+  dense. Production is already well-packed (busy 82.3%, peak VRAM 19.5/48 GB — the "low util" worry was a
+  gate-subsample artifact).
+- **L1 — diar per-stage split is not captured in artifacts** (server doesn't emit `stages_ms`; the Go
+  parser is dormant-but-purposeful with a graceful hyp-based fallback — do NOT rip it). `noto bench
+  retrace` re-derives diar cost from the stored hyp diar-wall (the working path; allocation-aware).
 
-1. **Correctness/robustness of the measurement spine** (in progress). Lock in the brittle parsing/IO with
-   tests; make the runner make the *correct call* based on configured credentials. Done so far: iters 1–2.
-2. **Credential-aware routing** (iter 2, done). `noto bench run`/`preflight` now gate a live (billable)
-   Modal run on the prerequisites actually being present, instead of blindly shelling out.
-3. **Honest KPIs / cost attribution.** Resolve Lead L1 (dead stderr stage-split) on a GPU-equipped run.
-   Keep `compare`/`scale`/`estimate` math correct and well-tested (it already is).
-4. **Remove the old system.** Mostly already gone in code. Remaining is conservative (BOTTLENECK.md role
-   superseded by the ledger; the dead stderr regex — resolve via L1, don't blind-rip).
-5. **Polish + docs + final verification.** Keep `go test ./...` green, vet clean.
+## Blocked / Next (each needs a resource I can't supply autonomously)
 
-NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surface only.
+- **Stronger transcription repair** → a genuinely different/stronger ASR decode (whisper-large-v3 /
+  canary-1b — different arch, needs a parakeet-server adapter since the path assumes NeMo TDT timestamps)
+  + a GPU run to validate. The machine makes any such source a one-command `repair-attempt`.
+- **Diarization overlap (the 33% headroom)** → separate-and-re-diarize, GATED on real **system-audio
+  capture**: `cmd/capture/main.swift` taps the mic only; system audio is an acknowledged stub
+  ("requires AudioHardware APIs"). macOS/ScreenCaptureKit work; can't build/validate from this Linux box.
+- **Cost** → frontier exhausted on AMI; a real rate-win on diar embedding (cheaper embedding model, or the
+  two-channel split that makes the mic channel single-speaker) is the only lever, both non-trivial.
 
-## Iteration log
-
-- **Iter 1 (2026-06-19):** Mapped + ground-truthed (refuted most "slop" claims). Added
-  `trace_parse_test.go` (8) + `store_test.go` (6) covering the previously-untested cost-attribution
-  parser + artifact IO. DRY'd `runner.go` `Retrace` onto `readJSON`. Found Lead L1. All green.
-- **Iter 2 (2026-06-19):** Started a TUI bench screen, then **user said no TUI / CLI-only** → reverted the
-  `screen.go` change (no `screen_bench.go` was committed). Pivoted to the real ask: **credential-aware
-  bench routing.** New `internal/platform/bench/readiness.go` — `ModalPrereqs` / `CheckModalPrereqs`
-  probes the live-Modal prerequisites (the `.venv-modal` interpreter, Modal auth via
-  `MODAL_TOKEN_ID/SECRET` or `~/.modal.toml`, the launcher script). Wired into `Runner.Preflight`: a
-  non-`IntegrationOnly` run with missing prereqs now returns actionable `modal_prereq:` blockers, so
-  `noto bench run` fails fast with guidance (and `noto bench preflight` reports it) instead of a cryptic
-  Python crash. DRY'd `reporoot.go` `PythonForBench` onto a shared `venvPython` probe. Added
-  `readiness_test.go` (3 tests: missing-everything, ready-when-configured, preflight gates live vs exempts
-  integration-only). All green, vet clean.
-
-- **Iter ~13 (2026-06-19) — repair ceiling + targeted overlap cost (ACCURACY pivot):** User reframed:
-  accuracy is the product, cost is the constraint ("cheapest thing is bullshit if it's inaccurate").
-  Real data: avg word confidence mean 0.149 / median 0.075 (NeMo TDT confidence is an entropy score, not
-  a probability — use the RANKING, never the absolute); WER ~0.21, DER ~0.10, cpWER ~0.29 (cpWER is the
-  product-critical one — "who said what"). Shipped `core/bench/repair.go RepairCeiling` (oracle headroom:
-  bottom-10% repair → ~40% relative error drop on real data → repair IS worth the compute) — commit 730223e.
-  Then user clarified the OVERLAP architecture: **two channels only** (your mic + all remote participants
-  mixed on system audio; NO Zoom/Meet hooks). you-over-room overlap is FREE (separate channels); only
-  ≥2 REMOTE speakers overlapping WITHIN the system channel needs expensive separation. Built
-  `core/bench/overlap.go` (`OverlapRegions` sweep-line ≥2 distinct speakers; `PlanOverlapRepair` targeted
-  vs blanket spend; SavingsFactor = speech/overlap) — commit 603252e. **Grounded on 43 AMI RTTMs (GPU-free):
-  hard-overlap = 11.85% of speech → targeted repair +3.6–11.9% of base cost vs +30–100% blanket → 8.4×
-  cheaper.** AMI is the worst case (4-way in-person); real two-channel calls are far lower.
-  - **DONE (commit 7730409):** (1) platform `OverlapAnalysis(runID)` + `noto bench overlap` CLI —
-    GPU-free "is overlap repair worth it" gate. AddressableFraction = `DER(full).Total −
-    DER(SkipOverlap).Total` (error seconds in overlap regions) + targeted-vs-blanket cost anchored to the
-    run's $/audio-hr. **Live on the real 20-meeting run: hard-overlap 11.3% of speech, but 33% of all DER
-    error is in those regions → targeted +5.7% of cost addresses a third of diarization error vs +50%
-    blanket (8.8× cheaper).** That ratio greenlights building the separation pass.
-  - **DONE (commit 108f7c0):** the benchmark-measured repair SPINE both GPU passes share —
-    `core/bench/splice.go` (`SpliceSpan` substitute-a-re-decode + `OutcomeFromDeltas` accept/wash/regress
-    rule) + `platform/bench/repair_measure.go` (`MeasureSplice`: real WER+cpWER before/after vs reference,
-    whole-transcript re-scored so seam errors are charged). Closes the B7 attempt+measure loop EXCEPT the
-    GPU re-decode: the loop is `plan.Attempt → re-decode(span) → MeasureSplice → .Outcome → BuildRepairReport
-    → PassesB7Gate`, all wired and tested offline.
-  - **DONE (commit 45650bf):** the B7 attempt+measure LOOP — `platform/bench/repair_attempt.go`
-    `AttemptRepairs`/`attemptMeeting`: per meeting, plan low-conf spans → re-decode via an injected
-    `ReDecoder` → `MeasureSplice` → fold into a run-level `RepairReport` + B7 gate (accepted-per-USD,
-    negative-rate). DRY-RUN, no production writes. `ReDecoder` is the ONLY GPU seam — the whole loop is
-    tested offline with a fake (oracle→accepted+WER drops; corrupting→negative; failed→skipped, no crash).
-    Core `MergeRepairReports`; factored `repairWordsOf` + `loadRefMeeting`.
-  - **DONE (this iter) — the ReDecoder seam is built as a RUN-PAIR, no new GPU endpoint.** Key finding
-    from exploring the STT path: Parakeet TDT is **greedy-only** (no beam/temperature knob exposed) — the
-    only wired knob that changes the hypothesis is `nemo_precision` (bf16→fp32). So the cheap "same-model
-    alternate decode" has WEAK signal; a genuinely error-fixing alternate needs beam/maes (a Python change
-    to the parakeet server). Rather than an on-demand single-span Modal call, the `ReDecoder` is now a
-    **run-pair**: `internal/platform/bench/repair_redecode.go` `runReDecoder` loads a SECOND completed
-    run's hyps (a different decode config) and slices the span's words; cost is **STT-only** (asr$/audio-sec
-    from the alt run's trace_summary × span seconds — diar never re-runs). `AttemptRepairsFromRun(runID,
-    altRunID)` + full CLI `noto bench repair-attempt --run <baseline> --alt-run <alt>` wired through
-    service/notoapi/apiclient/routes. **Proven on REAL artifacts** (baseline 2f6cc5 confidence run + alt
-    47afb2 gate run): 103 low-conf spans on ES2011b, **targeted STT-only cost $0.00020**, 0 accepted/0
-    negative → **B7 gate correctly FAILS** ("no net improvement") because both runs share the identical
-    greedy bf16 decode → identical spliced words → zero WER change. The machine is correct and does NOT
-    fabricate a benefit. `repair_redecode_test.go` (3 tests). Full suite green, vet clean.
-  - **DONE (this iter) — fp32 alternate GPU run + corrected the per-span measure + EMPIRICAL result.**
-    Ran `gate_ami --knob nemo_precision=fp32` → run `20260619T205305Z-ef90ba` ($/hr 0.0262, busy 57%).
-    `repair-attempt(2f6cc5, ef90ba)` → **0 accepted, net WER Δ 0** on ES2011b's 103 spans, targeted cost
-    $0.0002. Investigated: a positional diff suggested 2211/3955 words "differ" but that was a SHIFT
-    artifact from minor word-segmentation in the pre-reference 5–31s region; **in every ref-covered
-    low-conf span, bf16 and fp32 produce IDENTICAL text.** So the cheap same-model precision-alternate
-    buys **zero** — greedy TDT is deterministic on content across precision. (Earlier-iter claim that fp32
-    "differs substantially" was wrong; this is the correction.)
-  - **DONE (this iter) — fixed the real design flaw the GPU run exposed:** per-span accept/reject was
-    scored on WHOLE-transcript WER (`errors/RefLen` over ~3000 words → a 1-word fix moves it ~1/3000,
-    `round4`+0.0005-threshold → always a wash). New `MeasureSpliceLocal` scores the span-LOCAL WER/cpWER
-    (only ref+hyp words inside the span) for the DECISION — a 1-word fix in a 3-word span = WER Δ 0.33.
-    `attemptMeeting` now decides on local deltas but reports the TRUE whole-transcript aggregate
-    (`measureWhole`: apply EVERY accepted edit, re-score once) as NetWERDelta — the honest with/without
-    number, not a sum of differently-denominated per-span deltas. Tests: local-sensitivity vs whole
-    (200-word fixture), run-pair disk-load fixture. Verified the machine accepts a real correction
-    (unit test) and correctly washes identical input (the live fp32 result). Full suite green, vet clean.
-  - **DONE (this iter) — beam/maes alternate decode built + wired.** `parakeet_stt_server.py`
-    `enable_beam_decode()`: `change_decoding_strategy(strategy=maes|beam|alsd|tsd, beam.beam_size=N,
-    compute_timestamps=True)`, gated by `NOTO_PARAKEET_DECODE`/`NOTO_PARAKEET_BEAM_SIZE`, guarded EXACTLY
-    like the confidence path — the decode-time revert now covers conf OR beam, degrading to validated
-    greedy on any failure (TDT-beam unsupported/config drift), never crashing. Word timestamps requested
-    under beam; if a build drops them, words_of emits text-only → Go falls back → run still completes.
-    Wired `decode`/`beam_size` knobs (`modal_runner.go` knobLauncherEnv → `BENCH_PARAKEET_DECODE/BEAM_SIZE`;
-    `modal_benchmark.py` KNOB_FORWARDS → `NOTO_PARAKEET_DECODE/BEAM_SIZE`), knob-mapping test added. Commit
-    92c6c98. Python py_compile OK, full Go suite green, vet clean.
-  - **DONE — beam run (`20260619T211144Z-076ff4`) decoded BYTE-IDENTICAL to greedy** (0/3955 words differ).
-    Diagnosis: `NOTO_PARAKEET_DECODE=beam` DID reach the NeMo server (summary knobs confirm), but
-    `enable_beam_decode` set `decoding_cfg.compute_timestamps` — an UNKNOWN field → structured config
-    rejected → the guard silently reverted the whole beam switch to greedy. **Fixed (commit c14b05c):** set
-    only known fields (strategy, beam_size); timestamps come from `transcribe(timestamps=True)`. Whether
-    this NeMo build supports TDT `maes` beam AT ALL is still unverified — a future beam attempt must set
-    `BENCH_PARAKEET_SERVER_STDERR=1` to read the server log. Lesson: capture stderr on alternate-decode runs.
-  - **`stt_model` knob wired (commit 3390826)** — `--knob stt_model=<hf-id>` → `NOTO_PARAKEET_MODEL` (§10.5
-    alternate-ASR). Confirmed `nvidia/parakeet-tdt-1.1b` exists (TDT, ~2× the 0.6b-v3, same `timestamp['word']`
-    API). A different MODEL is GUARANTEED to produce different words (unlike fp32/failed-beam), so the repair
-    machine finally gets real signal; the accept gate keeps only edits that improve local WER.
-  - **DEFINITIVE (conclusive beam run `20260619T212224Z-8b7d0a` with stderr capture):** the server log
-    confirms **"beam decode enabled (strategy=maes, beam_size=4)"** — beam ENGAGED (the compute_timestamps
-    bug was the earlier silent-revert) — yet the output is **byte-identical to greedy** (0/3955 words). So
-    NeMo TDT greedy is ALREADY beam-optimal for parakeet-tdt-0.6b-v3; beam finds no better path. Combined
-    with fp32 (also identical): **same-model alternates CANNOT produce a different hypothesis for this
-    model.** The cheap repair methods are a dead end FOR THIS MODEL — not a bug, a property. The ONLY lever
-    that yields a genuinely different decode is a DIFFERENT MODEL.
-  - **1.1b model run failed on VRAM, diagnosed + fixed:** `--knob stt_model=nvidia/parakeet-tdt-1.1b` (run
-    `bx18ukpfx`) crashed — NOT a model-incompat: the bigger STT model starved VRAM and the pyannote diar
-    server (10 workers) OOM-exited mid-request (`diarize: server exited mid-request`). Fix: `BENCH_DIAR_WORKERS=2`
-    (→ NOTO_PYANNOTE_WORKERS, a wired knob) frees VRAM; the alt run doesn't need its diar output anyway
-    (turns come from the baseline). Shell env forwards to the subprocess (`cmd.Env = append(os.Environ()…)`).
-  - **★ THE MACHINE IS VALIDATED END-TO-END ON GPU DATA (run `20260619T212713Z-fc7b5f`, 1.1b alternate).**
-    1.1b finally produced a GENUINELY different decode (3501 vs 3955 words, 96/103 spans differed).
-    `repair-attempt(2f6cc5, fc7b5f)`: **25 accepted · 39 negative · net WER Δ +0.0060 (WORSE) → B7 gate
-    correctly FAILS** ("no net improvement, negative rate over cap"). The honest verdict: **parakeet-tdt-1.1b
-    is OLDER/WEAKER than 0.6b-v3, so as a repair source it regresses more spans (39) than it fixes (25), and
-    the net benchmark effect is negative** — the system tried a plausible repair, measured it on the
-    reference, found it net-negative, and REFUSED to ship it. That is exactly the safety property the user
-    asked for ("don't make it worse"). The full chain (accept real fixes, catch real regressions, measure
-    the true whole-transcript aggregate, gate) now provably works on real data.
-  - **Two product insights from the real run:** (1) a repair model must be genuinely BETTER than the
-    baseline on the hard spans, not just different — a bigger-but-older model is net-negative; the right
-    source is a newer/stronger model, an ensemble, or more-context re-decode. (2) **Seam cost:**
-    locally-accepted edits don't always aggregate to a whole-transcript win when the alternate has different
-    word SEGMENTATION (1.1b: 3501 vs 3955 words) — splicing shifts boundaries; the gate's whole-transcript
-    aggregate correctly catches this (the local-accept decision alone is optimistic).
-  - **Added `SpansDiffered` (commit pending)** — `repair-attempt` now reports "N got a different re-decode",
-    distinguishing "the alternate produced no different hypothesis" (fp32/beam: 0–1 differed → a same-model
-    dead end) from "the different words didn't help" (1.1b: 96 differed, net-negative). The exact ambiguity
-    that cost diagnosis time across the fp32/beam/1.1b runs is now one line in the tool.
-  - **★ FIRST POSITIVE NUMBER — from EXISTING GPU data, zero new spend (oracle ceiling).** The seam-cost
-    finding was addressable offline: added `oracleCeiling` (core RepairReport `CeilingWERDelta`/`Accepted`)
-    — greedily commit only the locally-accepted edits that strictly lower the WHOLE-transcript WER. On the
-    1.1b data: **naive (apply all 25) = +0.0060 (worse), oracle ceiling (keep the 4 that help) = -0.0008
-    (better).** So even a WEAK alternate (1.1b) contains 4 genuine whole-transcript fixes the machine
-    extracts; the ceiling is small precisely because 1.1b is a weak source. The gap (0.006 → -0.0008) is
-    quantified **selector headroom** — confidence over-selects + splice seams; production needs a better
-    selector than "apply every confidence-flagged span". `repair-attempt` now prints both numbers + the
-    headroom note. NOTE: the ceiling is REFERENCE-guided (an upper bound), not the production number — it
-    answers "how much could this alternate buy with perfect selection", the right "is it worth it" signal.
-    Commit pending. Tests: oracleCeiling drops a seam-regressing candidate. Full suite green, vet clean.
-  - **★ REPAIR-SOURCE VALIDATION COMPLETE (user asked: try perturbation; validate a valid step, not brute
-    force).** Built the audio-perturbation lever (`NOTO_PARAKEET_PERTURB=speed:R|noise:A`, same best model
-    on altered input, timestamps rescaled back — commit 17e2cb5). Ran `perturb=speed:0.9` (run
-    `20260619T215155Z-2e3c56`, with `BENCH_DIAR_WORKERS=2` after the same diar-VRAM OOM the 1.1b run hit).
-    Result: 52/103 spans differ, oracle ceiling **-0.0004 (2 real fixes)** — a VALID but WEAK repair step.
-    **The consistent picture across ALL four validated sources:** fp32 = identical (0 fixes), beam/maes =
-    identical (0), different model 1.1b = -0.0008 (4 fixes), perturbation speed:0.9 = -0.0004 (2 fixes).
-    So same-FAMILY transcription repair is **low-yield on AMI** (<0.5% WER) — the B6 oracle ceiling is ~40%
-    (lots of fixable error) but real same-family alternates deliver <1% of it, because the bottom-decile
-    errors are GENUINELY-HARD audio that a weaker model / perturbed decode of the same family fails on too.
-    Honest limitation: measured on ES2011b only (the one meeting with confidence; TDT-conf fault degraded
-    the rest). NOTE: the repair MACHINE is fully validated — it correctly extracts the real fixes that exist
-    and refuses the rest; the finding is about the SOURCES, not the machine.
-  - **STRATEGIC REDIRECT (validated):** high-yield accuracy repair needs a genuinely-different information
-    source, NOT a same-family decode: (a) a much stronger/different-arch model (whisper-large-v3 / canary —
-    needs a server adapter), (b) context/LLM correction (§10.5 context-biased re-decode using surrounding
-    text + glossary), or (c) **the diarization/overlap channel-separation half — 33% of DER error is
-    addressable in overlap regions (validated by `bench overlap`), a FAR bigger headroom than the <0.5%
-    transcription-repair ceiling.** The diar measurement spine (SpliceTurns + MeasureDiarSplice) is built;
-    the diar attempt loop is the highest-value next build.
-  - **DONE (this iter) — DIARIZATION repair attempt loop, full vertical, mirroring the validated
-    transcription pattern.** `platform/bench/repair_diar_attempt.go`: `AttemptDiarRepairs`/`attemptDiarMeeting`
-    plans the reference OVERLAP regions, re-diarizes each via a `ReDiarizer`, measures DER before/after
-    (`MeasureDiarSplice`), accepts on DER, reports naive vs `diarOracleCeiling` + the B7 gate. `runReDiarizer`
-    = run-pair seam. Reuses corebench.RepairReport/gate (primary delta carries DER); user-facing
-    `DiarAttemptResult` renames it NetDERDelta. Full CLI `noto bench diar-repair-attempt --run --alt-run`
-    wired end to end. 4 fake-driven tests. **Validated on real artifacts** (2f6cc5 × fc7b5f): 621 overlap
-    regions / 5 meetings, **0 differed** (alt shares the same pyannote config → identical turns, the diar
-    analog of the fp32/beam no-op) → gate correctly FAILS. Full suite green, vet clean.
-  - **DONE (this iter) — maintainability pass: unified the oracle-ceiling algorithm (commit 312ff4e).**
-    The transcription (WER/HypWord) and diarization (DER/HypTurn) attempt loops each carried a
-    byte-identical greedy keep-if-strictly-improves ceiling search that differed only in apply/score —
-    a real drift risk (a change to the keep-rule had to be made twice). Extracted `greedyCeiling[E,S]`
-    (`repair_ceiling.go`); `oracleCeiling`/`diarOracleCeiling` are now thin domain wrappers. No behaviour
-    change, full suite green, vet clean. Deliberately did NOT also merge the run-pair loaders (4 trivial
-    lines, different cost models) or the `*Differ` funcs (divergent domain logic) — that would be premature
-    DRY. The non-trivial *shared algorithm* was the right (and only) thing to de-duplicate.
-  - **DONE (this iter) — LLM/context-correction repair SOURCE built (commit bd80b37), the next §10.5 step.**
-    Investigated the diar knobs first (GPU-free): the pyannote server exposes only cost/perf knobs
-    (batch/compile/fp16/workers) + VAD + a whole-pipeline model swap — NO overlap-aware/clustering knob, so
-    the cheap diar levers are brute-force (a different model, the diar analog of the weak 1.1b STT swap) or a
-    real separation build. That redirected to the one genuinely-different source that needs NO new GPU and is
-    measurable on the EXISTING confidence run: a language model (priors over text/grammar/entities, a
-    different signal from any acoustic model). Built `repair_llm.go`: `SpanCorrector` interface (the single
-    network seam, injected) + `correctorReDecoder` adapting it to the validated ReDecoder seam — build span
-    context from the baseline words, correct it, map the text back onto in-span timestamps (`spreadWords`),
-    then the SAME attempt+measure+oracle-ceiling+gate loop scores it on the reference. `AttemptRepairsWithCorrector`.
-    6 fake-driven tests (fix accepted + WER drops; echo washes; error/unknown-meeting skip cleanly;
-    spreadWords stays in-span). Pure + offline, full suite green, vet clean. **NEXT for this source:** the
-    live OpenRouter `SpanCorrector` adapter (reuse the `chat()` path) + a small CLI surface, then run it on
-    the ES2011b confidence run → the first text-correction WER number (could be the first positive
-    transcription KPI, or another validated-weak source — either way the machine decides, not a guess).
-  - **NEXT (diarization, the high-value half):** a real DER number needs a genuinely-DIFFERENT diarization
-    alternate. The validated lesson from the transcription side (cheap same-family alternates are weak
-    proxies) means a config-flip like `--knob vad=on` is likely ~null on AMI too — VAD trims silence, it
-    does not SEPARATE overlapping speakers, and AMI is dense. The genuinely-different overlap source is
-    pyannote's overlap-AWARE assignment (assign 2 labels where it detects ≥2 active) or a separation pass
-    on the system channel — an algorithmic difference in the overlap regions, not a silence trim. If/when a
-    GPU run is greenlit: produce that alternate diar run, then `diar-repair-attempt(baseline, <alt>)` → the
-    first real "DER recovered by re-diarizing overlap" number. Ceiling (33% addressable) known from
-    `bench overlap`. Both repair MACHINES (transcription + diarization) are built + validated; what remains
-    is a genuinely-different repair SOURCE — the LLM corrector (above) is the first such source that needs
-    no GPU; separation is the diar one that does.
-  - **DONE (this iter) — `noto bench repair-correct` LIVE end-to-end (commit 863b970).** Wired the §10.5
-    LLM-correction source so it is RUNNABLE on a real confidence run. (a) `llm`: extracted the shared
-    chat-completions transport into `post()`; `chat()` keeps the summary JSON schema, new `CompleteText()`
-    does a plain-text turn — summary behaviour unchanged, all llm tests green. (b) `bench`:
-    `llmSpanCorrector` builds a conservative context-grounded prompt + parses the reply to bare span text
-    (strip fences/labels, fall back to the span when unsure — the gate catches net-negative); the repair
-    core stays provider-free via an injected `CompleteFunc`. (c) `service`: `BenchRepairCorrect` builds the
-    OpenRouter adapter from the configured provider+secret (same as summaries), runs
-    `AttemptRepairsWithCorrector`, returns the same with/without KPI shape; clear "credential not set" error
-    when unconfigured (verified, no crash). (d) full transport + CLI plumbing mirroring `repair-attempt`.
-    5 corrector tests, full suite green, vet clean. **Verified:** command listed in usage; no-credential
-    path returns an actionable error JSON (this environment has NO LLM key in env, so the live ES2011b run
-    must be done where the OpenRouter credential is configured).
-  - **NEXT (this source):** run `noto bench repair-correct --run 20260619T115608Z-2f6cc5` in an env with the
-    OpenRouter credential set → the FIRST text-correction WER number. Per the validated pattern the machine
-    decides if it's a real positive KPI (language-predictable fixes the acoustic models can't make) or
-    another validated-weak source — either way it's measured on the reference and gated, not guessed. (The
-    user can run this directly; I can't, lacking the key here.)
-
-  - **USER REDIRECT (authoritative, 2026-06-20):** "no [TUI] or testing yet, just real transcription and
-    diarization optimization" + "we just use gpu optimization and repair techniques." Pivot from building
-    measurement/bench tooling to APPLIED transcription+diarization optimization via GPU-opt + repair.
-  - **DONE (this iter) — traced the PRODUCTION paths; shipped a real transcription optimization (commit
-    5417023).** Findings from reading the actual pipeline (not bench): (1) **capture is mic-only** —
-    `cmd/capture/main.swift` taps only the mic input node; system audio is an acknowledged stub ("requires
-    more complex setup with AudioHardware APIs"). So the two-channel premise (mic + system) has NO DATA yet;
-    overlap-diarization headroom is gated on implementing ScreenCaptureKit system capture (macOS work, can't
-    do/validate from this Linux box). (2) **entity/glossary biasing is wired but INERT** — terms flow
-    glossary→`contextBiasTerms`→`HeaderContextBias`→`routes_compute`→`opts.ContextBias`→ the local parakeet
-    engine, which IGNORES it (`parakeet_server.go` `Recognize(_, _, _ TranscribeOptions)`). (3) production
-    diar is single-stream. **Shipped:** `core/entityrepair` (deterministic, conservative near-miss→canonical
-    snap; 0.80 similarity bar, distinctive terms ≥4 chars, optional confidence gate off-by-default since TDT
-    conf is a ranking; equal-token windows keep IDs/timestamps aligned; 11 tests incl. false-positive
-    guards) + `providers.RepairTranscriptEntities` (rebuilds only touched segments) + wired into
-    `jobs_pipeline` after normalization, fed by the existing glossary (its presence is the gate → only ever
-    sharpens product-critical cpWER, no-op otherwise). Full suite green, vet clean. This makes the meeting's
-    known vocabulary actually reach the transcript — the inert biasing, fixed, GPU-free.
-  - **DONE (this iter) — entity-repair now recovers SPLIT compound entities (commit 114b99c).** Extended the
-    glossary repair with a conservative MERGE fallback: when no equal-length window matches, try +1/+2 extra
-    adjacent words and compare concatenated punctuation-free forms, so "data dog"→"Datadog", "git hub"→
-    "GitHub", "open ai"→"OpenAI" rejoin to canonical. Split compounds are one of the most common real entity
-    errors for product/company names. Safety preserved (exact left alone, equal-count wins ties, high bar +
-    distinctive gate). Merged word dropped, kept word's end extended (gapless), touched segment text+word-ids
-    rebuilt; `Transcript.Validate` doesn't cross-check word-ids so it stays in-contract. +4 tests. Green.
-  - **DONE (this iter) — DATA-DRIVEN diar finding (no code): turn-smoothing is an INVALID repair on AMI.**
-    Compared hyp vs reference RTTM (ES2007b): hyp 340 turns / 108 short(<0.5s) / 79 A-B-A flickers vs
-    reference 321 / 81 / 74. The reference has ~the same short turns and flickers — they're real backchannels
-    ("yeah", "mm-hm"), NOT errors. So smoothing/flicker-removal would delete real turns and RAISE DER.
-    Avoided shipping a regression — the "validate a valid step, not brute force" check working. Ref overlap is
-    10.2% of speech, and the hyp misses most of it → the 33% addressable DER is overlap (needs separation).
-  - **DONE (this iter) — bias terms now include standalone speaker name PARTS (commit 459908a).** The
-    entity-repair is only as good as its term list; `contextBiasTerms` previously fed only FULL names
-    ("Lukas Strickler"), so a first/last name spoken alone ("lucas") never matched the 2-token term —
-    yet standalone participant names are the most common meeting entity and the core of "who". Extracted a
-    pure `biasTermsFromNames`: each multi-word name also contributes its parts ("Lukas","Strickler"),
-    particles <4 chars dropped, all dedup'd, title added whole (not split). 5 tests, green. Benefits both the
-    entity-repair and the future ASR decode-time biasing (same term source).
-  - **DONE (this iter) — hardened entity-repair: never merge across a segment boundary (commit 58b7ba1).**
-    Caught a correctness gap in the shipped merge: a split entity whose two words landed in different
-    diarized segments would drop a word from one segment and desync (or empty) it. Added a within-one-segment
-    invariant (skip such repairs) and now return only the repairs actually applied (honest progress count).
-    +1 test. The transcription entity-repair lever (misspelled + split-compound + name-parts, segment-safe)
-    is now mature and hardened.
-  - **★ USER DIRECTIVE (authoritative, 2026-06-20): NO OpenRouter/LLM repair — GPU repair ONLY.** "make sure
-    no openrouter repair stuff, only gpu." REMOVED the entire LLM/OpenRouter context-correction repair path
-    built in prior iters: deleted `repair_llm.go` / `repair_llm_openrouter.go` (+tests), reverted
-    `OpenRouterAdapter` (dropped `CompleteText`, re-inlined the summary-only `chat()`), removed
-    `BenchRepairCorrect` + `benchLLMAdapter` (service), unwired the full transport + CLI (`repair-correct`
-    gone from client/bench interfaces, direct/http, routes, routes_bench, commands_bench). Full suite green,
-    vet clean. **Do NOT reintroduce.** See [[no-openrouter-repair-gpu-only]]. The GPU repair machine SURVIVES:
-    `noto bench repair-attempt` (run-pair re-decode) + `noto bench diar-repair-attempt` (run-pair re-diarize).
-    The deterministic CPU glossary entity-repair (`core/entityrepair`) was KEPT — it's a local pass, not an
-    LLM API call.
-  - **★ FIRST REAL GPU DIAR-REPAIR KPI — from existing data, ZERO new spend (this iter).** Found an existing
-    VAD-on run (`20260619T065343Z-e976ad`, gate_ami `--knob vad=on`) — VAD trims silence and remaps turns, so
-    its diarization GENUINELY differs from the no-VAD runs (unlike the same-config no-op before). Ran
-    `diar-repair-attempt(no-vad baseline × VAD alt)` on the shared 5 meetings: **621 overlap regions, 101 got
-    a different re-diarization → net DER Δ −0.0034** (the machine applies the 4 re-diarizations that help and
-    rejects the 3 that regress; naive == ceiling, so the diar accept-rule is well-calibrated — no seam cost
-    like transcription). Reproducible across two baselines (b7f531, 79098d → identical, since scored vs the
-    reference). **B7 gate correctly FAILS** on negative-rate: 3 of 7 differing regions regress, and the accept
-    decision uses the REFERENCE — in production (no reference) you couldn't pick the 4 winners from this
-    source. So −0.0034 is a reference-guided CEILING, and VAD is a weak overlap-repair source (it trims
-    silence, doesn't separate overlap). **This validates the GPU diar-repair machine end-to-end on real
-    differing data and is the first positive "DER recovered by re-diarizing overlap" number.** The strong
-    source (separation) for the 33% headroom remains gated on system-audio capture ([[capture-is-mic-only]]).
-    NOTE: cost shows $0 for this run — the VAD run's trace has the L1 diar-attribution gap (total≈asr), so
-    the (now trace-derived) diar rate is 0; honest, not fabricated.
-  - **DONE (this iter) — hygiene + KPI-honesty (commits 6b9eeff, 6992167).** (1) Verified the OpenRouter
-    removal left NO orphans (the 3 unused `RepairMethod` consts are a legitimate §10.5 planned-method enum;
-    no stale docs). (2) Synced `.docs/speech-compute.md` repair section with the shipped GPU-repair system:
-    added `diar-repair-attempt`, documented the production deterministic entity-repair + that repair is
-    GPU-based only (LLM source removed), recorded the VAD diar −0.0034 finding. (3) Fixed the B7 gate to NOT
-    flag accepted-per-dollar when cost is UNKNOWN (CostUSD≤0 from the L1 trace gap) — that conflated unknown
-    cost with infinite inefficiency; the diar VAD repair now fails on its real reason (negative-rate) alone.
-    +tests, full suite green.
-  - **DONE (this iter) — diar-repair KPI now fully honest (commit b3697e5).** The VAD run's trace had the L1
-    gap (per-meeting total≈asr, diar unattributed), so the diar-repair cost read $0. `noto bench retrace --run
-    <vad>` re-derived it from the stored hyp diar-wall (GPU-free): diar_emb now 92% / asr 8%, total $0.0724.
-    Re-ran diar-repair → **net DER Δ −0.0034 · cost $0.00560 · 4 accepted/3 negative · accepted-per-USD 714/$
-    (passes efficiency) · gate FAILS on negative-rate alone.** So the first GPU diar-repair KPI is now
-    complete and honest: VAD overlap re-diarization recovers −0.0034 DER for ~$0.0056, but is too noisy
-    (reference-guided) to ship. Added a CLI hint: when diar-repair cost is $0, suggest retracing the alt run.
-  - **NEXT (GPU repair / cost only):** transcription GPU-repair needs a genuinely-stronger GPU decode source
-    (same-family is validated-weak; a different/bigger ASR is the lever — `--knob stt_model`); diarization
-    GPU-repair needs overlap separation (gated on capture). Cost frontier on AMI largely exhausted ($0.01633
-    winner). All non-GPU, non-OpenRouter levers (entity-repair) are shipped + hardened; stay on GPU.
-  - **(superseded NEXT) transcription:** a bigger POSITIVE ceiling needs a repair source genuinely STRONGER
-    than 0.6b-v3 (canary-1b — different arch/API, needs a server adapter; or ensemble/more-context re-decode).
-    The machine + ceiling now make any such source a one-command evaluation. NEXT (diarization): overlap-span
-    planner + ReDiarizer → diar attempt loop (mirror repair_attempt.go) on the validated MeasureDiarSplice
-    spine. Cost discipline: ~$0.30 GPU this session built+validated the whole repair system AND surfaced a
-    real positive ceiling with NO further spend — be sparing; the machine is proven.
-  - **DONE (this iter) — diarization repair MEASUREMENT spine** (the user-critical overlap/two-channel half),
-    GPU-free + tested: `core/bench/diar_splice.go` `SpliceTurns`/`TurnsInSpan` (pure turn-interval surgery,
-    the diar analog of SpliceSpan) + `platform/bench/repair_diar_measure.go` `MeasureDiarSplice` (DER
-    before/after a re-diarization, accept via shared OutcomeFromDeltas). KEY finding the tests caught: DER
-    does optimal speaker PERMUTATION, so a span-LOCAL DER is spuriously 0 (any single label maps perfectly)
-    — but it's unneeded: DER error is denominated in SECONDS, so a multi-second overlap fix moves
-    whole-meeting DER by ≈2/1500 > the accept floor (where a 1-word WER fix is 1/N and washes). So
-    whole-meeting DER is the diar decision measure. 6 tests. NEXT for diar: the overlap-span planner +
-    ReDiarizer (separate system channel → re-diarize) → diar attempt loop (mirror repair_attempt.go).
-
-## Leads / findings (verify before acting)
-
-### L1 — diar per-stage split is never captured (KPI honesty) — CHARACTERIZED iter 3; needs Python+GPU
-
-Empirically confirmed on a live `gate_ami` run (`~/.noto/benchmarks/runs/20260619T102556Z-79098d`):
-- `setup.log` has **no** pyannote per-meeting `timing`/`stages_ms` lines at all (only model-download lines).
-- hyps carry only totals: `stt_ms`, `diar_ms` (no seg/emb/cluster).
-- `raw.jsonl` has no stage breakdown.
-- Result: `compute_by_stage` lumps the whole diar wall as `diar_emb` (90.3%) via the hyp-fallback
-  (`allocation_method: parallel_max_v1`). The fine seg/emb/cluster split is simply **not produced**.
-
-So the Go regexes (`extractPyannoteStderr` `modal_runner.go:421`, `ParsePyannoteStderr` `trace_parse.go:41`)
-hunting for a `stages_ms` token are doubly dead: wrong marker AND no data in the artifacts. **A GPU-free
-fix is impossible** — the data doesn't exist on disk. Proper fix (only if the user wants it + approves
-GPU spend):
-1. `pyannote_diar_server.py` — return `stages_ms` (the per-meeting stage dict, already computed by
-   `StageTimer.stage_ms`, line 378) in the diar response payload.
-2. `modal_benchmark.py` — fold it into each per-meeting hyp JSON (e.g. `diar_stages_ms`).
-3. Go `MeetingHyp` + `BuildTraceSummary` — split the diar wall into diar_seg/diar_emb/diar_cluster via
-   `PyannoteStageMap` instead of lumping into diar_emb. (Guardrail risk: unmapped step-names →
-   `unattributed`; complete `DefaultPyannoteStageMap` first by reading the real returned keys.)
-4. One `gate_ami` validation run (scripts are baked via `add_local_dir(copy=True)`, `modal_benchmark.py:451`,
-   so a Python edit auto-rebuilds the image layer on next run).
-
-Don't add inert Go fields before step 1+2 produce the data — that's speculative slop.
-
-- **Iter 3 (2026-06-19):** Verified iter-2's credential gate **end-to-end in the real binary**: this
-  machine has the prereqs, so `noto bench preflight` shows `blockers: []` and a live `gate_ami` run
-  proceeded and produced real numbers (correct call when configured). Discovered live Modal IS reachable
-  here (corrected the ground state). Characterized L1 definitively from the live run's artifacts (data not
-  captured anywhere — see L1). No code changes this iteration; no new billable runs beyond the one
-  verification run. All green.
-
-- **Iter 4 (2026-06-19):** Investigated the two remaining high-value items in depth and made honest
-  go/no-go calls (no code shipped — these are deliberate negative results that save money + prevent a bad
-  refactor):
-  - **L1 (diar stage split) → DEPRIORITIZED.** The per-stage timing exists in the diar server response
-    (`timing.stages_ms`, populated by default — `pyannote_diar_server.py:535,582`) but the **Go** capture
-    (`benchmark/e2e/ami_test.go:249` `es.Diarize`) only returns turns + a Go-measured wall, so surfacing
-    stages would require changing the **production** `diarize.LocalDiarizer.Diarize` API (used by the
-    product pipeline too) for **diagnostic-only** value — the headline KPIs ($/audio-hr, busy%, idle) are
-    already honest and unaffected by the sub-stage split. Not worth the blast radius. Don't add inert Go
-    fields ahead of the capture wiring (that's slop).
-  - **Cost frontier is largely exhausted on AMI** (read §6 registry): H3 emb-compile / H4 bigger-GPU
-    **rejected**, H2 L40S **settled**, **H1 VAD** (highest-priority, only un-falsified cost lever) is
-    blocked because AMI is dense — it needs a **silence-heavy suite**. H6 batching targets only the
-    ~10%-of-cost STT (the wall is diar-bound at jobs=10, so faster STT doesn't move it). The plan's own
-    `scale` analysis already says $0.01 needs an unidentified *rate* win, not more knobs/hours.
-  - Net: the only principled, high-EV cost lever left (VAD) is gated on a **silence-heavy bench suite**
-    that does not exist — building it (Go synthetic-silence corpus gen + `modal_benchmark.py` suite +
-    registry entry, then a GPU validation) is the real next step, but it's a substantial multi-part
-    feature, not an autonomous quick win.
-
-- **Iter 4 (2026-06-19):** Shipped the **weighted KPI + 1-command insights tool** (user directive 4),
-  all GPU-free + tested + verified live:
-  - `internal/core/bench/kpi.go` — pure `ScoreRun(KPIInputs, KPIWeights) → WeightedScore`: a 0..100
-    composite over cost (anchor→0, target→1), quality margin under §4.1 guardrails, and GPU busy%, with a
-    transparent component breakdown, a HARD quality gate (a guardrail breach zeroes the score), and an
-    idle-waste note. Default weights cost 0.5 / util 0.3 / quality 0.2 (idle = money). `kpi_test.go` (5).
-  - `noto bench insights [--run <id>] [--json]` — one command → service `BenchInsights` loads
-    metrics+audit+scale, scores it, prints cost-vs-anchor/target, quality-vs-guardrails, GPU busy+idle
-    ("money not well spent"), top stages, scale floor, weighted score+components. No `--run` → the ledger
-    winner. Plumbed through notoapi/client/service/direct/http/route/CLI.
-  - **Verified live:** winner scores 42.7/100 (busy 82.3%, idle $0.0025); the gate run scores 19.4/100
-    (cost component 0.00 since $0.0292 > anchor, util 0.53, idle $0.0116 flagged). Exactly the dev signal
-    asked for. `--json` makes runs loadable/comparable.
-
-- **Iter 5 (2026-06-19):** Shipped **VAD in production** (user directive #1), all tested + green:
-  - `internal/platform/config/config.go` — new `Compute.VAD` block (`enabled` + `pad_seconds` /
-    `min_gap_seconds` / `threshold`) with a `VADConfig.Env()` that renders the `NOTO_VAD*` env the diar
-    server already reads (`vad_trim.env_cfg`). Default OFF (guardrail-checked opt-in, §0.8/B1).
-  - Registered the VAD keys in Save/Load (`defaults.go` + `config.go`) — a round-trip test **caught** that
-    the toggle didn't persist; fixed. So `compute.vad.enabled: true` in the config survives restart.
-  - `service.go` — `applyVADEnv()` (called from `Start`) bridges the config to the process env, so any
-    local / `noto serve` GPU-box diarization this process spawns trims silence → cuts the dominant diar
-    embedding cost. Only SETS when enabled (never unsets, so a direct `NOTO_VAD` override is honored).
-  - Tests: `config/vad_test.go` (Env rendering ×3 + Save/Load round-trip), `service/vad_env_test.go`
-    (bridge applies / noop-when-disabled). Mechanism is the SAME `NOTO_VAD` the bench `vad` knob uses, so
-    it's proven equivalent to the bench VAD path.
-  - **Modal-deployed worker note:** for the hosted Modal diar server, set `NOTO_VAD` on the Modal app env
-    (the orchestrator can't set a remote container's env per-request without a wire change — that's the
-    future per-request-VAD path if remote production needs per-job control).
-
-- **Iter 6 (2026-06-19):** Shipped **tracking & perf-accuracy** in `bench insights` (user directive #3),
-  GPU-free + green:
-  - **Attribution completeness** — `unattributed_pct` + within-§4.1-2%-guardrail flag ("how much of the
-    bill we can actually explain"). Winner + gate both 0.00% (full attribution).
-  - **GPU utilization quality** — mean vs peak util. Winner: mean 81.5% / peak 100% (well-packed). Gate:
-    **mean 50.0% / peak 100%** — the card saturates at peak but idles half the time on the subsample. That
-    mean/peak GAP is the actionable utilization headroom (directive #2).
-  - Added to `BenchInsightsResult` + service + CLI (`track:` line). No new billable runs.
-  - (Dropped the estimate-vs-billed drift idea: with only anchor-based projection in the artifacts it
-    reduces to |anchor − actual $/hr|, which the cost component already captures — would be redundant +
-    mislabeled. unattributed% is the honest attribution-accuracy signal that IS in the data.)
-
-- **Iter 7 (2026-06-19):** User asked to **research + propose a cost-sensible decision** (not blind-spend).
-  Did the research; shipped the GPU-free enabler. Findings:
-  - **Production is already well-utilized** — winner (jobs=10): busy 82.3%, mean-util 81.5%, peak 100%,
-    peak VRAM **19.5/48 GB** (huge headroom), idle only $0.0025/audio-hr. The "low utilization" worry was a
-    GATE-SUBSAMPLE artifact (50% on ~5 meetings that can't feed jobs=10), NOT a production problem. → a
-    utilization/jobs experiment is **low-EV** (little idle to recover, easy levers exhausted).
-  - Cost is **90% diar embedding**; $0.01 stretch is **unreachable by scale** (marginal floor $0.0139) →
-    needs a **rate win on diar embedding**.
-  - **Best-EV untested lever = H6 diar-embedding BATCH.** `configure_batching` raises pyannote's
-    `embedding_batch_size` (the 90%-cost stage); the 28 GB free VRAM directly supports a bigger batch. The
-    knob existed in Python but was **NOT wired** into the Go runner's knob map — so I **wired it**:
-    `emb_batch`→`BENCH_PYANNOTE_EMB_BATCH`, `seg_batch`→`BENCH_PYANNOTE_SEG_BATCH` (`modal_runner.go`),
-    with a test. Now testable via `noto bench run --knob emb_batch=N`.
-  - VAD (the other rate-win lever, shipped to prod iter 5) needs silence-heavy data to measure on bench;
-    the synthetic corpus has **no silence knob**, so that suite is a bigger GPU-free build (deferred).
-  - **Proposed decision:** ONE ~$0.20 anchor experiment on H6 emb_batch (vs the ledger winner); skip
-    utilization/jobs (already 82% busy) and chasing $0.01-by-scale (unreachable). Realistic goal: beat
-    $0.01633 modestly. Awaiting user's pick.
-
-- **Iter 8 (2026-06-19):** H6 experiment run + pushed + started the repair system (user: "push this, use
-  GPU to optimise, implement the self-repair + KPI system").
-  - **H6 emb_batch=64 → REJECTED** (gate compare: +45.8% cost, busy 53→31%; bigger batch serialized diar
-    on this corpus). One more lever crossed off for ~$0.04. Knob now wired (`--knob emb_batch/seg_batch`).
-  - **Pushed:** committed the full green working tree as a WIP checkpoint (`5dbd7b0`, 427 files) and
-    `git push -u origin refactor/codebase-layout` (was un-pushed; upstream now set).
-  - **Repair system B7 core (dry-run) — `internal/core/bench/repair.go` + tests (pure, GPU-free):**
-    `RepairSpan` (eligibility + `ExpectedValue` per §10.4), `RepairBudget` (§10.6 sec/dollar budget),
-    `PlanRepairs` (rank by EV, greedy-fill budget, record budget-skipped high-value seconds),
-    `RepairReport` + `PassesB7Gate` (accepted-per-$, negative-rate, net WER/entity delta — the "how good
-    is the accuracy gain and at what cost" answer). 5 tests. DRY-RUN ONLY — no production transcript writes
-    (§10.4), gated until B7 passes.
-
-- **Iter 9 (2026-06-19):** B7 wiring — confidence → candidate spans → preview, all GPU-free + tested:
-  - `core/bench/repair.go` `RepairWord` + **`SpansFromWords`** — group maximal runs of low-confidence
-    words into `RepairSpan`s (PError = riskiest word, ProductValue = max/entity). (Named `RepairWord`, not
-    `WordConfidence`, to avoid colliding with calibration's scoring type.) 2 tests.
-  - `platform/bench/repair.go` **`Runner.RepairPreview(runID, threshold)`** — loads a run's hyps, builds
-    spans, plans under a default budget (10% speech, 5-min cap) → preview (candidate spans, attempt/skipped
-    seconds, budget, projected cost). `HasConfidence=false` when the run lacks word confidence. 2 tests.
-  - So the full dry-run chain is now wired + tested: hyps → RepairWord → SpansFromWords → PlanRepairs →
-    RepairPreview / RepairReport → PassesB7Gate.
-
-- **Iter 10 (2026-06-19):** Shipped `noto bench repair` + wired the confidence knob; found the B6 blocker.
-  - `noto bench repair --run <id>` — surfaces the B7 dry-run preview (candidates, seconds, projected cost),
-    full plumbing; graceful "no confidence — re-run with `--knob confidence=1`" path. Verified on a real run.
-  - Wired `confidence` knob → `BENCH_PARAKEET_CONFIDENCE` → `NOTO_PARAKEET_CONFIDENCE` (Go + Python), test.
-  - **BLOCKER found (cost ~$0.06 of GPU):** `--knob confidence=1` **crashes `TestAMICapture`** on some
-    meetings (ran twice: 2/5 then 3/5 failed; NOT duration-correlated). Tried leaning the NeMo confidence
-    config to word-only (`preserve_frame_confidence=False` — correct anyway, we never read frame conf) — did
-    NOT fix it. So the NeMo word-confidence decode is unstable on this corpus, likely a process-level fault
-    the bench error truncates the stderr for. The documented "degrade-not-crash" contract is violated.
-    Pushed (5938c39). **Do NOT keep re-running blind** — next attempt needs the parakeet server's stderr
-    (enable `NOTO_PARAKEET_SERVER_STDERR` capture into a savable artifact, or reproduce on a single meeting
-    with stderr visible) BEFORE spending more GPU. Repair system + CLI + knob are all ready; only the
-    confidence-DATA population is blocked.
-
-- **Iter 11 (2026-06-19):** **UNBLOCKED B6 confidence** — diagnosed GPU-free, fixed, demonstrated live.
-  - Diagnosed the `confidence=1` capture crash from a FAILED run's box logs (`/tmp/noto-bench-out-*/…/raw.jsonl`)
-    — **no extra GPU**: `stt/parakeet: Something went wrong with word-level confidence aggregation` — NeMo's
-    **TDT** (`parakeet-tdt-0.6b-v3`) word-confidence aggregation raises on some inputs; the server propagated
-    it → crashed capture (violating the "degrade, never crash" contract).
-  - Fix (`parakeet_stt_server.py`): snapshot plain decoding cfg; on a confidence-decode failure, revert +
-    retry plain (one-way). **Confidence gate now SUCCEEDS** ($/hr 0.0269). Plus `NOTO_PARAKEET_SERVER_STDERR`
-    passthrough + 16KiB tail (the diagnostic switch).
-  - Fixed a real budget bug (`RepairPreview` fell back to audio_sec when speech_sec absent → budget was 0).
-  - **`noto bench repair` now works on REAL data:** run `20260619T115608Z-2f6cc5` → 459 candidate spans
-    (1100s), budget 300s, attempt 299.9s, projected $0.015. Committed `93c3f2c`, pushed.
-  - NOTE: only 1/5 meetings emitted confidence (ES2011b, 3443 words) — the global revert means once any
-    meeting hits the TDT fault, the rest decode plain. Fine for first B6 data; a per-request revert/restore
-    would raise coverage (enhancement).
-
-- **Iter 12 (2026-06-19):** Wired B6 calibration into the run flow + surfaced it; demonstrated on real data.
-  - The bridge (BuildWordConfidences/WriteCalibration) existed but had NO callers — confidence runs made
-    no calibration.json. Now: `scoreCalibration` + `Runner.CalibrateRun` (retroactive, GPU-free);
-    modal_runner writes calibration.json inline on confidence runs (best-effort).
-  - `noto bench calibration --run <id>` — ECE/Brier/risk-coverage, bottom-decile capture vs random,
-    high-conf error rate, §10.3 admissibility gate. Full plumbing. Committed 057d605, pushed.
-  - **Live on the confidence run:** 3587 words, **ECE 0.81** (NeMo TDT confidence is poorly calibrated in
-    absolute terms — it's an entropy measure, not a probability) BUT **bottom-decile capture 0.396 vs 0.10
-    random (+0.296 lift), 0 high-conf errors → signal ADMISSIBLE**. So the confidence RANKING is good enough
-    to select repair candidates (what B7 needs), even though the absolute values aren't probabilities.
-
-## Repair + KPI system — roadmap (user directive: implement ALL items)
-
-Done: **B6 calibration WIRED + SURFACED** (`noto bench calibration`, admissible on real data) · **B7
-dry-run** (core + SpansFromWords + RepairPreview + `noto bench repair`, demonstrated) · **confidence knob**
-+ **B6 confidence UNBLOCKED** (TDT degrade-not-crash). Remaining, in order:
-1. **B6 confidence GPU run + CLI surface (next, paired):** run one Modal `gate_ami` with word confidence
-   enabled (the parakeet server's confidence path) to populate real per-word confidence, THEN add
-   `noto bench repair --run <id>` showing the RepairPreview (candidates, seconds, projected cost) — so the
-   "see + understand how good our KPIs are and at what cost" is demonstrable on REAL data. (CLI without a
-   confidence run shows "no confidence data", so they go together.) Need: how the bench forwards the STT
-   confidence flag (NOTO_PARAKEET_CONFIDENCE) — wire a `confidence` knob like emb_batch if not present.
-2. **B7 attempt + measure:** the actual same-model alternate re-decode of attempted spans + benchmark
-   delta scoring → `RepairReport` (the GPU step that fills accepted/negative/net-delta).
-3. **B8 production repair:** transcript v2 with provenance, behind a passing B7 gate. Extend
-   `contextBiasTerms()` for biasing — do NOT build a parallel rules engine (§10.5).
-Keep `go test ./...` green + vet clean. **No TUI.**
-
-## (superseded) earlier next-step notes — #2 utilization
-
-The gate's **mean 50% / peak 100%** confirms the GPU is underfed on the subsample — so a utilization lever
-(`diar_workers`/`diar_streams`/`cuda_mps`/`jobs`) must be tested at **anchor scale** (30 meetings, where
-jobs=10 is genuinely fed), NOT the gate (whose low util is a subsample artifact, not a real inefficiency).
-That's a ~$0.20 anchor run per knob. **This is a real money decision** — recommend the user greenlight a
-specific knob + anchor run, then: `bench run --suite anchor_ami --knob <one>` → `bench compare` vs the
-ledger winner → adopt only via ledger if busy% rises / idle-$/audio-hr drops without quality regression.
-`bench insights` now shows busy%, idle-$, util mean/peak, and unattributed% to judge each. **No TUI.**
-
-### (historical) earlier next-step + VAD investigation notes:
-
-### (historical) VAD investigation notes from iter 4:
-- The diar server **already supports VAD** (`pyannote_diar_server.py:478-533`, `vad_trim.py`), gated by
-  `NOTO_VAD`/`NOTO_VAD_PAD`/`NOTO_VAD_MIN_GAP` env. It trims silence → diarizes only speech → remaps turns.
-- The STT (parakeet) server does NOT trim; its header note says VAD integration belongs at the Go chunker.
-- Production transcribe: `internal/app/service/jobs_pipeline.go:51 runTranscribe` → `resolveDiarizer`
-  (`d.Diarize`, line 87-91) ∥ `resolveSTTAdapter` (`adapter.Transcribe`, line 110-114) → merge → ECAPA.
-- Plan §0.8/B1: production VAD goes in `jobs_pipeline.go` behind a **config flag**, forwarding the
-  `NOTO_VAD*` env to the remote compute servers (which trim). VAD reduces the diar embedding work (the 90%
-  cost) → lower GPU-time/cost.
-- Implementation sketch: add a `Compute.VAD` config block (enable + pad/min_gap/threshold) → `runTranscribe`
-  forwards it to the diar (and later STT-chunker) path; bench already forwards `vad` knob via
-  `modal_runner` env. Validate with one `gate_ami` run + compare WER/DER/cpWER (guardrails) before default-on.
-  VAD also needs a silence-heavy suite to show a *cost win* on bench, but PRODUCTION enablement (behind a
-  flag, default off, guardrail-checked) is what the user asked for and is shippable now.
-
-Then directives #2 (utilization levers) and #3 (estimate-vs-billed perf-accuracy tracking). Keep
-`go test ./...` green + `go vet` clean. **No TUI.**
+The autonomous GPU-free + zero-spend work is essentially complete and hardened. Further substantive wins
+need a greenlit bounded GPU experiment, a stronger-ASR server adapter, or the macOS capture work.
