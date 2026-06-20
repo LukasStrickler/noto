@@ -353,6 +353,13 @@ NB: no TUI work. The `notoapi` BenchClient methods exist but stay CLI/HTTP-surfa
     flag accepted-per-dollar when cost is UNKNOWN (CostUSD≤0 from the L1 trace gap) — that conflated unknown
     cost with infinite inefficiency; the diar VAD repair now fails on its real reason (negative-rate) alone.
     +tests, full suite green.
+  - **DONE (this iter) — diar-repair KPI now fully honest (commit b3697e5).** The VAD run's trace had the L1
+    gap (per-meeting total≈asr, diar unattributed), so the diar-repair cost read $0. `noto bench retrace --run
+    <vad>` re-derived it from the stored hyp diar-wall (GPU-free): diar_emb now 92% / asr 8%, total $0.0724.
+    Re-ran diar-repair → **net DER Δ −0.0034 · cost $0.00560 · 4 accepted/3 negative · accepted-per-USD 714/$
+    (passes efficiency) · gate FAILS on negative-rate alone.** So the first GPU diar-repair KPI is now
+    complete and honest: VAD overlap re-diarization recovers −0.0034 DER for ~$0.0056, but is too noisy
+    (reference-guided) to ship. Added a CLI hint: when diar-repair cost is $0, suggest retracing the alt run.
   - **NEXT (GPU repair / cost only):** transcription GPU-repair needs a genuinely-stronger GPU decode source
     (same-family is validated-weak; a different/bigger ASR is the lever — `--knob stt_model`); diarization
     GPU-repair needs overlap separation (gated on capture). Cost frontier on AMI largely exhausted ($0.01633
