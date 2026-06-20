@@ -104,7 +104,7 @@ func normalizeTurns(raw []EngineTurn) []Turn {
 		if t.Speaker == "" || t.EndSeconds <= t.StartSeconds {
 			continue
 		}
-		turns = append(turns, Turn{Speaker: t.Speaker, StartSeconds: t.StartSeconds, EndSeconds: t.EndSeconds})
+		turns = append(turns, Turn(t))
 	}
 	sort.SliceStable(turns, func(i, j int) bool {
 		if turns[i].StartSeconds != turns[j].StartSeconds {

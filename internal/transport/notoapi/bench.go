@@ -346,10 +346,10 @@ type BenchCalibrationResult struct {
 
 	// Repair ceiling: benchmark headroom from oracle-repairing the lowest-
 	// confidence decile (the MAX error-rate drop repair could buy).
-	RepairFraction        float64 `json:"repair_fraction"`
-	CurrentErrorRate      float64 `json:"current_error_rate"`
-	CeilingErrorRate      float64 `json:"ceiling_error_rate"`
-	RepairFixableErrors   int     `json:"repair_fixable_errors"`
+	RepairFraction      float64 `json:"repair_fraction"`
+	CurrentErrorRate    float64 `json:"current_error_rate"`
+	CeilingErrorRate    float64 `json:"ceiling_error_rate"`
+	RepairFixableErrors int     `json:"repair_fixable_errors"`
 }
 
 // BenchOverlapResult is a run's targeted-overlap-repair analysis (GPU-free): how

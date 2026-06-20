@@ -40,7 +40,7 @@ func main() {
 	var nSamp, T, F, D int
 	sf, err := os.Open("/tmp/ref/shape.txt")
 	must(err)
-	fmt.Fscanf(sf, "%d %d %d %d", &nSamp, &T, &F, &D)
+	_, _ = fmt.Fscanf(sf, "%d %d %d %d", &nSamp, &T, &F, &D)
 	sf.Close()
 	wav := readF32("/tmp/ref/wav.f32", nSamp)
 	refFb := readF32("/tmp/ref/fbank.f32", T*F)
@@ -57,7 +57,7 @@ func main() {
 	}
 	eng, err := speaker.NewECAPA(model, lib)
 	must(err)
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// (1) fbank parity: Go fbank vs ref fbank
 	goFb := speaker.Fbank(wav)

@@ -41,7 +41,7 @@ func attemptHyp(midWords [2]string) MeetingHyp {
 }
 
 func TestAttemptMeeting_OracleReDecodeIsAcceptedAndImprovesWER(t *testing.T) {
-	ref := spliceRef() // "the quick brown fox"
+	ref := spliceRef()                            // "the quick brown fox"
 	hyp := attemptHyp([2]string{"kwik", "braun"}) // wrong + low-confidence → repair span
 	oracle := fakeReDecoder{words: []HypWord{
 		{Text: "quick", Start: 1, End: 2, Speaker: "A"},

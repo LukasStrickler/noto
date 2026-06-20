@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -342,7 +341,7 @@ func sha256File(path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	var h hash.Hash = sha256.New()
+	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
@@ -361,7 +360,7 @@ func extractTgz(tgzPath, destDir string, want func(name string) bool) error {
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -432,7 +431,7 @@ func installTarXz(ctx context.Context, client *http.Client, url, dest, member st
 		member = filepath.Base(dest)
 	}
 	var src string
-	filepath.Walk(work, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(work, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info != nil && !info.IsDir() && filepath.Base(path) == member {
 			src = path
 		}

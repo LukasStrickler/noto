@@ -52,6 +52,14 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      # SA5011 false-positives on the standard test idiom
+      # `got := f(); if got == nil { t.Fatal(...) }; use got.Field` — the
+      # t.Fatal nil-guard dominates the deref, but staticcheck doesn't credit
+      # it here. Scoped to tests so SA5011 stays on for production nil-derefs.
+      - path: _test\.go
+        text: SA5011
+        linters:
+          - staticcheck
 
 formatters:
   enable:

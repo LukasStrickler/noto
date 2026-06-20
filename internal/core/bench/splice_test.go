@@ -9,7 +9,7 @@ import (
 func TestSpliceSpan_ReplacesByMidpointAndSorts(t *testing.T) {
 	base := []bench.TimedWord{
 		{Text: "the", Start: 0, End: 1},
-		{Text: "kwik", Start: 1, End: 2}, // wrong, in span
+		{Text: "kwik", Start: 1, End: 2},  // wrong, in span
 		{Text: "braun", Start: 2, End: 3}, // wrong, in span
 		{Text: "fox", Start: 3, End: 4},
 	}
@@ -38,7 +38,7 @@ func TestSpliceSpan_BoundaryWordByMidpointNotRemoved(t *testing.T) {
 	// A word at [2.5,3.5] has midpoint 3.0, which is NOT < 3 → stays. A naive overlap
 	// test would wrongly remove it.
 	base := []bench.TimedWord{
-		{Text: "in", Start: 1.0, End: 2.0},  // mid 1.5 in [1,3) → removed
+		{Text: "in", Start: 1.0, End: 2.0},   // mid 1.5 in [1,3) → removed
 		{Text: "edge", Start: 2.5, End: 3.5}, // mid 3.0, not in [1,3) → kept
 	}
 	out := bench.SpliceSpan(base, 1, 3, []bench.TimedWord{{Text: "X", Start: 1.2, End: 1.8}})

@@ -171,7 +171,7 @@ func extractTgz(tgzPath, destDir string, want func(name string) bool) error {
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -233,7 +233,7 @@ func installFfmpeg(dest string) error {
 		return fmt.Errorf("tar xJf: %v: %s", err, out)
 	}
 	var src string
-	filepath.Walk(work, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(work, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info != nil && !info.IsDir() && filepath.Base(path) == "ffmpeg" {
 			src = path
 		}

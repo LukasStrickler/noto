@@ -69,12 +69,12 @@ func (e *ECAPA) EmbedFeats(feats [][]float32) ([]float32, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer inT.Destroy()
+	defer func() { _ = inT.Destroy() }()
 	outT, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(e.dim)))
 	if err != nil {
 		return nil, err
 	}
-	defer outT.Destroy()
+	defer func() { _ = outT.Destroy() }()
 	if err := e.sess.Run([]ort.Value{inT}, []ort.Value{outT}); err != nil {
 		return nil, err
 	}

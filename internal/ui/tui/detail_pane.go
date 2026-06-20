@@ -121,9 +121,6 @@ func newDetailPane() *detailPane {
 // picker (digits). Bubbles up to the host so they reach the pane.
 func (d *detailPane) inputActive() bool { return d.editorOpen || d.assignOpen }
 
-// hasID reports whether a meeting is currently bound.
-func (d *detailPane) hasID() bool { return d.id_ != "" }
-
 // meetingID exposes the bound id so the host (e.g. `k` for speakers) can
 // route global key actions to it.
 func (d *detailPane) meetingID() string { return d.id_ }

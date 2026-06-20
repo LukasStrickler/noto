@@ -143,10 +143,10 @@ type ScaleReadinessThresholds struct {
 	ReferenceScaleHours         float64 // the "10h of meeting" the projection is read at
 }
 
-// DefaultScaleReadinessThresholds: the L40S anchor held ~82% busy, so 70% is a
-// generous floor below which the card is mostly idle; the 10h cost must not exceed
-// the audited anchor rate (scaling should not make $/audio-hr worse than the
-// known-good baseline); read at 10h of audio.
+// DefaultScaleReadinessThresholds returns the gate thresholds: the L40S anchor
+// held ~82% busy, so 70% is a generous floor below which the card is mostly idle;
+// the 10h cost must not exceed the audited anchor rate (scaling should not make
+// $/audio-hr worse than the known-good baseline); read at 10h of audio.
 func DefaultScaleReadinessThresholds() ScaleReadinessThresholds {
 	return ScaleReadinessThresholds{
 		MinBusyPct:                  70,

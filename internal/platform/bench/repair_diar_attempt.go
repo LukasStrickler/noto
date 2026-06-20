@@ -175,7 +175,9 @@ func attemptDiarMeeting(refTurns []dataset.Turn, h MeetingHyp, dec ReDiarizer) (
 func diarOracleCeiling(refTurns []dataset.Turn, base []HypTurn, cands []appliedDiarRepair) (float64, int) {
 	return greedyCeiling(base, cands,
 		func(c appliedDiarRepair) float64 { return c.localDERDelta },
-		func(s []HypTurn, c appliedDiarRepair) []HypTurn { return spliceHypTurns(s, c.startSec, c.endSec, c.repl) },
+		func(s []HypTurn, c appliedDiarRepair) []HypTurn {
+			return spliceHypTurns(s, c.startSec, c.endSec, c.repl)
+		},
 		func(s []HypTurn) float64 { return wholeDER(refTurns, s) })
 }
 
