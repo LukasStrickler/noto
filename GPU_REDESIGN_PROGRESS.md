@@ -233,6 +233,16 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
     noisy non-meeting audio) — i.e. the plan's A8b slice suites, which need datasets. The canary long-form
     adapter (commits 5b55b46, 2ec706c) is kept — it WORKS and would help wherever canary is the stronger
     model; AMI just isn't that place. ~$0.10 GPU spent; conclusion is definitive — do not re-run canary on AMI.
+  - **★ FOUND a parakeet-WEAK venue: EdAcc accented English (2026-06-20, user-greenlit).** Built
+    `fetch_edacc.py` + `modal_edacc_wer.py` + `score_edacc.py` (commits 3da521b, 0914e29) and ran a 53-clip
+    spread validation: parakeet EdAcc WER **12.9% overall but strongly accent-dependent** — Spanish 28.7%,
+    Jamaican 29.6%, Ghanaian 26.3%, Kenyan 19.3%, Nigerian 16.4%, Indian 16.9% vs Irish 4.3% / US 6.1% /
+    Lithuanian 7.3%. So UNLIKE AMI, parakeet has **real headroom on the hard L1 accents** (Spanish/Caribbean/
+    African, 17-30%, 2-4× clean). **Next:** the repair experiment should fetch a HARD-ACCENT-FOCUSED slice
+    (easy accents have no headroom and only dilute a mixed-set gain), run parakeet + canary, and measure the
+    B7 gate — canary is multilingual and *may* beat parakeet on L2 accents (the open question; it lost on
+    AMI). Per-accent samples in the 53-clip probe are small (Spanish 87w, Kenyan 171w meaningful; Vietnamese
+    11w / Ghanaian 19w too small) — fetch more on the hard accents for a solid claim.
 - **Diarization overlap (the 33% headroom)** → separate-and-re-diarize, GATED on real **system-audio
   capture**: `cmd/capture/main.swift` taps the mic only; system audio is an acknowledged stub
   ("requires AudioHardware APIs"). macOS/ScreenCaptureKit work; can't build/validate from this Linux box.
