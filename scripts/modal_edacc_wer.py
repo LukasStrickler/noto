@@ -84,7 +84,8 @@ def clean_text(t: str) -> str:
 
 
 @app.function(gpu=GPU, volumes={str(MODEL_MOUNT): model_volume}, timeout=2400)
-def edacc_transcribe(clips: int = 80, min_words: int = 4, per_stop: int = 4) -> dict:
+def edacc_transcribe(clips: int = 80, model: str = "nvidia/parakeet-tdt-0.6b-v3",
+                     min_words: int = 4, per_stop: int = 4) -> dict:
     wavdir = Path("/tmp/edacc")
     wavdir.mkdir(parents=True, exist_ok=True)
     ff = "ffmpeg"
@@ -138,9 +139,10 @@ def edacc_transcribe(clips: int = 80, min_words: int = 4, per_stop: int = 4) -> 
         "HF_HOME": str(MODEL_MOUNT / "hf"),
         "NOTO_PARAKEET_PROVIDER": "cuda",
         "NOTO_PARAKEET_PRECISION": "bf16",
-        "NOTO_PARAKEET_MODEL": "nvidia/parakeet-tdt-0.6b-v3",
+        "NOTO_PARAKEET_MODEL": model,  # parakeet default; canary auto-detected by the server
         "NOTO_PARAKEET_BATCH": "8",
     }
+    print(f"model: {model}")
     proc = subprocess.Popen(
         [sys.executable, str(REMOTE_REPO / "scripts" / "parakeet_stt_server.py")],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, text=True, bufsize=1,
@@ -164,8 +166,11 @@ def edacc_transcribe(clips: int = 80, min_words: int = 4, per_stop: int = 4) -> 
 
 
 @app.local_entrypoint()
-def main(clips: int = 80, out: str = ".modal-edacc.json"):
-    res = edacc_transcribe.remote(clips)
+def main(clips: int = 80, model: str = "nvidia/parakeet-tdt-0.6b-v3", out: str = ""):
+    res = edacc_transcribe.remote(clips, model)
+    if not out:
+        tag = "canary" if "canary" in model.lower() else "parakeet"
+        out = f".modal-edacc-{tag}.json"
     Path(out).write_text(json.dumps(res, indent=2))
     n = len(res.get("results", []))
-    print(f"wrote {out}: {n} clips transcribed")
+    print(f"wrote {out}: {n} clips transcribed ({model})")

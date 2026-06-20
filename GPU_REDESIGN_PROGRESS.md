@@ -243,6 +243,17 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
     B7 gate — canary is multilingual and *may* beat parakeet on L2 accents (the open question; it lost on
     AMI). Per-accent samples in the 53-clip probe are small (Spanish 87w, Kenyan 171w meaningful; Vietnamese
     11w / Ghanaian 19w too small) — fetch more on the hard accents for a solid claim.
+  - **★ DEFINITIVE NEGATIVE — canary loses to parakeet on EdAcc too (repair source dead-end CONFIRMED).**
+    Ran canary-1b-flash on the SAME 53 clips (paired; `modal_edacc_wer.py --model nvidia/canary-1b-flash`,
+    run ap-TDwdzqW): parakeet WER 12.9% vs **canary 26.6%**, and parakeet wins on EVERY meaningful accent —
+    Spanish 28.7 vs 36.8, Kenyan 19.3 vs 31.0, Nigerian 16.4 vs 27.6, Indian 16.9 vs 30.5, even US 6.1 vs
+    49.4. Oracle pick-better-per-clip ceiling 12.2% = only 0.75 pts under parakeet (noise from random
+    per-clip wins, not a systematic repairable signal). **So even on parakeet's WEAKEST audio, no alternate
+    model beats it** — model-swap transcription repair has no ROI anywhere tested (clean AMI + accented
+    EdAcc). parakeet-tdt-0.6b-v3 is the strongest available STT for this product, full stop. The repair
+    MACHINE is validated (correctly rejects canary); there is simply no superior source. ~$0.04 EdAcc GPU
+    spent total. **Repair direction CLOSED — do not pursue model-swap repair further without a genuinely
+    stronger model than parakeet-v3.**
 - **Diarization overlap (the 33% headroom)** → separate-and-re-diarize, GATED on real **system-audio
   capture**: `cmd/capture/main.swift` taps the mic only; system audio is an acknowledged stub
   ("requires AudioHardware APIs"). macOS/ScreenCaptureKit work; can't build/validate from this Linux box.
