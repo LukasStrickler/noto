@@ -294,7 +294,20 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   opt-in changes; local users untouched. End-to-end hosted measurement is B2-gated, but the worker ceiling
   that would bottleneck it is gone.
 
-## Preprocessing / "cut out noise" — attempted, blocked by image fragility (2026-06-20)
+## Preprocessing / "cut out noise" — SHIPPED pure-numpy, validated neutral-safe on AMI (2026-06-20)
+
+Delivered the "cut out noise" lever the dependency-fragility blocked: `scripts/audio_preproc.py` — pure-numpy
+high-pass (smooth 80 Hz rolloff) + DC removal, no scipy/nara_wpe, so it CAN'T conflict with pyannote. Wired
+into the STT server as `NOTO_PARAKEET_PREPROC` (best-effort, timeline-preserving, off by default = default
+decode byte-identical) + a `preproc` bench knob; unit-tested $0 (40 Hz killed, 200/1k/4k Hz preserved, DC
+removed). **Validated on AMI (run `20260620T163355Z-81129b`, `preproc=highpass:80,dc`): WER 0.2070 ==
+clean-baseline 0.2070, DER identical, cpWER neutral** — i.e. SAFE (doesn't hurt) but no gain on AMI (clean
+far-field has little sub-speech rumble; the big error is overlap, which this doesn't touch). Value is on
+NOISY real-world product audio (laptop mics, rooms), where AMI can't show it. The run SUCCEEDED where the
+earlier nara_wpe gate crashed pyannote — confirming the pure-numpy rule. Available as a safe option; WER-gate
+on a noisy suite before any production default.
+
+### (earlier) WPE/nara_wpe attempt — blocked by image fragility
 
 User asks repeatedly for "smart preprocessing / cut out noise." Tried the most legitimate version for
 far-field AMI: **single-channel WPE dereverberation** (`nara_wpe`) as an STT-server audio transform +
