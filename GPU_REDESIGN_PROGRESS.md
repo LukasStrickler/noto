@@ -214,6 +214,22 @@ design is ALWAYS-SEPARATE the substantive overlap regions (robust +12-15pt); the
 pyannote's overlap detection — NOT STT confidence. The per-region keep-mix-vs-sep refinement to trim the
 −33pt losses is unsolved and deferred (not blocking the headline win).**
 
+**★★★ Step-4 — MEETING-LEVEL ROI = modest aggregate, big qualitative → the architecture must be CHEAP +
+DEFERRED (no GPU, grounded from refs).** The +15pt is on overlap REGIONS, but substantive 2-speaker overlap
+is only **8.7% of meeting words** (recoverable 2nd-speaker words 2.9%), so the AGGREGATE meeting-level cpWER
+gain is **~1.3 pts realistic (27% → 25.7%), ~2.9 upper bound.** So the honest product picture:
+- The QUALITATIVE goal — "when 2 people talk, transcribe BOTH individually" — IS achieved (both speakers
+  recovered at overlap moments, the visible UX win the user asked for).
+- The AGGREGATE metric barely moves (~1.3pt) because overlap is a small share of words.
+- THEREFORE the overlap-separation must be a **cheap, DEFERRED, idle-GPU refinement pass** on only the ~9%
+  substantive-overlap audio — NOT a costly always-on stage. The user's "compute optimisation on idle times /
+  good scheduler" is exactly the right frame: low-aggregate-value + high-qualitative-value ⇒ spend only idle
+  compute on it. This validates the deferred-pass architecture (overlap-detect → separate substantive 2-spk
+  regions → re-transcribe → merge both attributed → transcript v2) and tells us NOT to make it block the
+  fast first transcript (v1). **Decision: proceed to wire it as the cheap deferred pass; do NOT over-invest
+  in separator quality (modest aggregate payoff). The bigger product win for overlap is two-channel capture
+  (you-vs-remote, macOS-gated), with this as the remote-vs-remote refinement.**
+
 **Step-3d — stronger BLIND separator (Mossformer2) doesn't help; separator at ungated ceiling.** Tried
 Mossformer2 (clearvoice) as the SOTA alt backend — clearvoice INSTALLED + ran but its output format didn't
 match (separated streams came back empty), so the run scored == baseline (integration failure, not a real
