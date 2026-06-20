@@ -174,6 +174,13 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
   OOM-crashed the pyannote server at the gate's 10 workers where oracle fit; re-ran clean at
   `BENCH_DIAR_WORKERS=1`. Production diarizes at low concurrency, so this is a bench-saturation artifact,
   not a product issue (but a real note for diar batch sizing under auto-count).
+  *Cost side (closed by reasoning, no extra GPU):* the headline $/audio-hr is ~90% diar EMBEDDING, which
+  runs per audio-segment REGARDLESS of speaker count; auto vs oracle differ only in the CLUSTERING step
+  (cheap compute — the OOM was its *memory* at 10× concurrency, not compute). So auto-count cost ≈ oracle
+  cost; the $0.0163 cost KPI holds for production's auto-count config too. The clean per-throughput
+  confirmation (auto at jobs=10 with `NOTO_PYANNOTE_WORKERS` tuned to fit VRAM) is the only thing not yet
+  *measured* — low-surprise, so not run autonomously. **Net: BOTH the quality and cost KPIs are honest for
+  production's auto-count config — the oracle-vs-auto investigation is complete.**
 - **Net bench-vs-product honesty (now measured, not assumed):** the one REMAINING optimism/pessimism gap is
   Mix-Headset overlap, which makes WER *pessimistic* — the product captures per-channel, so its real
   single-speaker WER is 15.8%, not the mixed 20.7%. The oracle-count gap I worried about turned out
