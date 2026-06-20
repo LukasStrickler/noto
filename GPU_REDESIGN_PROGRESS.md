@@ -156,6 +156,16 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   lever** — the bench (dense AMI) under-represents the product's real audio. Accuracy frontier stays overlap
   (capture-gated). Both axes' remaining gains are bench/data-gated, not algorithm-gated.
 
+## Done — throughput
+
+- **Posture-aware job worker pool (commit 3736d0c).** Production ran a hardcoded 4-worker pool; each worker
+  BLOCKS on its compute call, so it drove ≤4 concurrent meetings → ~4 concurrent GPU requests, capping
+  hosted-batch throughput at ~40% of the GPU's proven optimum (jobs=10). `ComputeConfig.JobWorkers()` now
+  resolves posture-aware: LOCAL→4 (heavy in-process models, unchanged default), OFFLOADED stt+diar→10 (feed
+  the remote GPU at its batch optimum), explicit `Compute.JobConcurrency` overrides. Only the offload
+  opt-in changes; local users untouched. End-to-end hosted measurement is B2-gated, but the worker ceiling
+  that would bottleneck it is gone.
+
 ## Key validated findings (hard-won; don't re-derive)
 
 - **Transcription repair sources are weak on AMI (<0.5% WER).** fp32 vs bf16 = byte-identical (greedy TDT
