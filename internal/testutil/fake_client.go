@@ -36,6 +36,10 @@ type FakeClient struct {
 	SystemInfo  notoapi.System
 	ModalInfo   notoapi.ModalStatus
 
+	// BenchCompareValue overrides the BenchCompare stub when non-nil, so a test
+	// can drive the compare CLI with a specific (e.g. incomparable) result.
+	BenchCompareValue *notoapi.BenchCompareResult
+
 	// Speaker identity (cross-meeting). Profiles is the directory; Mappings
 	// is keyed by meeting id. The action methods below record their inputs so
 	// tests can assert the assignment flow fired correctly.
@@ -153,6 +157,9 @@ func (f *FakeClient) BenchRun(context.Context, notoapi.BenchRunRequest) (notoapi
 	return notoapi.BenchRunResult{SchemaVersion: "bench_run.v1", RunID: "fake", TraceValid: true}, nil
 }
 func (f *FakeClient) BenchCompare(context.Context, notoapi.BenchCompareRequest) (notoapi.BenchCompareResult, error) {
+	if f.BenchCompareValue != nil {
+		return *f.BenchCompareValue, nil
+	}
 	return notoapi.BenchCompareResult{SchemaVersion: "compare.v1", Decision: "retry"}, nil
 }
 func (f *FakeClient) BenchLedgerWinners(context.Context, notoapi.BenchLedgerWinnersOpts) (notoapi.BenchLedgerWinnersResult, error) {

@@ -85,6 +85,15 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   tiers vs `bench run` → now 0 (= tier default); (registry) an unknown suite ran `--quick` but projected
   the full 11.44h corpus → now projects the ~2h subsample. **The bench spine is audited end-to-end
   (math + ingest): 17 correctness bugs fixed across 3 passes.**
+- **Bench CLI-rendering audit (3 display fixes, +2 tests).** Last-mile pass over how the (correct)
+  numbers are PRESENTED. All 3 were "misleading" (right number, deceptive label): scale-readiness
+  printed a $/audio-hr RATE as "10h cost $X" (read as a 10× understated total → now `$/audio-hr@10h`);
+  `bench compare` on incomparable runs printed `delta_pct: 0.0%` (a Go zero-value, not a measured
+  no-change) while hiding the real `incomparable_reason` → now prints the reason and only shows
+  delta_pct when comparable; ledger-winners + run-summary labeled the headline per-audio-hour cost as
+  `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
+  now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
+  memory [[bench-kpi-math-audit]].**
 - **Optimizations embedded in the TUI ("embed it nicely in the tui").** New **Accuracy**
   config section (`internal/ui/tui/screen_config.go`, `secAccuracy`) surfaces the production
   opts that were previously config-file-only: **VAD silence-trim** is a live toggle (Enter /

@@ -525,7 +525,7 @@ func (a *app) runBenchRun(args []string) int {
 	if *jsonOut {
 		return a.emitJSON(res)
 	}
-	fmt.Fprintf(a.out, "run_id: %s trace_valid: %v $/hr: %.4f unattributed: %.2f%%\n",
+	fmt.Fprintf(a.out, "run_id: %s trace_valid: %v $/audio-hr: %.4f unattributed: %.2f%%\n",
 		res.RunID, res.TraceValid, res.CostPerProcessedAudioHourUSD, res.UnattributedPct)
 	if res.GPUBusyPct > 0 || res.GPUIdleCostPerAudioHourUSD > 0 {
 		fmt.Fprintf(a.out, "gpu: busy %.1f%% idle $%.4f/audio-hr (headroom toward $0.01 target)\n",
@@ -672,7 +672,7 @@ func (a *app) printBenchScale(res notoapi.BenchScaleResult) {
 		if !rd.Ready {
 			verdict = "NOT ready to scale"
 		}
-		fmt.Fprintf(a.out, "scale-readiness: %s (busy %.1f%%/min %.0f%%, quality_ok=%v, 10h cost $%.4f)\n",
+		fmt.Fprintf(a.out, "scale-readiness: %s (busy %.1f%%/min %.0f%%, quality_ok=%v, $/audio-hr@10h $%.4f)\n",
 			verdict, rd.BusyPct, rd.MinBusyPct, rd.QualityWithinGuardrails, rd.CostPerAudioHourAt10hUSD)
 		for _, reason := range rd.Reasons {
 			fmt.Fprintf(a.out, "  blocker: %s\n", reason)
@@ -755,7 +755,14 @@ func (a *app) runBenchCompare(args []string) int {
 	if *jsonOut {
 		return a.emitJSON(res)
 	}
-	fmt.Fprintf(a.out, "decision: %s comparable: %v delta_pct: %.1f%%\n", res.Decision, res.Comparable, res.Cost.DeltaPct)
+	// On the incomparable path the service returns before computing cost, so
+	// delta_pct is a zero value, not a measured 0% — print the reason instead of a
+	// fake "0.0% cost change", and only show delta_pct when the runs are comparable.
+	if res.Comparable {
+		fmt.Fprintf(a.out, "decision: %s comparable: true delta_pct: %.1f%%\n", res.Decision, res.Cost.DeltaPct)
+	} else {
+		fmt.Fprintf(a.out, "decision: %s comparable: false reason: %s\n", res.Decision, res.IncomparableReason)
+	}
 	if g := res.GPU; g != nil {
 		fmt.Fprintf(a.out, "gpu idle/audio-hr: $%.4f → $%.4f (Δ $%.4f) busy %.1f%% → %.1f%%\n",
 			g.BaselineIdleCostPerAudioHourUSD, g.CandidateIdleCostPerAudioHourUSD,
@@ -848,7 +855,7 @@ func (a *app) runBenchLedgerWinners(args []string) int {
 		return a.emitJSON(res)
 	}
 	for _, w := range res.Winners {
-		fmt.Fprintf(a.out, "%s %s×%s $%.4f/hr\n", w.RunID, w.ExecutionProfile, w.OperatingMode, w.CostPerProcessedAudioHourUSD)
+		fmt.Fprintf(a.out, "%s %s×%s $%.4f/audio-hr\n", w.RunID, w.ExecutionProfile, w.OperatingMode, w.CostPerProcessedAudioHourUSD)
 	}
 	return 0
 }
