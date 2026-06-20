@@ -307,6 +307,17 @@ NOISY real-world product audio (laptop mics, rooms), where AMI can't show it. Th
 earlier nara_wpe gate crashed pyannote — confirming the pure-numpy rule. Available as a safe option; WER-gate
 on a noisy suite before any production default.
 
+**Preprocessing thread CLOSED (don't re-attempt):** the cheap CPU transforms (high-pass/DC) are
+NEUTRAL on AMI (clean far-field, near-ceiling single-speaker WER) — safe but no gain. The one
+preprocessing that could help AMI's real degradation (far-field REVERB) is WPE dereverb, but WPE is
+(a) dependency-fragile (`nara_wpe`/scipy break the pyannote image) AND (b) **computationally infeasible
+on CPU for full meetings** — per-frequency weighted-least-squares over ~225k STFT frames × 257 freqs ×
+iterations; a pure-numpy reimpl hits the same wall without windowed chunking. So dereverb is not a viable
+cheap lever here. The big accuracy error is OVERLAP (separation, ADR 0007), which no front-end preprocessing
+addresses. Pipeline-internal parallelization is also exhausted: `runPipeline` is sequential by DATA
+dependency (summarize needs the transcript, index needs the summary); the real parallelism is across meetings
+(the posture-aware worker pool, done).
+
 ### (earlier) WPE/nara_wpe attempt — blocked by image fragility
 
 User asks repeatedly for "smart preprocessing / cut out noise." Tried the most legitimate version for
