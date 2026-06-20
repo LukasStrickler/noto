@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"testing"
 
 	"github.com/lukasstrickler/noto/internal/core/artifacts"
@@ -88,6 +89,11 @@ func TestLocalEmbedder_CrossMeetingSeparation(t *testing.T) {
 	if len(spk) < 3 {
 		t.Skip("need >=3 speakers with >=2 clips")
 	}
+	// Sort for a DETERMINISTIC speaker triple: map iteration order is randomized,
+	// so picking spk[0..2] from an unsorted slice chose different speakers each run
+	// — and some pairs are acoustically closer than others, which intermittently
+	// pushed the different-speaker cosine past 0.40 (a flaky failure under load).
+	sort.Strings(spk)
 	s0, s1, s2 := spk[0], spk[1], spk[2]
 
 	// meeting A: s0,s1,s2 (clip 0)   meeting B: s0,s1 (clip 1)
