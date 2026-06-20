@@ -15,3 +15,6 @@ ami_ihm/
 
 # fetched EdAcc accented-English clips + refs (re-downloadable via fetch_edacc.py)
 edacc_wer/
+
+# overlap regions derived from words/ (regenerable via overlap_regions.py)
+overlap_regions/

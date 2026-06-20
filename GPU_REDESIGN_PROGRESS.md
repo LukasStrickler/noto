@@ -136,6 +136,29 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
   but INERT until `acquire` is wired (only `pin` runs today, which ignores the budget) — a known gap,
   not a bug; honest once heavy models get pooled.
 
+## ★ Overlap separation — the per-speaker-transcription direction (2026-06-20 loop: "2 people talk → transcribe both individually")
+
+**The headline product accuracy lever.** Grounded gap: the merge (`providers/merge/merge.go`) assigns each
+word to EXACTLY ONE speaker (the turn with the most time-overlap). So where 2 people talk at once, the
+single-stream STT emits one mixed/garbled transcript and the merge pins it all to ONE speaker — **the
+pipeline has NO mechanism to transcribe both overlapping speakers separately.** That is the 60% overlap WER.
+
+**Headroom (from `single_speaker_wer.py`, 20 mtg):** overlap is 20% of words at 60% WER vs 15.8%
+single-speaker. Perfect overlap separation → overall WER **24.7% → 15.8% (−8.8 pts, 36% relative)**; even
+halving overlap WER → 18.7% (−6 pts). cpWER ("who said what") gains MORE — the 2nd speaker's words get a
+correct owner instead of being lost/misattributed. This is the single biggest accuracy prize in the system.
+
+**Approach = the plan's H10 (source separation / GSS), tested on AMI** — a separation stage BEFORE STT:
+overlap region → 2-speaker separation model (e.g. SpeechBrain SepFormer-WHAMR16k, trained on noisy/reverb
+mixes that match AMI far-field) → transcribe each stream → assign to the 2 diarized speakers. (The product's
+own answer is two-channel capture — you-vs-remote separates by channel — but that's macOS-gated; remote-vs-
+remote overlap still needs this, and AMI is the proving ground I have.)
+
+**Plan: (1) extract overlap regions + per-speaker ref words [build first — the eval ground truth]; (2) Modal
+separation+transcribe experiment on those regions; (3) score: does separation recover the 2nd speaker
+(overlap cpWER, separated vs current single-stream)? H10 is flagged "high-cost / oracle-confirm" — so prove
+the recovery on a small sample before any production wire.**
+
 ## GPU-efficiency / throughput frontier — grounded diagnosis (2026-06-20, user: "push throughput + strong accuracy")
 
 From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench scale`, not speculation:
