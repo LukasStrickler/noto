@@ -72,6 +72,22 @@ func TestFitScaleModel_RejectsDegenerate(t *testing.T) {
 	}
 }
 
+// A smaller run that happened to cost more (measurement noise) yields a negative
+// fitted slope. That is non-physical, so the fit must be REJECTED — not returned
+// as a marginal-0 model, which would assert a false $0 floor and "reachable by
+// scale". The caller then falls back to the idle-based single-run floor.
+func TestFitScaleModel_RejectsNonPhysicalSlope(t *testing.T) {
+	noisy := []corebench.ScalePoint{{AudioHours: 1, CostUSD: 10}, {AudioHours: 2, CostUSD: 4}}
+	if _, ok := corebench.FitScaleModel(noisy); ok {
+		t.Fatal("a negative-slope (non-physical) fit must be rejected, not returned as a $0-floor model")
+	}
+	// A near-flat noisy pair (slope ~0) is likewise unmeasurable → reject.
+	flat := []corebench.ScalePoint{{AudioHours: 5, CostUSD: 0.50}, {AudioHours: 10, CostUSD: 0.49}}
+	if _, ok := corebench.FitScaleModel(flat); ok {
+		t.Fatal("a non-positive slope must be rejected (no false $0 marginal floor)")
+	}
+}
+
 // The single-run idle decomposition: idle dollars are the fixed proxy, busy
 // dollars are marginal. total 0.16, idle 0.04, 9.5h → fixed 0.04, marginal
 // (0.16-0.04)/9.5 ≈ 0.01263/hr.

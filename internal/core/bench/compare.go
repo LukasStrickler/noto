@@ -105,6 +105,18 @@ func WaterfallDeltas(base, cand TraceSummary) map[string]float64 {
 	add("compute", base.CostWaterfall.ComputeUSD, cand.CostWaterfall.ComputeUSD)
 	add("warm_idle", base.CostWaterfall.WarmIdleUSD, cand.CostWaterfall.WarmIdleUSD)
 	add("unattributed", base.CostWaterfall.UnattributedUSD, cand.CostWaterfall.UnattributedUSD)
+	// The remaining waterfall buckets are additive components of total (alongside
+	// compute), so a cost move that lands in one of them must appear in the delta
+	// map — otherwise waterfallResidual reads the whole total move as unexplained
+	// and Compare spuriously returns retry on a real win. add() keeps a zero bucket
+	// out of the map, so the common all-zero case is byte-for-byte unchanged.
+	add("cold_start", base.CostWaterfall.ColdStartUSD, cand.CostWaterfall.ColdStartUSD)
+	add("model_load", base.CostWaterfall.ModelLoadUSD, cand.CostWaterfall.ModelLoadUSD)
+	add("audio_stage", base.CostWaterfall.AudioStageUSD, cand.CostWaterfall.AudioStageUSD)
+	add("retry", base.CostWaterfall.RetryUSD, cand.CostWaterfall.RetryUSD)
+	add("crash_billed", base.CostWaterfall.CrashBilledUSD, cand.CostWaterfall.CrashBilledUSD)
+	add("cancel_billed", base.CostWaterfall.CancelBilledUSD, cand.CostWaterfall.CancelBilledUSD)
+	add("trace_overhead", base.CostWaterfall.TraceOverheadUSD, cand.CostWaterfall.TraceOverheadUSD)
 	stageBase := stageUSDMap(base)
 	stageCand := stageUSDMap(cand)
 	seen := map[string]bool{}
@@ -120,11 +132,13 @@ func WaterfallDeltas(base, cand TraceSummary) map[string]float64 {
 	return out
 }
 
-// gpuCompare contrasts the GPU-efficiency block of two runs. Returns nil when
-// neither run sampled the GPU (e.g. integration fixtures), so compare.json stays
-// quiet rather than emitting an empty block.
+// gpuCompare contrasts the GPU-efficiency block of two runs. Returns nil unless
+// BOTH runs sampled the GPU: a one-sided comparison (e.g. a CPU/summary-only
+// baseline vs a GPU candidate) has no real other side, and computing a delta
+// against the missing side's zero value would fabricate an idle-cost
+// "regression/progress" and a "busy 0%→N%" transition out of absence-of-data.
 func gpuCompare(base, cand *GPUUtilization) *CompareGPU {
-	if base == nil && cand == nil {
+	if base == nil || cand == nil {
 		return nil
 	}
 	g := &CompareGPU{}

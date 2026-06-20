@@ -200,6 +200,59 @@ func TestCompare_SurfacesGPUIdleCostMovement(t *testing.T) {
 	}
 }
 
+func TestCompare_OneSidedGPUEmitsNoFabricatedInsight(t *testing.T) {
+	// A summary-only baseline (no GPU samples) vs a GPU candidate has no real other
+	// side: gpuCompare must stay quiet rather than compute an idle-cost delta
+	// against a phantom 0 and print a fabricated "regression"/"busy 0%→70%" insight.
+	base := bench.RunBundle{
+		Manifest: bench.RunManifest{
+			RunID: "b", ExecutionProfile: "modal_cuda", OperatingMode: "batch_queue",
+			SuiteID:       "gate_ami@2026-06-18",
+			Comparability: bench.ManifestCompat{TargetConcurrency: 10, CacheState: "warm", TraceMode: "summary"},
+		},
+		CostPerProcessedHour: 0.0194,
+		TraceSummary: bench.TraceSummary{
+			CostWaterfall:  bench.CostWaterfall{TotalUSD: 0.0194, ComputeUSD: 0.0194, UnattributedPct: 1},
+			ComputeByStage: []bench.StageCost{{Stage: "diar_emb", USD: 0.0194}},
+			GPU:            nil, // summary-only baseline: no GPU samples
+		},
+		Metrics: bench.MetricsFile{
+			Aggregate:    map[string]float64{"wer": 0.235, "der": 0.113, "cpwer": 0.311},
+			Denominators: map[string]any{"audio_hours": 2.0, "speech_hours": 2.0},
+		},
+	}
+	cand := base
+	cand.Manifest.RunID = "c"
+	cand.TraceSummary.GPU = &bench.GPUUtilization{BusyPct: 70, IdleCostPerAudioHourUSD: 0.005}
+
+	cmp := bench.Compare(base, cand, bench.DefaultGateOpts())
+	if cmp.GPU != nil {
+		t.Fatalf("one-sided GPU must produce no compare block, got %+v", cmp.GPU)
+	}
+	for _, ins := range cmp.AttributionInsights {
+		if strings.Contains(ins, "gpu idle cost/audio-hr moved") {
+			t.Fatalf("one-sided GPU must not fabricate an idle-cost insight: %q", ins)
+		}
+	}
+}
+
+func TestWaterfallDeltas_TracksAdditiveBuckets(t *testing.T) {
+	// A cost move in an additive bucket WaterfallDeltas used to omit (cold_start)
+	// must be tracked, so waterfallResidual accounts for it instead of reading the
+	// whole total move as unexplained — which spuriously retried a real win.
+	base := bench.TraceSummary{CostWaterfall: bench.CostWaterfall{TotalUSD: 1.0, ComputeUSD: 0.6, ColdStartUSD: 0.4}}
+	cand := bench.TraceSummary{CostWaterfall: bench.CostWaterfall{TotalUSD: 0.6, ComputeUSD: 0.6, ColdStartUSD: 0.0}}
+	d := bench.WaterfallDeltas(base, cand)
+	cs, ok := d["cold_start"]
+	if !ok {
+		t.Fatalf("cold_start move must be tracked, got %v", d)
+	}
+	// Residual closes: total - sum(non-total/compute) = total - cold_start = 0.
+	if cs != d["total"] {
+		t.Fatalf("cold_start delta (%v) should equal total delta (%v) so the residual closes", cs, d["total"])
+	}
+}
+
 func TestCompare_MissingGateQualityRetries(t *testing.T) {
 	base := bench.RunBundle{
 		Manifest: bench.RunManifest{

@@ -66,9 +66,12 @@ func (m ScaleModel) HoursToReach(target float64) (hours float64, ok bool) {
 
 // FitScaleModel fits cost = fixed + marginal·hours by least squares over the
 // observed runs. It needs ≥2 points spanning ≥2 distinct audio-hour values
-// (otherwise fixed and marginal can't be separated). Non-physical fits are
-// clamped to ≥0 (a slightly super-linear pair can yield a tiny negative
-// intercept; that just means "no measurable fixed overhead").
+// (otherwise fixed and marginal can't be separated). A non-positive fitted slope
+// is non-physical (more audio cannot cost less on the margin) — it means the data
+// is too flat/noisy to measure the marginal rate, so the fit is REJECTED rather
+// than reported as a marginal-0 model (which would assert a false $0 floor and
+// "reachable by scale"); the caller falls back to the idle-based single-run floor.
+// A tiny negative intercept from a slightly super-linear pair is clamped to 0.
 func FitScaleModel(points []ScalePoint) (ScaleModel, bool) {
 	if len(points) < 2 {
 		return ScaleModel{}, false
@@ -94,12 +97,16 @@ func FitScaleModel(points []ScalePoint) (ScaleModel, bool) {
 		return ScaleModel{}, false
 	}
 	marginal := (n*sumHC - sumH*sumC) / denom
-	fixed := (sumC - marginal*sumH) / n
-	if marginal < 0 {
-		marginal = 0
+	if marginal <= 0 {
+		// Non-physical slope: reject so the caller falls back to the idle-based
+		// floor, rather than asserting a marginal-0 model (false $0 floor). Must be
+		// checked BEFORE deriving fixed — a fixed computed from the discarded slope
+		// would be inconsistent with marginal=0.
+		return ScaleModel{}, false
 	}
+	fixed := (sumC - marginal*sumH) / n
 	if fixed < 0 {
-		fixed = 0
+		fixed = 0 // a slightly super-linear pair can yield a tiny negative intercept
 	}
 	return ScaleModel{FixedUSD: roundUSD(fixed), MarginalUSDPerAudioHour: roundUSD(marginal)}, true
 }

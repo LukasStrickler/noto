@@ -62,6 +62,16 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   denominator → smoke runs dragged ~10pts, unmeasured-cost runs 2× misranked; now renormalized out.
   (repair) `RepairCeiling` truncated the bottom-decile count to 0 for <10-word slices → false flat
   ceiling; now ceils + floors-at-1 like `BottomFractionCapture`. All conserve invariants now hold.
+- **Bench math audit part 2 (3 more bugs fixed, +5 tests).** Swept the remaining math modules
+  (scale/spend/compare/overlap); **spend + overlap came back CLEAN**, scale + compare had 3 verified
+  bugs: (scale) `FitScaleModel` clamped a negative slope to marginal-0 while keeping a `fixed` from the
+  discarded slope → false **$0 floor** + false "reachable by scale" on noisy 1-run data; now REJECTS a
+  non-positive slope so the caller falls back to the idle-based floor. (compare) `gpuCompare` computed an
+  idle-cost delta against a phantom 0 when only one run sampled the GPU → fabricated "regression / busy
+  0%→N%" insight; now nil unless both sides sampled. (compare) `WaterfallDeltas` omitted 7 of 11 additive
+  `CostWaterfall` buckets, so a cost move in any of them made the residual gate spuriously `retry` a real
+  win; now tracks all buckets. **Bench KPI/cost/scale/compare/metrics math is now audited end-to-end
+  (12 bugs fixed across 2 passes); spend + overlap verified clean.**
 - **Optimizations embedded in the TUI ("embed it nicely in the tui").** New **Accuracy**
   config section (`internal/ui/tui/screen_config.go`, `secAccuracy`) surfaces the production
   opts that were previously config-file-only: **VAD silence-trim** is a live toggle (Enter /
