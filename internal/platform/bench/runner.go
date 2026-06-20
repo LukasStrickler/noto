@@ -174,14 +174,6 @@ func (r *Runner) CompareRuns(ctx context.Context, baselineID, candidateID string
 	return cmp, nil
 }
 
-// AppendLedger validates artifact tree then appends.
-func (r *Runner) AppendLedger(entry LedgerEntry) error {
-	if err := r.Store.ValidateArtifactTree(entry.RunID); err != nil {
-		return fmt.Errorf("artifact tree: %w", err)
-	}
-	return r.Ledger.Append(entry)
-}
-
 // MapSummaryToAudit builds compute_audit.v1 from modal summary + trace summary.
 func MapSummaryToAudit(summary ModalSummary, trace corebench.TraceSummary, profile, mode string) (map[string]any, error) {
 	cph := summary.CostPerAudioHourUSD

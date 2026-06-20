@@ -519,18 +519,3 @@ func newRunID(m corebench.RunManifest) string {
 	slug = strings.ReplaceAll(slug, "_", "")
 	return fmt.Sprintf("run_%s_%s_%s", ts, slug, strings.TrimPrefix(m.Tier, "baseline_"))
 }
-
-// RunSubprocess exposes subprocess for tests that mock at a higher layer.
-func (m *ModalRunner) RunSubprocess(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		args = []string{"run", "--suite", "synthetic", "--quick"}
-	}
-	cmd := exec.CommandContext(ctx, m.Python, append([]string{m.Script}, args...)...)
-	cmd.Dir = m.RepoRoot
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%w: %s", err, stderr.String())
-	}
-	return nil
-}
