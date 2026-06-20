@@ -135,6 +135,11 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
   Parakeet/diarizer next"). Caveat: `NOTO_MODEL_MAX_RESIDENT_MB` is parsed + passed to `newModelPool`
   but INERT until `acquire` is wired (only `pin` runs today, which ignores the budget) — a known gap,
   not a bug; honest once heavy models get pooled.
+- **`merge.MergeOverlapStreams` + `OverlapStream`/`OverlapRegion`** (`providers/merge/overlap.go`): the
+  ADR-0007 v2 merge that splices separated per-speaker overlap streams back into the transcript (both
+  speakers transcribed individually). Tested now (`overlap_test.go`); wired when the deferred
+  separation/refinement pass lands (gated on remote-compute, B2). Do NOT remove as "dead" — it's the
+  documented [[ADR 0007]] consumer.
 
 ## ★ Overlap separation — the per-speaker-transcription direction (2026-06-20 loop: "2 people talk → transcribe both individually")
 
