@@ -306,7 +306,7 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("service: JobsDB is required")
 	}
 	s.applyVADEnv()
-	if err := s.markInterruptedJobs(ctx); err != nil {
+	if err := s.recoverInterruptedJobs(ctx); err != nil {
 		return fmt.Errorf("service: recover jobs: %w", err)
 	}
 	s.startWorkers(ctx)

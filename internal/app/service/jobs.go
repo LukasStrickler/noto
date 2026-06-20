@@ -227,13 +227,37 @@ func scanJob(r rowScanner) (notoapi.Job, error) {
 	return j, nil
 }
 
-// markInterruptedJobs flips any rows still in "running" at startup to
-// "interrupted" — no goroutine survives a process exit, so a running
-// row from a previous run is stale.
-func (s *Service) markInterruptedJobs(_ context.Context) error {
+// maxJobAttempts caps how many times a job may be (re-)claimed before it's given
+// up. claimNextJob increments attempt on every claim, so a job whose work crashes
+// the process is resumed across restarts only up to this limit — past it, a
+// poison-pill job is parked rather than crash-looping the server on every startup.
+const maxJobAttempts = 3
+
+// recoverInterruptedJobs handles rows still "running" at startup — no goroutine
+// survives a process exit, so such a row is from a previous run that died
+// mid-flight. Rather than stranding the user's meeting, a job still under the
+// attempt cap is RE-QUEUED to finish: every pipeline stage overwrites its artifact
+// (transcribe/summarize/index are idempotent), so re-running from the start is
+// safe, and the row keeps its priority so it re-enters the queue at its original
+// tier. A job that has already exhausted its attempts is parked as "interrupted"
+// (the poison-pill guard) so a reliably-crashing job can't crash-loop the server.
+func (s *Service) recoverInterruptedJobs(_ context.Context) error {
+	// Resume the resumable ones: back to queued, progress/phase reset so the UI
+	// shows a fresh run. attempt is preserved (it increments again on re-claim).
+	if _, err := s.jobsDB.Exec(
+		`UPDATE jobs SET status = ?, progress = 0, phase = '', detail = ?, error = '',
+			started_at = NULL, finished_at = NULL
+		 WHERE status = ? AND attempt < ?`,
+		string(notoapi.JobQueued), "resuming after restart",
+		string(notoapi.JobRunning), maxJobAttempts,
+	); err != nil {
+		return err
+	}
+	// Park the rest (attempt cap reached): resuming again would just repeat the
+	// crash each startup.
 	_, err := s.jobsDB.Exec(
 		`UPDATE jobs SET status = ?, error = ?, finished_at = ? WHERE status = ?`,
-		string(notoapi.JobInterrupted), "server restarted while job was running",
+		string(notoapi.JobInterrupted), "exceeded retry limit after server restart",
 		time.Now().UnixMilli(), string(notoapi.JobRunning),
 	)
 	return err

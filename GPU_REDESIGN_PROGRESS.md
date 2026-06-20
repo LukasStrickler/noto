@@ -327,6 +327,27 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   consumer-facing job view per the "clean consumer surface" directive). Tested: kind→priority mapping,
   cross-priority claim order (idle-enqueued-first still claimed LAST), FIFO-within-priority, and the
   old-DB→new-column upgrade path. Build/vet/lint(0)/race all clean.
+- **★ Crash-resume: in-flight jobs survive a restart (2026-06-20).** The whole point of a SQLite-persisted
+  job queue is durability across restarts, but startup recovery only marked running jobs `interrupted` (a
+  TERMINAL state) — so a server restart mid-pipeline **stranded the user's meeting permanently** (it never
+  transcribed/summarized unless manually re-triggered). `recoverInterruptedJobs` now RE-QUEUES an in-flight
+  job to finish: every pipeline stage overwrites its artifact (transcribe/summarize/index are idempotent —
+  verified by reading the stage code), so re-running from the start is safe, and the row keeps its `priority`
+  so it re-enters the queue at its **original tier** (composes with the scheduler above — a resumed
+  interactive job is re-prioritized correctly). Poison-pill-guarded by the existing `attempt` column
+  (incremented on every claim): past `maxJobAttempts=3` a reliably-crashing job is parked as `interrupted`
+  rather than crash-looping the server on each startup. Tested: resume-under-cap (→queued, priority preserved,
+  progress reset), park-at-cap (→interrupted), and resumed-then-claimable (the resumed job is immediately
+  claimable and its attempt increments on re-claim). Build/vet/lint(0)/race clean. (Pre-existing intermittent
+  harness flake noted: `TestClientConformance_Direct` TempDir `RemoveAll` "directory not empty" under the full
+  parallel `./...` run — a lingering SQLite WAL-vs-teardown race, orthogonal to this change; passes isolated.)
+- **Pipeline-internal parallelism VERIFIED exhausted (not just assumed).** Read the actual stage code: STT and
+  diarization already run CONCURRENTLY in `runTranscribe` (diar in a goroutine, joined at the merge — the
+  first point needing both); the 95%-cost speaker embedding is genuinely data-dependent on the merge; and
+  `runPipeline`'s transcribe→summarize→index is a real chain because `indexOneMeeting` reads the SUMMARY
+  (`LoadSummary`) to make decisions/actions/risks/questions searchable. So summarize∥index is NOT a free
+  parallelization (index needs summary). The cross-meeting parallelism (the posture-aware worker pool) is the
+  real lever and it's done. The "splitup parallelization" ask is satisfied where data dependencies allow.
 
 ## Preprocessing / "cut out noise" — SHIPPED pure-numpy, validated neutral-safe on AMI (2026-06-20)
 
