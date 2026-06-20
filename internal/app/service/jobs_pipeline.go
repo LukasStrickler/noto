@@ -658,6 +658,7 @@ func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artif
 				DisplayName:     sp.DisplayName,
 				EmbeddingVector: emb,
 				EmbeddingDim:    len(emb),
+				EmbeddingCount:  1, // first enrollment
 				EmbeddingModel:  s.embedderModelID(),
 				CreatedAt:       now,
 				UpdatedAt:       now,
@@ -669,11 +670,15 @@ func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artif
 		} else if decision.Status == speakers.StatusAuto && profileID != nil {
 			p, err := s.speakerProfiles.Get(ctx, *profileID)
 			if err == nil {
-				allEmbs := []speakers.Embedding{p.EmbeddingVector, emb}
-				centroid, cerr := speakers.Centroid(allEmbs)
+				// Fold this meeting's voiceprint into the profile as a TRUE running
+				// mean: weight the existing centroid by its observation count so a
+				// single noisy enrollment can't swing an established profile halfway
+				// (the old Centroid([stored, new]) was a 50/50 average).
+				centroid, cerr := speakers.RunningMean(p.EmbeddingVector, p.EmbeddingCount, emb)
 				if cerr == nil && len(centroid) > 0 {
 					p.EmbeddingVector = centroid
 					p.EmbeddingDim = len(centroid)
+					p.EmbeddingCount = max(p.EmbeddingCount, 1) + 1
 					p.LastSeenAt = &now
 					p.UpdatedAt = now
 					if err := s.speakerProfiles.Update(ctx, p); err != nil {

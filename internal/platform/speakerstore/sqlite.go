@@ -31,6 +31,7 @@ func migrateAddColumns(d *db.DB) error {
 	adds := []struct{ table, column, ddl string }{
 		{"speaker_profiles", "notes", "ALTER TABLE speaker_profiles ADD COLUMN notes TEXT NOT NULL DEFAULT ''"},
 		{"speaker_profiles", "affiliations", "ALTER TABLE speaker_profiles ADD COLUMN affiliations TEXT NOT NULL DEFAULT '[]'"},
+		{"speaker_profiles", "embedding_count", "ALTER TABLE speaker_profiles ADD COLUMN embedding_count INTEGER NOT NULL DEFAULT 1"},
 		{"meeting_speaker_mappings", "embedding_vector", "ALTER TABLE meeting_speaker_mappings ADD COLUMN embedding_vector BLOB"},
 		{"meeting_speaker_mappings", "embedding_dim", "ALTER TABLE meeting_speaker_mappings ADD COLUMN embedding_dim INTEGER NOT NULL DEFAULT 0"},
 	}
@@ -96,6 +97,7 @@ var speakerSchema = []string{
 		affiliations TEXT NOT NULL DEFAULT '[]',
 		embedding_vector BLOB,
 		embedding_dim INTEGER NOT NULL DEFAULT 0,
+		embedding_count INTEGER NOT NULL DEFAULT 1,
 		embedding_model TEXT NOT NULL DEFAULT '',
 		created_at INTEGER NOT NULL,
 		updated_at INTEGER NOT NULL,
@@ -128,14 +130,24 @@ func NewSQLiteSpeakerProfileRepository(d *db.DB) SpeakerProfileRepository {
 func (r *sqliteSpeakerProfileRepo) Create(ctx context.Context, p SpeakerProfile) error {
 	vec := marshalEmbedding(p.EmbeddingVector)
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO speaker_profiles (id, display_name, email, pronouns, notes, affiliations, embedding_vector, embedding_dim, embedding_model, created_at, updated_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.DisplayName, p.Email, p.Pronouns, p.Notes, marshalAffiliations(p.Affiliations), vec, p.EmbeddingDim, p.EmbeddingModel,
+		`INSERT INTO speaker_profiles (id, display_name, email, pronouns, notes, affiliations, embedding_vector, embedding_dim, embedding_count, embedding_model, created_at, updated_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.DisplayName, p.Email, p.Pronouns, p.Notes, marshalAffiliations(p.Affiliations), vec, p.EmbeddingDim, clampCount(p.EmbeddingCount), p.EmbeddingModel,
 		p.CreatedAt.Unix(), p.UpdatedAt.Unix(), toUnixTime(p.LastSeenAt))
 	return err
 }
 
-const profileColumns = `id, display_name, email, pronouns, notes, affiliations, embedding_vector, embedding_dim, embedding_model, created_at, updated_at, last_seen_at`
+// clampCount keeps the stored enrollment count >= 1 so the running-mean update
+// (speakers.RunningMean) always treats a profile as having at least its initial
+// enrollment, regardless of whether a creation site set the field.
+func clampCount(n int) int {
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+const profileColumns = `id, display_name, email, pronouns, notes, affiliations, embedding_vector, embedding_dim, embedding_count, embedding_model, created_at, updated_at, last_seen_at`
 
 func (r *sqliteSpeakerProfileRepo) Get(ctx context.Context, id string) (SpeakerProfile, error) {
 	row := r.db.QueryRowContext(ctx,
@@ -164,9 +176,9 @@ func (r *sqliteSpeakerProfileRepo) List(ctx context.Context) ([]SpeakerProfile, 
 func (r *sqliteSpeakerProfileRepo) Update(ctx context.Context, p SpeakerProfile) error {
 	vec := marshalEmbedding(p.EmbeddingVector)
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE speaker_profiles SET display_name=?, email=?, pronouns=?, notes=?, affiliations=?, embedding_vector=?, embedding_dim=?, embedding_model=?, updated_at=?, last_seen_at=?
+		`UPDATE speaker_profiles SET display_name=?, email=?, pronouns=?, notes=?, affiliations=?, embedding_vector=?, embedding_dim=?, embedding_count=?, embedding_model=?, updated_at=?, last_seen_at=?
 		 WHERE id=?`,
-		p.DisplayName, p.Email, p.Pronouns, p.Notes, marshalAffiliations(p.Affiliations), vec, p.EmbeddingDim, p.EmbeddingModel, p.UpdatedAt.Unix(), toUnixTime(p.LastSeenAt), p.ID)
+		p.DisplayName, p.Email, p.Pronouns, p.Notes, marshalAffiliations(p.Affiliations), vec, p.EmbeddingDim, clampCount(p.EmbeddingCount), p.EmbeddingModel, p.UpdatedAt.Unix(), toUnixTime(p.LastSeenAt), p.ID)
 	return err
 }
 
@@ -273,7 +285,7 @@ func scanSpeakerProfile(scanner interface{ Scan(...interface{}) error }) (Speake
 	var affiliations string
 	var lastSeenUnix *int64
 	var createdUnix, updatedUnix int64
-	err := scanner.Scan(&p.ID, &p.DisplayName, &p.Email, &p.Pronouns, &p.Notes, &affiliations, &vec, &p.EmbeddingDim, &p.EmbeddingModel,
+	err := scanner.Scan(&p.ID, &p.DisplayName, &p.Email, &p.Pronouns, &p.Notes, &affiliations, &vec, &p.EmbeddingDim, &p.EmbeddingCount, &p.EmbeddingModel,
 		&createdUnix, &updatedUnix, &lastSeenUnix)
 	if err != nil {
 		return SpeakerProfile{}, err

@@ -130,6 +130,23 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   production or bench path** (grep-confirmed) — so the fix hardens shipped library code, but its real-world
   impact is ~nil today (the commit message overstated it as user-facing). Net: the *active* "who said what"
   path is verified correct; one latent bug in an unused exported normalizer fixed.
+- **★ Cross-meeting identity: true running-mean voiceprints (2026-06-20) — REAL accuracy fix in the ACTIVE
+  path.** Continuing the production review into the speaker-identity code (`matchSpeakers`, the "who is this
+  person across meetings" feature): the auto-match centroid update was `Centroid([stored, new])` — a 50/50
+  average that DISCARDS how many enrollments the profile already represents, so a single noisy embedding (bad
+  audio / overlap contamination) swung an established voiceprint HALFWAY, degrading future matches. The
+  variable is even named "centroid" — the intent was a true mean, but with only [stored, new] it degenerated
+  to an EMA(α=0.5). Fix: track an enrollment `EmbeddingCount` on the profile and fold each new observation as
+  a TRUE running mean (`speakers.RunningMean` weights the existing centroid by its count, the new sample by 1,
+  so an n=10 profile moves only ~1/11 per update — robust to one bad sample, while still adapting). Wired:
+  new column `embedding_count` (CREATE TABLE default 1 + idempotent `migrateAddColumns` ALTER for existing DBs,
+  legacy rows → 1; the PRAGMA-guarded pattern already in speakerstore); New profiles enroll at count=1; Auto
+  matches `RunningMean` + increment. Tested: `RunningMean` de-weighting + clamp + dim-validation, the
+  `embedding_count` round-trip + upgrade migration, and the end-to-end `matchSpeakers` auto-match (count 4→5,
+  status auto). build/vet/lint(0)/race clean. This is a genuine, in-the-hot-path accuracy improvement (more
+  robust voiceprints → better cross-meeting "same person" matching → better People-screen suggestions),
+  serving the loop's "highly accurate diarization" — unlike the prior normalizer fix, this code IS in the
+  default production path.
 
 ## Dead-code sweep — classified, don't re-investigate (2026-06-20)
 

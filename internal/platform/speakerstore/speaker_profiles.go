@@ -22,10 +22,15 @@ type SpeakerProfile struct {
 	Affiliations    []Affiliation
 	EmbeddingVector []float64 // 192-dim
 	EmbeddingDim    int
-	EmbeddingModel  string // e.g. "ecapa"
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	LastSeenAt      *time.Time
+	// EmbeddingCount is how many enrollment observations the centroid summarizes,
+	// so auto-match updates fold in a new voiceprint as a true running mean
+	// (weight 1/(count+1)) instead of a 50/50 average. >=1 for any enrolled
+	// profile; 0/absent is treated as 1.
+	EmbeddingCount int
+	EmbeddingModel string // e.g. "ecapa"
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	LastSeenAt     *time.Time
 }
 
 // MeetingSpeakerMapping links a speaker in a specific meeting to a profile.

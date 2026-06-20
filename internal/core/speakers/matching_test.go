@@ -472,3 +472,52 @@ func TestMatchCandidates(t *testing.T) {
 		}
 	})
 }
+
+func TestRunningMean_DeweightsAsCountGrows(t *testing.T) {
+	// A profile enrolled toward direction A. A new, noisy embedding pulls toward
+	// B. With a large prior count the centroid should barely move; with count 1 it
+	// should move much more (the old 50/50 behavior).
+	a := Embedding{1, 0}
+	b := Embedding{0, 1}
+
+	near, err := RunningMean(a, 100, b)
+	if err != nil {
+		t.Fatalf("RunningMean count=100: %v", err)
+	}
+	simNearA, _ := CosineSimilarity(near, a)
+
+	far, err := RunningMean(a, 1, b)
+	if err != nil {
+		t.Fatalf("RunningMean count=1: %v", err)
+	}
+	simFarA, _ := CosineSimilarity(far, a)
+
+	// A high prior count keeps the centroid much closer to A than a single-sample
+	// update does — that's the whole point of tracking the count.
+	if simNearA <= simFarA {
+		t.Errorf("count=100 should stay closer to A than count=1: near=%.4f far=%.4f", simNearA, simFarA)
+	}
+	// count=1 is the symmetric two-sample case: equidistant from A and B.
+	simFarB, _ := CosineSimilarity(far, b)
+	if math.Abs(simFarA-simFarB) > 1e-9 {
+		t.Errorf("count=1 should be equidistant from A and B: A=%.4f B=%.4f", simFarA, simFarB)
+	}
+}
+
+func TestRunningMean_ClampsAndValidates(t *testing.T) {
+	// count < 1 is treated as 1 (single prior enrollment).
+	got0, err := RunningMean(Embedding{1, 0}, 0, Embedding{0, 1})
+	if err != nil {
+		t.Fatalf("count=0: %v", err)
+	}
+	got1, _ := RunningMean(Embedding{1, 0}, 1, Embedding{0, 1})
+	for i := range got0 {
+		if math.Abs(got0[i]-got1[i]) > 1e-9 {
+			t.Errorf("count=0 should behave as count=1: %v vs %v", got0, got1)
+		}
+	}
+	// Dimension mismatch is an error, not a panic.
+	if _, err := RunningMean(Embedding{1, 0}, 5, Embedding{1, 0, 0}); err == nil {
+		t.Error("expected dimension-mismatch error")
+	}
+}

@@ -63,6 +63,31 @@ func Centroid(embeddings []Embedding) (Embedding, error) {
 	return Normalize(result), nil
 }
 
+// RunningMean folds one new observation into a normalized centroid that already
+// summarizes `count` prior observations, returning the updated normalized
+// centroid. Unlike a two-point average (Centroid([stored, new]) — a 50/50 EMA
+// that lets a single noisy embedding swing a voiceprint halfway), this weights
+// the existing centroid by `count` and the new sample by 1, so the centroid moves
+// only ~1/(count+1): an established profile is robust to one bad enrollment.
+// `count` < 1 is treated as 1 (a profile with one enrollment). Both inputs are
+// normalized internally; the result is normalized, matching Centroid's contract.
+func RunningMean(centroid Embedding, count int, x Embedding) (Embedding, error) {
+	if len(centroid) != len(x) {
+		return nil, DimError(len(centroid), len(x))
+	}
+	if count < 1 {
+		count = 1
+	}
+	c := Normalize(centroid)
+	xn := Normalize(x)
+	n := float64(count)
+	acc := make(Embedding, len(c))
+	for i := range acc {
+		acc[i] = c[i]*n + xn[i]
+	}
+	return Normalize(acc), nil
+}
+
 // MatchConfig tunes the decision boundaries. Margin is the minimum lead the
 // top candidate must hold over the runner-up to AUTO-confirm: when two stored
 // profiles are within Margin of each other the query is ambiguous (the
