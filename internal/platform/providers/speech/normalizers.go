@@ -151,16 +151,16 @@ func (n *TimestampNormalizer) Normalize(transcript *artifacts.Transcript) (*arti
 			}
 		}
 
-		// Check for gap >= gapThreshold before next segment
+		// Append this segment exactly once, then a gap-marker segment if a long
+		// silence follows before the next one. The gap branch must NOT also append
+		// the segment (it previously did, then fell through to the unconditional
+		// append below — duplicating every segment that preceded a >= threshold gap).
+		segments = append(segments, copySegment(seg))
+
 		if i+1 < len(transcript.Segments) {
 			nextSeg := transcript.Segments[i+1]
 			gap := nextSeg.StartSeconds - seg.EndSeconds
 			if gap >= gapThreshold {
-				// Add the original segment first
-				segCopy := copySegment(seg)
-				segments = append(segments, segCopy)
-
-				// Insert gap marker segment
 				gapSeg := artifacts.Segment{
 					ID:           "gap_" + segID,
 					SpeakerID:    seg.SpeakerID,
@@ -177,8 +177,6 @@ func (n *TimestampNormalizer) Normalize(transcript *artifacts.Transcript) (*arti
 				segments = append(segments, gapSeg)
 			}
 		}
-
-		segments = append(segments, copySegment(seg))
 	}
 
 	result.Segments = segments

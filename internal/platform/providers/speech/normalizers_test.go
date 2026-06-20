@@ -250,15 +250,34 @@ func TestTimestampNormalizer_FlagsGap(t *testing.T) {
 		t.Fatalf("Normalize returned error: %v", err)
 	}
 
-	foundGap := false
-	for _, seg := range result.Segments {
-		if strings.Contains(seg.Text, "[potential gap:") {
-			foundGap = true
-			break
+	// Exactly: the two real segments plus one gap marker between them, in order —
+	// NOT a duplicated segment (the gap branch used to append the segment a second
+	// time, yielding [First, gap, First, Second]).
+	if len(result.Segments) != 3 {
+		var texts []string
+		for _, s := range result.Segments {
+			texts = append(texts, s.Text)
 		}
+		t.Fatalf("expected 3 segments [First, gap, Second], got %d: %v", len(result.Segments), texts)
 	}
-	if !foundGap {
-		t.Error("expected gap marker segment for gap > 30s")
+	if result.Segments[0].Text != "First" {
+		t.Errorf("segment 0 = %q; want First", result.Segments[0].Text)
+	}
+	if !strings.Contains(result.Segments[1].Text, "[potential gap:") {
+		t.Errorf("segment 1 = %q; want a gap marker", result.Segments[1].Text)
+	}
+	if result.Segments[2].Text != "Second" {
+		t.Errorf("segment 2 = %q; want Second", result.Segments[2].Text)
+	}
+	// And no segment text is duplicated.
+	seen := map[string]int{}
+	for _, s := range result.Segments {
+		seen[s.Text]++
+	}
+	for text, n := range seen {
+		if n > 1 {
+			t.Errorf("segment %q appears %d times; duplication regressed", text, n)
+		}
 	}
 }
 
