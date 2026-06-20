@@ -309,6 +309,24 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   the remote GPU at its batch optimum), explicit `Compute.JobConcurrency` overrides. Only the offload
   opt-in changes; local users untouched. End-to-end hosted measurement is B2-gated, but the worker ceiling
   that would bottleneck it is gone.
+- **★ Priority job scheduler — the "use the GPU on what matters first" knob (2026-06-20).** The worker pool
+  CLAIMED jobs strict-FIFO (`ORDER BY created_at`), so a user waiting on their just-recorded meeting sat
+  behind any already-queued bulk reindex or multi-GB model download — and the planned deferred idle-GPU
+  passes (ADR 0007 overlap separation, GPU repair) would have competed FIFO-equally with live transcription,
+  defeating "spend only idle compute on it." Added a `priority` column (single source of truth
+  `JobKind.Priority()` in `notoapi`): **Interactive(10)** = the meeting-processing path a user waits on
+  (ingest/transcribe/summarize/pipeline/index), **Background(80)** = bulk/housekeeping with no one waiting
+  (reindex/verify/download_model), **Idle(100)** = deferred secondary compute (set explicitly via
+  `CreateJobOpts.Priority`). `claimNextJob` now `ORDER BY priority, created_at` — highest-priority first, FIFO
+  within a tier. This (a) improves TODAY's mixed queue (fresh transcription preempts a queued reindex/model
+  download) and (b) is the **scheduling lane the ADR-0007 deferred overlap-refinement pass needs** — when B2
+  wires it, it enqueues at `JobPriorityIdle` and runs only when nothing interactive/background is queued,
+  realising the loop's "compute optimisation on idle times." Schema is upgrade-safe: fresh DBs get the column
+  from `CREATE TABLE`; existing DBs via idempotent `db.AddColumnIfMissing` (PRAGMA-guarded, since SQLite has
+  no `ADD COLUMN IF NOT EXISTS`). `Job.Priority` is `json:"-"` (internal scheduler detail, kept off the
+  consumer-facing job view per the "clean consumer surface" directive). Tested: kind→priority mapping,
+  cross-priority claim order (idle-enqueued-first still claimed LAST), FIFO-within-priority, and the
+  old-DB→new-column upgrade path. Build/vet/lint(0)/race all clean.
 
 ## Preprocessing / "cut out noise" — SHIPPED pure-numpy, validated neutral-safe on AMI (2026-06-20)
 

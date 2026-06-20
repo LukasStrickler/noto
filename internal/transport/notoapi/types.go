@@ -300,26 +300,72 @@ const (
 	JobInterrupted JobStatus = "interrupted"
 )
 
+// JobPriority orders the queue: the worker pool claims the LOWEST priority value
+// first (like a Unix nice level — smaller = sooner), breaking ties by age. This
+// is the scheduler's "use the GPU on what matters first" knob: a user waiting on
+// their freshly-recorded meeting must not sit behind a bulk reindex or a model
+// download, and the deferred idle-GPU refinement passes (ADR 0007 overlap
+// separation, repair) must only run when nothing interactive is queued.
+type JobPriority int
+
+const (
+	// JobPriorityInteractive — a user is actively waiting (their meeting is being
+	// transcribed/summarized/indexed). Runs ahead of everything else.
+	JobPriorityInteractive JobPriority = 10
+	// JobPriorityNormal — the default for an unspecified/unknown kind.
+	JobPriorityNormal JobPriority = 50
+	// JobPriorityBackground — bulk/housekeeping work with no one waiting on it
+	// (full reindex, integrity verify, model download). Yields to interactive work.
+	JobPriorityBackground JobPriority = 80
+	// JobPriorityIdle — deferred secondary compute that should consume only idle
+	// capacity (the ADR-0007 overlap-separation refinement pass, GPU repair). Runs
+	// last, so it never delays a first transcript. Set explicitly via CreateJobOpts.
+	JobPriorityIdle JobPriority = 100
+)
+
+// Priority is the default scheduling priority for a job kind — the single source
+// of truth the queue uses when CreateJobOpts doesn't override it. The split is by
+// "is a user waiting on this?": the meeting-processing path is interactive; bulk
+// and housekeeping work is background.
+func (k JobKind) Priority() JobPriority {
+	switch k {
+	case JobIngest, JobTranscribe, JobSummarize, JobPipeline, JobIndex:
+		return JobPriorityInteractive
+	case JobReindex, JobVerify, JobDownloadModel:
+		return JobPriorityBackground
+	default:
+		return JobPriorityNormal
+	}
+}
+
 type Job struct {
-	ID         string         `json:"id"`
-	Kind       JobKind        `json:"kind"`
-	MeetingID  string         `json:"meeting_id,omitempty"`
-	Status     JobStatus      `json:"status"`
-	Phase      string         `json:"phase,omitempty"`
-	Progress   float64        `json:"progress"`
-	Detail     string         `json:"detail,omitempty"`
-	Error      string         `json:"error,omitempty"`
-	CreatedAt  time.Time      `json:"created_at"`
-	StartedAt  *time.Time     `json:"started_at,omitempty"`
-	FinishedAt *time.Time     `json:"finished_at,omitempty"`
-	Attempt    int            `json:"attempt"`
-	Options    map[string]any `json:"options,omitempty"`
+	ID         string     `json:"id"`
+	Kind       JobKind    `json:"kind"`
+	MeetingID  string     `json:"meeting_id,omitempty"`
+	Status     JobStatus  `json:"status"`
+	Phase      string     `json:"phase,omitempty"`
+	Progress   float64    `json:"progress"`
+	Detail     string     `json:"detail,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Attempt    int        `json:"attempt"`
+	// Priority is the internal scheduler ordering key (derived from Kind unless
+	// overridden at creation). It's not serialized — it's an implementation
+	// detail of the queue, not part of the consumer-facing job view.
+	Priority JobPriority    `json:"-"`
+	Options  map[string]any `json:"options,omitempty"`
 }
 
 type CreateJobOpts struct {
 	Kind      JobKind        `json:"kind"`
 	MeetingID string         `json:"meeting_id,omitempty"`
 	Options   map[string]any `json:"options,omitempty"`
+	// Priority overrides the kind's default scheduling priority. Zero means
+	// "derive from Kind" (JobKind.Priority) — the common case; set it explicitly
+	// only for deferred idle-GPU work (JobPriorityIdle).
+	Priority JobPriority `json:"priority,omitempty"`
 }
 
 type ListJobsOpts struct {

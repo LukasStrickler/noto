@@ -22,11 +22,18 @@ func (s *Service) CreateJob(_ context.Context, opts notoapi.CreateJobOpts) (noto
 			optsJSON = string(b)
 		}
 	}
+	// Priority is the caller's explicit override, else the kind's default. This is
+	// the scheduler's ordering key: the worker pool claims the lowest value first,
+	// so interactive meeting-processing runs ahead of bulk/deferred work.
+	priority := opts.Priority
+	if priority == 0 {
+		priority = opts.Kind.Priority()
+	}
 	now := time.Now().UnixMilli()
 	_, err := s.jobsDB.Exec(
-		`INSERT INTO jobs (id, kind, meeting_id, status, options_json, created_at, attempt)
-		 VALUES (?, ?, ?, ?, ?, ?, 0)`,
-		id, string(opts.Kind), opts.MeetingID, string(notoapi.JobQueued), optsJSON, now,
+		`INSERT INTO jobs (id, kind, meeting_id, status, options_json, created_at, attempt, priority)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+		id, string(opts.Kind), opts.MeetingID, string(notoapi.JobQueued), optsJSON, now, int(priority),
 	)
 	if err != nil {
 		return notoapi.Job{}, notoapi.NewError(notoapi.CodeInternal, "could not enqueue job: "+err.Error(), nil)
@@ -37,6 +44,7 @@ func (s *Service) CreateJob(_ context.Context, opts notoapi.CreateJobOpts) (noto
 		MeetingID: opts.MeetingID,
 		Status:    notoapi.JobQueued,
 		CreatedAt: time.UnixMilli(now),
+		Priority:  priority,
 		Options:   opts.Options,
 	}
 	s.events.publish(notoapi.Event{Kind: notoapi.EventJob, Job: &job})
@@ -166,7 +174,7 @@ func (s *Service) StreamEvents(ctx context.Context) (<-chan notoapi.Event, error
 // the order scanJob reads them. Keeping it in one place stops the queries
 // from drifting out of sync with the scan.
 const jobColumns = `id, kind, meeting_id, status, phase, progress, detail, error, options_json,
-	created_at, started_at, finished_at, attempt`
+	created_at, started_at, finished_at, attempt, priority`
 
 // scanJob reads a row from the jobs table.
 type rowScanner interface {
@@ -186,15 +194,17 @@ func scanJob(r rowScanner) (notoapi.Job, error) {
 		createdAt  int64
 		kind       string
 		status     string
+		priority   int
 	)
 	if err := r.Scan(
 		&j.ID, &kind, &mid, &status, &phase, &j.Progress, &detail, &errStr,
-		&optsJSON, &createdAt, &startedAt, &finishedAt, &j.Attempt,
+		&optsJSON, &createdAt, &startedAt, &finishedAt, &j.Attempt, &priority,
 	); err != nil {
 		return notoapi.Job{}, err
 	}
 	j.Kind = notoapi.JobKind(kind)
 	j.Status = notoapi.JobStatus(status)
+	j.Priority = notoapi.JobPriority(priority)
 	j.MeetingID = mid.String
 	j.Phase = phase.String
 	j.Detail = detail.String

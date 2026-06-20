@@ -138,6 +138,14 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		_ = jobsDB.Close()
 		return nil, fmt.Errorf("notohost: migrate jobs db: %w", err)
 	}
+	// Additive upgrades for an existing jobs DB (a fresh one already has these
+	// from JobsSchema). The priority column lets the worker pool schedule
+	// interactive meeting-processing ahead of bulk/deferred work.
+	if err := jobsDB.AddColumnIfMissing(db.JobsColumnMigrations); err != nil {
+		_ = appDB.Close()
+		_ = jobsDB.Close()
+		return nil, fmt.Errorf("notohost: migrate jobs columns: %w", err)
+	}
 
 	// IPC client is best-effort; nil if no Swift helper exists on this
 	// machine (Linux/Windows or macOS without xcode). When nil, the

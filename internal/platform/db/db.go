@@ -61,7 +61,8 @@ func (d *DB) Migrate(stmts []string) error {
 // separate file from noto.sqlite so the write-heavy queue never contends with
 // the search index / speaker store).
 var JobsSchema = []string{
-	// Jobs queue. id is a ULID-ish string. Workers consume by status.
+	// Jobs queue. id is a ULID-ish string. Workers consume by status, claiming
+	// the lowest-priority-value queued row first (see notoapi.JobPriority).
 	`CREATE TABLE IF NOT EXISTS jobs (
 		id TEXT PRIMARY KEY,
 		kind TEXT NOT NULL,
@@ -76,9 +77,74 @@ var JobsSchema = []string{
 		started_at INTEGER,
 		finished_at INTEGER,
 		attempt INTEGER DEFAULT 0,
-		cancel_requested INTEGER DEFAULT 0
+		cancel_requested INTEGER DEFAULT 0,
+		priority INTEGER NOT NULL DEFAULT 50
 	)`,
 	`CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs(status)`,
 	`CREATE INDEX IF NOT EXISTS jobs_meeting_idx ON jobs(meeting_id)`,
 	`CREATE INDEX IF NOT EXISTS jobs_created_at_idx ON jobs(created_at)`,
+}
+
+// JobsColumnMigrations are additive columns applied to an EXISTING jobs table on
+// upgrade (a fresh DB already has them from JobsSchema's CREATE TABLE). Run via
+// AddColumnIfMissing after Migrate(JobsSchema). SQLite has no ALTER ... ADD COLUMN
+// IF NOT EXISTS, so the helper guards on PRAGMA table_info rather than erroring.
+var JobsColumnMigrations = []ColumnSpec{
+	{Table: "jobs", Column: "priority", DDL: "INTEGER NOT NULL DEFAULT 50"},
+}
+
+// ColumnSpec describes one additive column for AddColumnIfMissing.
+type ColumnSpec struct {
+	Table  string
+	Column string
+	DDL    string // the type/constraint clause, e.g. "INTEGER NOT NULL DEFAULT 50"
+}
+
+// AddColumnIfMissing applies each spec's column only when the table doesn't
+// already have it, making additive migrations idempotent across restarts (SQLite
+// can't express ALTER TABLE ADD COLUMN IF NOT EXISTS). A fresh table created by a
+// CREATE TABLE that already lists the column is a no-op.
+func (d *DB) AddColumnIfMissing(specs []ColumnSpec) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, s := range specs {
+		has, err := d.hasColumn(s.Table, s.Column)
+		if err != nil {
+			return fmt.Errorf("add column %s.%s: %w", s.Table, s.Column, err)
+		}
+		if has {
+			continue
+		}
+		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", s.Table, s.Column, s.DDL)
+		if _, err := d.DB.Exec(stmt); err != nil {
+			return fmt.Errorf("add column %s.%s: %w (stmt: %s)", s.Table, s.Column, err, stmt)
+		}
+	}
+	return nil
+}
+
+// hasColumn reports whether table already has column, via PRAGMA table_info.
+func (d *DB) hasColumn(table, column string) (bool, error) {
+	rows, err := d.DB.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			ctype      string
+			notnull    int
+			dfltValue  sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }

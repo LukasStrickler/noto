@@ -56,8 +56,11 @@ func (s *Service) workerLoop(ctx context.Context) {
 	}
 }
 
-// claimNextJob atomically picks the oldest queued job and marks it
-// running. Returns ok=false if none are available.
+// claimNextJob atomically picks the highest-priority queued job (lowest
+// priority value; oldest first within a priority) and marks it running. This is
+// the scheduler: interactive meeting-processing is claimed ahead of bulk reindex
+// / model downloads, and deferred idle-GPU work (JobPriorityIdle) only after
+// everything else drains. Returns ok=false if none are available.
 func (s *Service) claimNextJob() (notoapi.Job, bool) {
 	tx, err := s.jobsDB.Begin()
 	if err != nil {
@@ -65,7 +68,7 @@ func (s *Service) claimNextJob() (notoapi.Job, bool) {
 	}
 	defer tx.Rollback()
 	row := tx.QueryRow(
-		`SELECT `+jobColumns+` FROM jobs WHERE status = ? ORDER BY created_at LIMIT 1`,
+		`SELECT `+jobColumns+` FROM jobs WHERE status = ? ORDER BY priority, created_at LIMIT 1`,
 		string(notoapi.JobQueued),
 	)
 	job, err := scanJob(row)
