@@ -129,6 +129,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   needed `noto bench retrace` on the VAD run first — its trace had the L1 diar-attribution gap.)
 - **~33% of AMI DER lives in overlap regions** (`noto bench overlap`) — the high-headroom half, addressable
   only by real separate-and-re-diarize.
+- **The 20.7% headline is a Mix-Headset (overlapping-mix) artifact; the PRODUCT-relevant number is much
+  better.** `benchmark/dataset/single_speaker_wer.py` (offline, zero-GPU — reuses an existing run's hyps)
+  partitions the anchor transcript by where the reference has exactly 1 speaker active vs ≥2: over 20
+  meetings, **single-speaker WER 15.8%** (58.7k ref words) vs **overlap WER 60.1%** (14.6k) → overall 24.7%.
+  Since the product captures per-channel (your mic alone; system-audio digitally, no acoustic bleed), its
+  real-world case is the single-speaker lane (~16%, near model ceiling), NOT the mixed 20.7%. AMI
+  Mix-Headset is therefore a *pessimistic* proxy; all the WER headroom is concentrated in overlap, which is
+  the capture-gated separate-and-re-diarize lever — confirming overlap (not STT, not the merge) is the
+  accuracy frontier.
+- **Offline word→speaker attribution (the merge) is already optimal** —
+  `benchmark/dataset/attribution_experiment.py` (zero-GPU, `SLICE_SEC`-windowed for ~10s cheap iteration)
+  re-scores cpWER under midpoint / span / span+gap / +smooth re-attribution of each hyp word from the diar
+  turns. Baseline 0.2226; every variant is worse-or-noise (midpoint +4.25 pts, span +1.72, span+gap −0.14,
+  +smooth −0.09). So the cpWER-vs-WER gap is **not** a fixable merge bug — it's intrinsic diarization/overlap
+  error. Rules out an easy offline cpWER win; the only attribution lever left is better diar turns (overlap).
 - **DER measurement:** whole-meeting DER is the per-span decision (DER's speaker-permutation makes a
   single-speaker-window local DER spuriously 0). Diar accept-rule has no seam cost (naive == ceiling).
 - **Cost frontier largely exhausted on AMI:** H3 emb-compile / H4 bigger-GPU / H6 emb_batch all REJECTED,

@@ -79,6 +79,7 @@ Desktop.ini
 !.env.test.example
 .venv-modal/
 .modal-results/
+.modal-*.json
 *.pem
 *.key
 secrets/
