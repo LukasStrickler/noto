@@ -25,6 +25,11 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 ## Ground state (verified green)
 
 - `go build ./...`, `go test ./...`, `go vet ./...` all clean.
+- **CI-health baseline (2026-06-20):** `golangci-lint run ./...` is **0 issues** (was 18; fixed in
+  commit 89774f7); no flaky tests (the speaker cross-meeting test's map-iteration flake fixed in
+  3d51cf8); `go test -race ./...` is **clean across every package** — no data races. Re-running the
+  full race suite is ~200s (benchmark/identity alone is ~135s); don't redo it without a concurrency
+  change to justify it.
 - **Cost north star MET:** 30-meeting AMI anchor is the ledger winner at **$0.01633/audio-hr** (busy
   82.3%), beating the $0.0194 target. Cost is ~90% diarization embedding.
 - Live Modal GPU IS reachable here (`.venv-modal` + `~/.modal.toml`); real gate runs (~$0.03) execute.
