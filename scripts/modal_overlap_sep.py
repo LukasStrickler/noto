@@ -147,8 +147,12 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40) -> dict:
 
 
 @app.local_entrypoint()
-def main(meetings: str = "ES2002a,ES2002b", max_regions: int = 40, out: str = ".modal-overlap-sep.json"):
-    # build 2-speaker overlap regions locally from the reference timeline
+def main(meetings: str = "ES2002a,ES2002b", max_regions: int = 40, min_max_words: int = 3,
+         out: str = ".modal-overlap-sep.json"):
+    # build 2-speaker overlap regions locally from the reference timeline.
+    # min_max_words filters to SUBSTANTIVE overlaps: the most-talkative speaker in
+    # the region said >= this many words (skip dominant + 1-word-backchannel pairs,
+    # which aren't the "two people say real things at once" prize).
     sys.path.insert(0, str(REPO_ROOT / "benchmark" / "dataset"))
     import overlap_regions as ovl  # noqa: E402
     jobs = {}
@@ -161,11 +165,11 @@ def main(meetings: str = "ES2002a,ES2002b", max_regions: int = 40, out: str = ".
         regs = []
         for s, e in ovl.overlap_intervals(ref):
             spk = {k: v for k, v in ovl.words_in(ref, s, e).items() if v}
-            if len(spk) == 2:  # SepFormer is 2-speaker; focus there for the clean test
+            if len(spk) == 2 and max(len(v) for v in spk.values()) >= min_max_words:
                 regs.append({"start": round(s, 3), "end": round(e, 3), "speakers": spk})
         if regs:
             jobs[m] = regs
-            print(f"{m}: {len(regs)} two-speaker overlap regions")
+            print(f"{m}: {len(regs)} substantive two-speaker overlap regions")
     res = separate_and_transcribe.remote(jobs, max_regions)
     Path(out).write_text(json.dumps(res, indent=2))
     print(f"wrote {out}")

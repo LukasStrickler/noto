@@ -166,9 +166,22 @@ transcript garbled it to "Magic animals", the SEPARATED stream recovered "Allerg
 separation CAN recover a speaker the mix destroys. The null average is a SAMPLE artifact: most AMI 2-speaker
 overlaps are one dominant speaker + a 1-word BACKCHANNEL ("first"/"uh"/"ah") — low separation value, and
 SepFormer (balanced-mix-trained) emits a short hallucination ("Thanks"/"No") for the faint 2nd talker.
-**Next: filter to SUBSTANTIVE overlaps (both speakers ≥3-4 words — where region 4 lives) + a bigger sample
-to measure the real recovery rate; the backchannel overlaps aren't the prize (the prize is two people saying
-real things at once).** Cost so far ~$0.05.
+**Next: filter to SUBSTANTIVE overlaps + a bigger sample.** Cost so far ~$0.05.
+
+**★★ Step-2 DECISIVE RESULT (82 substantive 2-spk overlap regions, ES2002a/b + ES2005a; `min_max_words=3`).
+SEPARATION WORKS — overlap cpWER 72.3% → 58.7%, recovery +13.6 pts (19% relative), 36/82 regions improved.**
+On the real prize (two people saying substantive things at once, not dominant+backchannel), running
+SepFormer-WHAMR16k → 2 streams → parakeet each recovers the 2nd speaker the single mixed transcript loses.
+This is the FIRST validated accuracy lever beyond the parakeet/merge ceiling, and it directly answers the
+user's "transcribe both individually" goal. Honest caveats: (a) 58.7% residual — SepFormer artifacts +
+AMI far-field/balanced-mix mismatch leave headroom (a meeting-matched separator or GSS could push further);
+(b) uses REFERENCE overlap regions (oracle overlap detection) — production needs pyannote's overlap
+detector in front; (c) SepFormer is 2-speaker, so 3-4-way AMI overlaps (the worst) are out of scope; (d)
+overlap is ~20% of words, so the meeting-level cpWER gain is smaller (~2-3 pts) but real, and it's exactly
+the "who said what" the product cares about. Total overlap-sep GPU ~$0.10.
+**Next: (1) estimate meeting-level cpWER impact end-to-end; (2) design the production wire — pyannote
+overlap-detection → separate ONLY overlap regions (cheap, ~5 min/meeting) → re-transcribe → merge both into
+the transcript as two attributed speakers; (3) try a stronger/meeting-matched separator to push past 58.7%.**
 
 ## GPU-efficiency / throughput frontier — grounded diagnosis (2026-06-20, user: "push throughput + strong accuracy")
 
