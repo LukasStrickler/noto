@@ -113,6 +113,23 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   just not exposed in the consumer TUI. Kept the non-TUI improvements from that commit (contextBiasTerms
   computed once per job, `min` builtin, comment fixes). The "embed it nicely in the tui" ask is satisfied by
   keeping the TUI a clean consumer surface — NOT by surfacing ops knobs in it.
+- **Production "who said what" correctness review (2026-06-20) — ACTIVE PATH VERIFIED CLEAN.** Swept the
+  production transcript-attribution code (the cpWER-critical core), distinct from the heavily-audited bench
+  MEASUREMENT spine. Findings: (a) `merge.Attribute` (word→speaker) is correct — midpoint-containment →
+  max-overlap → nearest-gap fallback, always returns a speaker when turns exist (no phantom-`""`-speaker
+  bug), `resegment` sentinel + gap logic sound. (b) The DEFAULT normalizer chain
+  (`NewTranscriptNormalizers` = `DiarizationNormalizer` + `SpeakerLabelNormalizer`) is correct and
+  deliberately MINIMAL: DiarizationNormalizer merges adjacent same-speaker turns with duration-weighted
+  confidence; SpeakerLabelNormalizer rewrites only the human-readable `Label`, never the `ID`/segment refs
+  (so `ValidateTranscript` can't reject). The text-rewriting normalizers (Timestamp/Format/Punctuation/
+  Confidence) are deliberately EXCLUDED from the default path (they corrupt provider text — e.g. Format's
+  `\b\w+-\s*` mangles "well-known"→"known"; this is KNOWN and handled by exclusion, NOT a bug to "fix").
+  (c) FIXED a real bug in `TimestampNormalizer`: the >=30s-gap branch appended the segment, then fell through
+  to the unconditional append → DUPLICATED every segment preceding a long gap (commit 9548455, +strengthened
+  test). **Honest caveat:** TimestampNormalizer is an exported, tested component but is **not wired into any
+  production or bench path** (grep-confirmed) — so the fix hardens shipped library code, but its real-world
+  impact is ~nil today (the commit message overstated it as user-facing). Net: the *active* "who said what"
+  path is verified correct; one latent bug in an unused exported normalizer fixed.
 
 ## Dead-code sweep — classified, don't re-investigate (2026-06-20)
 
