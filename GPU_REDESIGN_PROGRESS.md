@@ -16,6 +16,10 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 - **Real transcription + diarization optimization via GPU optimization + repair techniques** — not TUI,
   not test scaffolding. Apply optimizations; don't just build measurement tools.
 - **NO bench TUI. Bench is CLI-only** (`noto bench …`). Reverted an early bench screen; do not re-add.
+- **TUI is a CONSUMER frontend (like a web app); don't expose management/config there** (2026-06-20). VAD,
+  GPU opts, deployment knobs, etc. belong to whoever DEPLOYS the product (config file / admin API), not the
+  end user who "just connects." Reverted the TUI "Accuracy" VAD-toggle section (467e581) for this reason.
+  Keep the TUI clean and consumer-focused; new ops/optimization knobs go to deployment config, not a screen.
 - **Accuracy is the product, cost is the constraint** — "the cheapest thing is bullshit if it's
   inaccurate." cpWER ("who said what") is the product-critical metric.
 - **Two-channel capture** (your mic + all remote participants mixed on system audio; NO Zoom/Meet hooks).
@@ -99,19 +103,16 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
-- **Optimizations embedded in the TUI ("embed it nicely in the tui").** New **Accuracy**
-  config section (`internal/ui/tui/screen_config.go`, `secAccuracy`) surfaces the production
-  opts that were previously config-file-only: **VAD silence-trim** is a live toggle (Enter /
-  click), **entity-repair** shows as always-on status. Toggle rides the existing `PatchConfig`
-  vertical: added `ConfigVAD` to the `notoapi.ConfigCompute` DTO (pointer = patch-presence sets
-  the whole posture, the Privacy idiom; never clobbers sibling Compute fields), `publicComputeConfig`
-  exposes it, `PatchConfig` applies it + `reapplyVADEnv` (symmetric set/unset via single-source
-  `config.VADEnvKeys()`) so a toggle re-syncs the env for the NEXT diar-server incarnation (a
-  not-yet-started server picks it up on first start; an already-warm local pyannote singleton keeps
-  its posture until it restarts — we don't kill a server mid-diarization). NOT a bench screen (the forbidden thing) — it's the
-  production cost lever (VAD trims the dominant diar-embedding cost) made visible + usable. Tested:
-  service patch (env both directions + sibling-preserve), TUI render-reflects-state + Enter-toggles
-  (read-modify-write carries tuning floats).
+- **VAD/optimization is a DEPLOYMENT config, NOT a consumer-TUI toggle (corrected 2026-06-20).** An
+  earlier pass (467e581) added an "Accuracy" config section to the TUI (VAD toggle + entity-repair status)
+  — REVERTED, because the TUI is a CONSUMER frontend (like a web app: people just connect and use it), and
+  management/optimization knobs (VAD, GPU opts) belong to whoever DEPLOYS the product, not the end user.
+  The backend stays: `Compute.VAD` config (file) → `applyVADEnv` at startup is the deployment path, and the
+  `ConfigVAD` DTO + `PatchConfig` + `reapplyVADEnv` remain reachable via the ADMIN HTTP route
+  (`routes_admin`) for operator/deployment config — so VAD is still set the right way (deploy-time / admin),
+  just not exposed in the consumer TUI. Kept the non-TUI improvements from that commit (contextBiasTerms
+  computed once per job, `min` builtin, comment fixes). The "embed it nicely in the tui" ask is satisfied by
+  keeping the TUI a clean consumer surface — NOT by surfacing ops knobs in it.
 
 ## Dead-code sweep — classified, don't re-investigate (2026-06-20)
 
