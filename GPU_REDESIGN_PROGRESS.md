@@ -113,6 +113,28 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   service patch (env both directions + sibling-preserve), TUI render-reflects-state + Enter-toggles
   (read-modify-write carries tuning floats).
 
+## Dead-code sweep — classified, don't re-investigate (2026-06-20)
+
+Ran `golang.org/x/tools/cmd/deadcode` over production reachability, cross-checked vs tests +
+interface satisfaction. Most hits are FALSE POSITIVES: `benchmark/*` is test-harness code (not in the
+`noto` binary), and the `audio.go`/`*.ProviderID` style hits are interface-satisfying methods. The
+genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`): `storage.MeetingStore`
++ wrapper methods, `DirectoryLayout.RelativeToRecordings`, `storage.ParseVersionID`,
+`providers.SortedCapabilities`, and the canonical-JSON checksum trio
+(`ComputeJSONChecksum`/`CanonicalJSON`/`sortJSON`, superseded by raw-byte `ComputeChecksum`).
+
+**KEEP — these are FORWARD INFRA, not old system (do NOT remove on a future sweep):**
+- **Meeting-versioning** (`CreateVersion` + `WriteVersionManifest`/`ReadVersionManifest`/
+  `CopyAudioToVersion`/`ComputeFileChecksum`): `CreateVersion` is tested-only, but `VersionDir`/
+  `VersionsDir` are wired into the live `DirectoryLayout` and `EnsureDirs` creates `versions/` —
+  reserved space for a future writer (transcript-v2/repair per plan B8).
+- **`AudioMetadata` persistence** (`WriteAudioMetadata`/`ReadAudioMetadata`): pairs with the real
+  `artifacts.AudioMetadata` artifact type (has `Kind`/`Version`/`Validate`).
+- **`modelPool.acquire` + byte-budget eviction**: documented forward infra ("ECAPA today;
+  Parakeet/diarizer next"). Caveat: `NOTO_MODEL_MAX_RESIDENT_MB` is parsed + passed to `newModelPool`
+  but INERT until `acquire` is wired (only `pin` runs today, which ignores the budget) — a known gap,
+  not a bug; honest once heavy models get pooled.
+
 ## Key validated findings (hard-won; don't re-derive)
 
 - **Transcription repair sources are weak on AMI (<0.5% WER).** fp32 vs bf16 = byte-identical (greedy TDT
