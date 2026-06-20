@@ -39,3 +39,8 @@ outward to the flagship speaker-recognition work.
   the benchmarked model choice; biometrics stay server-side.
 - [0006 — Robust aggregation & precision-first matching](0006-precision-first-matching-policy.md) ·
   robust centroid and the gates that prevent silent false merges.
+
+**Transcription quality**
+
+- [0007 — Overlap separation as a deferred, idle-GPU refinement pass](0007-overlap-separation-refinement-pass.md) ·
+  transcribe both speakers when they overlap; cheap, deferred, v2-additive (measured +15pt overlap cpWER).
