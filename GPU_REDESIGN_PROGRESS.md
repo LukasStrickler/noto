@@ -294,6 +294,20 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   opt-in changes; local users untouched. End-to-end hosted measurement is B2-gated, but the worker ceiling
   that would bottleneck it is gone.
 
+## Preprocessing / "cut out noise" — attempted, blocked by image fragility (2026-06-20)
+
+User asks repeatedly for "smart preprocessing / cut out noise." Tried the most legitimate version for
+far-field AMI: **single-channel WPE dereverberation** (`nara_wpe`) as an STT-server audio transform +
+`dereverb` bench knob (followed the `perturb` pattern). The gate run FAILED — but not at dereverb: adding
+`nara_wpe` to the shared image pulled numpy/scipy that **broke the pyannote diar server** (it crashed on
+load, "server exited mid-request"). Same class of breakage as the Mossformer2/clearvoice attempt — the heavy
+`nemo + pyannote + torch` bench image is FRAGILE to new numpy/scipy packages. **Reverted cleanly (no net
+code change).** Lessons: (1) don't add numpy/scipy packages to the shared bench image — implement
+preprocessing in PURE numpy (already present) or an isolated image/process; (2) dereverb EV on AMI is modest
+anyway (single-speaker WER 15.8% is near ceiling — little reverb headroom on the clean parts; the big error
+is overlap, which dereverb doesn't address). ~$0.03 GPU on the failed run. If revisited: pure-numpy WPE (no
+dep) or a sidecar image; higher EV on genuinely noisy/reverberant real-world audio than on AMI.
+
 ## Key validated findings (hard-won; don't re-derive)
 
 - **Transcription repair sources are weak on AMI (<0.5% WER).** fp32 vs bf16 = byte-identical (greedy TDT
