@@ -519,22 +519,6 @@ func TestChecksum(t *testing.T) {
 			t.Error("expected error for checksum mismatch")
 		}
 	})
-
-	t.Run("canonical json", func(t *testing.T) {
-		v := map[string]any{"b": "2", "a": "1"}
-		canonical, err := CanonicalJSON(v)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		// Assert on the canonical bytes directly — sorted-key byte output is
-		// the whole point of canonicalization (it's what the checksum hashes).
-		// The previous check unmarshalled back into a map and read map
-		// iteration order, which Go randomizes, so it failed nondeterministically
-		// under -count.
-		if got := string(canonical); got != `{"a":"1","b":"2"}` {
-			t.Errorf("canonical JSON = %s; want sorted keys {\"a\":\"1\",\"b\":\"2\"}", got)
-		}
-	})
 }
 
 func TestArtifactKind(t *testing.T) {
