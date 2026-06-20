@@ -48,6 +48,31 @@ corpus's word annotations into this shape **once**; the Go loaders only ever rea
 this clean form, decoupled from AMI's NXT/CTM layout. A NIST `ParseCTM` helper is
 also provided for callers holding per-speaker CTM files directly.
 
+## Research & analysis scripts
+
+Beyond the core loaders, this dir holds the accuracy-research experiments (findings
+recorded in [`GPU_REDESIGN_PROGRESS.md`](../../GPU_REDESIGN_PROGRESS.md)). Offline
+ones reuse an existing run's hyps (zero GPU); the `scripts/modal_*` ones run a
+bounded Modal pass and write a JSON the local scorer reads.
+
+**Offline (no GPU — reuse a stored run's hyps):**
+
+| Script | Question → finding |
+|--------|--------------------|
+| `single_speaker_wer.py` | split WER by single-speaker vs overlap regions → single 15.8% (near ceiling) vs overlap 60.1%; the 20.7% headline is a Mix-Headset (overlap) artifact |
+| `attribution_experiment.py` | can re-attributing words to diar turns cut cpWER? → no, the production merge is already optimal |
+| `overlap_regions.py` | extract overlap regions + per-speaker ref words → the ground truth for evaluating separation |
+
+**Modal STT/separation experiments (`scripts/modal_*.py` + local scorer here):**
+
+| Experiment | Scripts | Finding |
+|-----------|---------|---------|
+| Overlap **separation** ("transcribe both") | `scripts/modal_overlap_sep.py` + `score_overlap_sep.py` | SepFormer → 2 streams → STT each recovers the 2nd speaker: **+15pt** overlap cpWER on substantive overlaps ([ADR 0007](../../.docs/decisions/0007-overlap-separation-refinement-pass.md)) |
+| Accented WER (parakeet-weak set) | `scripts/modal_edacc_wer.py` + `fetch_edacc.py` + `score_edacc.py` | parakeet weak on hard accents (Spanish 29%, Kenyan 19%); but canary loses everywhere → model-swap repair is a dead-end |
+| Per-channel WER (AMI-IHM) | `scripts/modal_ihm_wer.py` + `fetch_ami_ihm.py` + `score_ihm.py` | individual headsets carry cross-talk bleed → naive per-channel scoring is misleading; superseded by `single_speaker_wer.py` |
+
+(`.modal-*.json` result dumps are gitignored.)
+
 ## A Meeting feeds every scorer
 
 `Meeting` converts itself into exactly what `metrics` consumes:
