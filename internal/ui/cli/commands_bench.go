@@ -409,6 +409,10 @@ func (a *app) runBenchDiarRepairAttempt(args []string) int {
 		fmt.Fprintf(a.out, "             → real fixes exist; the gap is selector headroom (production needs a better selector)\n")
 	}
 	fmt.Fprintf(a.out, "  cost:      $%.5f re-diarize\n", res.CostUSD)
+	if res.CostUSD == 0 {
+		fmt.Fprintf(a.out, "             (cost $0 — the alternate run's trace has no diarization cost attributed;\n")
+		fmt.Fprintf(a.out, "              run `noto bench retrace --run %s` first to derive it from the hyps)\n", res.AltRunID)
+	}
 	gate := "PASS — re-diarization beats do-nothing; eligible for production"
 	if !res.GatePass {
 		gate = "FAIL — not yet worth a production write"
