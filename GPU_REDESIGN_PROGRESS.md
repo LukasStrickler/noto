@@ -135,6 +135,27 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
   but INERT until `acquire` is wired (only `pin` runs today, which ignores the budget) — a known gap,
   not a bug; honest once heavy models get pooled.
 
+## GPU-efficiency / throughput frontier — grounded diagnosis (2026-06-20, user: "push throughput + strong accuracy")
+
+From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench scale`, not speculation:
+- **diar EMBEDDING = 95.2% of compute** ($0.1198/$0.1258); ASR is 4.8%. Throughput is gated entirely by
+  the embedding ResNet's GPU compute.
+- **GPU 82.3% busy, 100% peak util while running, peak VRAM 19.5/48 GB (40%).** The embedding is
+  **COMPUTE-bound, not VRAM-bound** — so the 40% VRAM headroom is NOT usable throughput headroom, and
+  bigger embedding batches (`emb_batch`) are a no-win (same FLOPs) — which matches its prior rejection.
+- **Scale model: fixed $0.0189 + marginal FLOOR $0.0139/audio-hr.** The ~18% idle is mostly fixed overhead
+  that AMORTIZES with batch size: $/audio-hr → $0.0141 at 100h. So the quality-NEUTRAL throughput lever
+  (scale / fill idle) is already near-optimal and bottoms out at ≈ the floor.
+- **The floor ($0.0139) is the embedding compute rate.** Below it needs a RATE win: (a) fewer audio-seconds
+  embedded = VAD work-reduction — quality-PRESERVING but rejected on AMI (dense: Silero overhead > silence
+  trimmed, +25%); REAL remote meetings have turn-taking silence AMI lacks, so this is a BENCH gap, not a
+  dead lever; or (b) a cheaper embedding model = quality TRADEOFF, which conflicts with "strong accuracy."
+- **Net: the AMI batch is at its quality-PRESERVING throughput frontier.** Quality-neutral packing is done;
+  the one quality-preserving rate-win (VAD) can't be shown on pathologically-dense AMI. **"Optimise
+  benchmarks first": a realistic meeting suite WITH natural silence is the unlock for the VAD throughput
+  lever** — the bench (dense AMI) under-represents the product's real audio. Accuracy frontier stays overlap
+  (capture-gated). Both axes' remaining gains are bench/data-gated, not algorithm-gated.
+
 ## Key validated findings (hard-won; don't re-derive)
 
 - **Transcription repair sources are weak on AMI (<0.5% WER).** fp32 vs bf16 = byte-identical (greedy TDT
