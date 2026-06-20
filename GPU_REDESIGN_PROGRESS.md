@@ -160,22 +160,25 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
   Mix-Headset is therefore a *pessimistic* proxy; all the WER headroom is concentrated in overlap, which is
   the capture-gated separate-and-re-diarize lever — confirming overlap (not STT, not the merge) is the
   accuracy frontier.
-- **★ The ledger KPIs use ORACLE speaker count — they OVERSTATE real product accuracy (esp. cpWER).**
-  The AMI bench tells the diarizer the true speaker count (`benchmark/e2e/ami_test.go`:
-  `numSpk := distinctSpeakers(m.Turns)` → `diarize.DiarizeOptions{NumSpeakers: numSpk}`), but PRODUCTION
-  (`jobs_pipeline.go:94`) passes `NumSpeakers: 0` (auto-detect) and never a hint — the count is genuinely
-  unknown at meeting time, so auto IS the correct product default. Auto-counting is materially harder for
-  pyannote: mis-counts cause speaker confusion that inflates DER and especially **cpWER** (the
-  product-critical "who said what"). So WER 20.7 / DER 8.4 / **cpWER 27** are an oracle-count CEILING, not
-  what a user gets. The lever is better count ESTIMATION, NOT faking a prod oracle.
-- **Two bench-vs-product gaps pull OPPOSITE ways (net honest picture):** (1) Mix-Headset overlap makes WER
-  *pessimistic* — the product captures per-channel, so its real single-speaker WER is 15.8%, not the mixed
-  20.7%; (2) oracle speaker count makes DER/cpWER *optimistic* — the product auto-counts. They partly
-  offset on WER but NOT on cpWER, where oracle-count optimism dominates → real product cpWER is likely
-  WORSE than 27%. **Next high-EV validation (≈$0.06, one knob):** one gate run with auto-count
-  (`diar_speakers=auto` vs the existing oracle baseline) sizes the cpWER/DER gap — the single most
-  decision-relevant unknown for "really good kpis." NOT yet run (a new GPU direction; awaiting greenlight
-  rather than autonomous spend).
+- **★ The oracle-count KPI concern is MEASURED and REFUTED on AMI — the KPIs are honest on speaker count
+  (don't re-run).** The AMI bench tells the diarizer the true speaker count (`benchmark/e2e/ami_test.go`:
+  `numSpk := distinctSpeakers(m.Turns)`), while PRODUCTION (`jobs_pipeline.go:94`) passes `NumSpeakers: 0`
+  (auto-detect; the count is unknown at meeting time, so auto is the correct product default). I built a
+  `diar_speakers=auto` knob (commit 8077ab0) and ran the gate product-realistically (run
+  `20260620T141513Z-ddd52f`, ~$0.05): **DER 0.0838 vs oracle 0.0837 (IDENTICAL), cpWER attribution error
+  (cpWER−WER) 0.063 vs 0.062 (unchanged).** Per-meeting, pyannote auto-detect nailed the count on 4/5
+  meetings (4 spk) and was off-by-one on one (5 vs 4). So **auto ≈ oracle on AMI** — pyannote's auto speaker
+  counting is essentially as good as being told the count; the headline WER 20.7 / DER 8.4 / cpWER 27 do
+  NOT materially overstate product accuracy from the oracle advantage. Hypothesis (oracle inflates cpWER)
+  was WRONG on AMI. *Secondary:* auto-count needs more GPU memory headroom at high diar concurrency — it
+  OOM-crashed the pyannote server at the gate's 10 workers where oracle fit; re-ran clean at
+  `BENCH_DIAR_WORKERS=1`. Production diarizes at low concurrency, so this is a bench-saturation artifact,
+  not a product issue (but a real note for diar batch sizing under auto-count).
+- **Net bench-vs-product honesty (now measured, not assumed):** the one REMAINING optimism/pessimism gap is
+  Mix-Headset overlap, which makes WER *pessimistic* — the product captures per-channel, so its real
+  single-speaker WER is 15.8%, not the mixed 20.7%. The oracle-count gap I worried about turned out
+  negligible (above). So the honest read is the KPIs are if anything *conservative* on WER for the
+  per-channel product, and representative on diarization.
 - **Offline word→speaker attribution (the merge) is already optimal** —
   `benchmark/dataset/attribution_experiment.py` (zero-GPU, `SLICE_SEC`-windowed for ~10s cheap iteration)
   re-scores cpWER under midpoint / span / span+gap / +smooth re-attribution of each hyp word from the diar
