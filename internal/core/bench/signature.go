@@ -1,7 +1,5 @@
 package bench
 
-import "math"
-
 // CheckHypothesisSignature validates required movers for gated hypotheses (§12.15).
 func CheckHypothesisSignature(hypothesisID string, base, cand RunBundle, waterfall map[string]float64) *SignatureCheck {
 	check := &SignatureCheck{
@@ -62,8 +60,4 @@ func RejectGateKnobBundle(m RunManifest) bool {
 		return false
 	}
 	return len(m.Knobs) > 1
-}
-
-func absPct(v float64) float64 {
-	return math.Abs(v)
 }
