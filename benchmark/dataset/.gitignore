@@ -9,3 +9,6 @@
 # fetched reference transcripts (produced by the fetchers, re-downloadable)
 words/
 .cache/
+
+# fetched AMI-IHM headset audio + split refs (re-downloadable)
+ami_ihm/
