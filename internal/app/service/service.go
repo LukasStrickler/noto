@@ -83,6 +83,15 @@ type Service struct {
 	jobCancels map[string]context.CancelFunc
 	workerWake chan struct{}
 
+	// bgCancel stops the goroutines Start launched (the worker pool, status-bar
+	// and evictor loops); bgWG tracks them so Close can WAIT for them to drain
+	// before tearing down the resources they use (the jobs DB, the event hub).
+	// Without this, a worker could write the jobs DB or publish to a closed hub
+	// after Close returned — a shutdown race (and the source of a TempDir-cleanup
+	// flake in the host conformance test).
+	bgCancel context.CancelFunc
+	bgWG     sync.WaitGroup
+
 	started time.Time
 	version string
 }
@@ -309,13 +318,34 @@ func (s *Service) Start(ctx context.Context) error {
 	if err := s.recoverInterruptedJobs(ctx); err != nil {
 		return fmt.Errorf("service: recover jobs: %w", err)
 	}
+	// Own the background goroutines' lifetime so Close can stop AND join them.
+	ctx, s.bgCancel = context.WithCancel(ctx)
 	s.startWorkers(ctx)
-	go s.statusBarLoop(ctx)
-	go s.pool.runEvictor(ctx)
+	s.goBG(func() { s.statusBarLoop(ctx) })
+	s.goBG(func() { s.pool.runEvictor(ctx) })
 	return nil
 }
 
+// goBG runs fn as a tracked background goroutine so Close can wait for it.
+func (s *Service) goBG(fn func()) {
+	s.bgWG.Add(1)
+	go func() {
+		defer s.bgWG.Done()
+		fn()
+	}()
+}
+
 func (s *Service) Close() error {
+	// Stop the background goroutines and WAIT for them to drain BEFORE closing
+	// the resources they touch (event hub, model pool) — a worker mid-job writes
+	// the jobs DB and publishes job events, so tearing those down first would
+	// race it. Canceling propagates into any in-flight job's context, so a worker
+	// aborts promptly rather than running the whole job to completion.
+	if s.bgCancel != nil {
+		s.bgCancel()
+	}
+	s.bgWG.Wait()
+
 	s.events.close()
 	s.recMu.Lock()
 	if s.recStopMeters != nil {

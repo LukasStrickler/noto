@@ -338,9 +338,19 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   (incremented on every claim): past `maxJobAttempts=3` a reliably-crashing job is parked as `interrupted`
   rather than crash-looping the server on each startup. Tested: resume-under-cap (→queued, priority preserved,
   progress reset), park-at-cap (→interrupted), and resumed-then-claimable (the resumed job is immediately
-  claimable and its attempt increments on re-claim). Build/vet/lint(0)/race clean. (Pre-existing intermittent
-  harness flake noted: `TestClientConformance_Direct` TempDir `RemoveAll` "directory not empty" under the full
-  parallel `./...` run — a lingering SQLite WAL-vs-teardown race, orthogonal to this change; passes isolated.)
+  claimable and its attempt increments on re-claim). Build/vet/lint(0)/race clean.
+- **★ Graceful shutdown — Close now joins the worker goroutines (2026-06-20).** `Start` launched the worker
+  pool + status-bar/evictor loops as FIRE-AND-FORGET goroutines tied to the caller's ctx, but `Close()`
+  neither canceled nor WAITED for them — and it tore down the event hub + model pool FIRST. So a worker
+  mid-job could write the jobs DB or `publish` to a closed hub after Close returned: a genuine production
+  shutdown race, and the cause of the `TestClientConformance_Direct` TempDir `RemoveAll` "directory not empty"
+  flake (a worker recreating the SQLite WAL while the test deleted its temp dir). Fix: the service now OWNS
+  its background goroutines' lifetime — `Start` derives a cancelable ctx (`bgCancel`) and runs every goroutine
+  through `goBG` (a `sync.WaitGroup`); `Close` cancels then `bgWG.Wait()`s BEFORE closing the hub/pool, so the
+  teardown order is cancel → drain → close. Cancel propagates into any in-flight job's context (workers also
+  bail out of the claim loop the moment `ctx.Err()≠nil`), so shutdown is prompt, not "run the whole queue
+  down." Verified: the previously-flaky conformance test now passes 8/8 isolated + 4/4 full-host-package + 2/2
+  full `./...`; vet/lint(0)/race all clean. **Restores the doc's "no flaky tests" ground-state invariant.**
 - **Pipeline-internal parallelism VERIFIED exhausted (not just assumed).** Read the actual stage code: STT and
   diarization already run CONCURRENTLY in `runTranscribe` (diar in a goroutine, joined at the merge — the
   first point needing both); the 95%-cost speaker embedding is genuinely data-dependent on the merge; and

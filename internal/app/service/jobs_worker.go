@@ -25,7 +25,7 @@ func (s *Service) startWorkers(ctx context.Context) {
 		n = config.DefaultLocalJobWorkers
 	}
 	for i := 0; i < n; i++ {
-		go s.workerLoop(ctx)
+		s.goBG(func() { s.workerLoop(ctx) })
 	}
 }
 
@@ -47,6 +47,11 @@ func (s *Service) workerLoop(ctx context.Context) {
 		case <-s.workerWake:
 		}
 		for {
+			// Stop claiming new work the moment shutdown begins, so Close's
+			// wait drains promptly instead of running the whole queue down.
+			if ctx.Err() != nil {
+				return
+			}
 			job, ok := s.claimNextJob()
 			if !ok {
 				break
