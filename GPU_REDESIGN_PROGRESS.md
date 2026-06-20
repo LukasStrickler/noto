@@ -93,10 +93,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
     long-form handling + its punctuation (the " . " tokens inflated WER and would pollute a splice).
   - **Fix (commit 2ec706c):** decode canary in fixed ≤30 s windows + stitch with per-window timestamp offsets
     (`words_of` gained `time_offset`); default `pnc='no'` so output is plain lowercase like parakeet/the ref.
-  - **Run 2 (chunked, in flight):** validating. NEXT when it lands: standalone WER (expect ≪0.83 — is canary
-    actually stronger than parakeet 0.21?), then `repair-attempt(2f6cc5, canary2)` for the repair KPI. If
-    canary's standalone WER beats parakeet, the bigger result may be "canary is a better PRIMARY model", not
-    just a repair source.
+  - **Run 2 (chunked, `20260620T082658Z-b05ed8`) — DEFINITIVE NEGATIVE.** Chunking fixed the truncation
+    (3052 words, WER 0.83→0.37) but canary-1b-flash is genuinely **WORSE than parakeet on AMI**: WER 0.374 vs
+    0.207, cpWER 0.545 vs 0.270 (FAIR comparison — `hypWordTokens` applies `metrics.Normalize`, so canary's
+    punctuation/caps are stripped; the residual `pnc='no'`-ignored output is cosmetic). As a repair source:
+    `repair-attempt(2f6cc5, canary2)` → net WER Δ +0.0037, **oracle ceiling 0 edits** — zero whole-transcript
+    value. (DER identical 0.0837 throughout — only STT changed.)
+  - **★ CONCLUSION — transcription-repair sources are EXHAUSTED on AMI (5 validated):** fp32 = identical,
+    beam/maes = identical, parakeet-1.1b = weaker, perturbation = weak (−0.0004), canary-1b-flash = WORSE
+    (0.37 vs 0.21). On AMI far-field overlapping meeting audio, **parakeet-tdt-0.6b-v3 is already the best
+    available model** — no alternative beats it, so model-based transcription repair has NO headroom here. The
+    repair MACHINE is fully validated (it correctly rejected every weak source). **Strategic:** transcription
+    repair can only show value on a benchmark where parakeet is WEAK (accented / domain-jargon / code-switch /
+    noisy non-meeting audio) — i.e. the plan's A8b slice suites, which need datasets. The canary long-form
+    adapter (commits 5b55b46, 2ec706c) is kept — it WORKS and would help wherever canary is the stronger
+    model; AMI just isn't that place. ~$0.10 GPU spent; conclusion is definitive — do not re-run canary on AMI.
 - **Diarization overlap (the 33% headroom)** → separate-and-re-diarize, GATED on real **system-audio
   capture**: `cmd/capture/main.swift` taps the mic only; system audio is an acknowledged stub
   ("requires AudioHardware APIs"). macOS/ScreenCaptureKit work; can't build/validate from this Linux box.
