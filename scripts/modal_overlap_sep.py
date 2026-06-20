@@ -82,6 +82,10 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40, pad_sec: float = 
         source=SEP_MODEL, savedir=str(MODEL_MOUNT / "sep" / SEP_MODEL.replace("/", "_")),
         run_opts={"device": "cuda"})
 
+    def separate(clip):  # clip: 1-D torch tensor @ SR → [time, n_src] torch
+        est = sep.separate_batch(clip.unsqueeze(0).to("cuda"))
+        return est.squeeze(0).cpu()
+
     # start the production parakeet STT server (one warm process)
     env = {**os.environ, "NOTO_PARAKEET_PROVIDER": "cuda", "NOTO_PARAKEET_PRECISION": "bf16",
            "NOTO_PARAKEET_MODEL": "nvidia/parakeet-tdt-0.6b-v3", "NOTO_PARAKEET_BATCH": "8",
@@ -134,8 +138,7 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40, pad_sec: float = 
                 pad = int(pad_sec * SR)
                 sa, sb = max(0, a - pad), min(wav.shape[0], b + pad)
                 sep_clip = wav[sa:sb]
-                est = sep.separate_batch(sep_clip.unsqueeze(0).to("cuda"))
-                est = est.squeeze(0).cpu()  # [time, n_src]
+                est = separate(sep_clip)  # [time, n_src]
                 oa, ob = a - sa, b - sa  # overlap-span offsets within the padded clip
                 sep_hyps = []
                 for s in range(est.shape[-1]):

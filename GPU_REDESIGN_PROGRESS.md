@@ -214,6 +214,23 @@ design is ALWAYS-SEPARATE the substantive overlap regions (robust +12-15pt); the
 pyannote's overlap detection — NOT STT confidence. The per-region keep-mix-vs-sep refinement to trim the
 −33pt losses is unsolved and deferred (not blocking the headline win).**
 
+**Step-3d — stronger BLIND separator (Mossformer2) doesn't help; separator at ungated ceiling.** Tried
+Mossformer2 (clearvoice) as the SOTA alt backend — clearvoice INSTALLED + ran but its output format didn't
+match (separated streams came back empty), so the run scored == baseline (integration failure, not a real
+Mossformer2 result). Reverted the clearvoice path (kept the validated SepFormer script + the clean
+`separate()` abstraction). **Strategic conclusion: a stronger BLIND separator wouldn't fundamentally help
+anyway** — SepFormer AND Mossformer2 are both trained on SYNTHETIC balanced 2-speaker mixes (WSJ0/WHAM), so
+both have the same domain mismatch with AMI far-field PARTIAL overlap. The fix is an **AMI-TRAINED** separator
+(`pyannote/speech-separation-ami-1.0`, joint diar+sep, PixIT) — but pyannote separation models are GATED
+(need a HF token + accepted terms; the project deliberately uses the ungated community-1 diar mirror). So
+**padded SepFormer (~57% overlap cpWER, +15pt) is the best VALIDATED ungated config, and the separator is at
+its practical ungated ceiling.** Further separator quality needs either a gated AMI-trained model OR — the
+better PRODUCT answer — **two-channel capture** (you-vs-remote separates by CHANNEL, no model, perfect; only
+remote-vs-remote needs the model), which is macOS-gated. **Net: overlap-separation RESEARCH is at a strong,
+proven conclusion (+15pt lever, always-separate + diarizer-gate architecture, padded, ungated ceiling ~57%).
+The next move is PRODUCT: wire the proven lever, not chase marginal ungated separators.** Total overlap-sep
+GPU ~$0.40.
+
 **Step-3b — CONTEXT WINDOW improves separation (free, same model).** Separating the TIGHT overlap span
 starved SepFormer of context (it's trained on fully-overlapped clips). Fix: `pad_sec` separates a WIDER
 window (±2s of surrounding single-speaker audio) then transcribes only the overlap PORTION of each stream.
