@@ -12,3 +12,6 @@ words/
 
 # fetched AMI-IHM headset audio + split refs (re-downloadable)
 ami_ihm/
+
+# fetched EdAcc accented-English clips + refs (re-downloadable via fetch_edacc.py)
+edacc_wer/
