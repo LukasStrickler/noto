@@ -160,6 +160,22 @@ genuinely-dead, zero-intent symbols were REMOVED (commits `1ab7b99`, `e07975d`):
   Mix-Headset is therefore a *pessimistic* proxy; all the WER headroom is concentrated in overlap, which is
   the capture-gated separate-and-re-diarize lever — confirming overlap (not STT, not the merge) is the
   accuracy frontier.
+- **★ The ledger KPIs use ORACLE speaker count — they OVERSTATE real product accuracy (esp. cpWER).**
+  The AMI bench tells the diarizer the true speaker count (`benchmark/e2e/ami_test.go`:
+  `numSpk := distinctSpeakers(m.Turns)` → `diarize.DiarizeOptions{NumSpeakers: numSpk}`), but PRODUCTION
+  (`jobs_pipeline.go:94`) passes `NumSpeakers: 0` (auto-detect) and never a hint — the count is genuinely
+  unknown at meeting time, so auto IS the correct product default. Auto-counting is materially harder for
+  pyannote: mis-counts cause speaker confusion that inflates DER and especially **cpWER** (the
+  product-critical "who said what"). So WER 20.7 / DER 8.4 / **cpWER 27** are an oracle-count CEILING, not
+  what a user gets. The lever is better count ESTIMATION, NOT faking a prod oracle.
+- **Two bench-vs-product gaps pull OPPOSITE ways (net honest picture):** (1) Mix-Headset overlap makes WER
+  *pessimistic* — the product captures per-channel, so its real single-speaker WER is 15.8%, not the mixed
+  20.7%; (2) oracle speaker count makes DER/cpWER *optimistic* — the product auto-counts. They partly
+  offset on WER but NOT on cpWER, where oracle-count optimism dominates → real product cpWER is likely
+  WORSE than 27%. **Next high-EV validation (≈$0.06, one knob):** one gate run with auto-count
+  (`diar_speakers=auto` vs the existing oracle baseline) sizes the cpWER/DER gap — the single most
+  decision-relevant unknown for "really good kpis." NOT yet run (a new GPU direction; awaiting greenlight
+  rather than autonomous spend).
 - **Offline word→speaker attribution (the merge) is already optimal** —
   `benchmark/dataset/attribution_experiment.py` (zero-GPU, `SLICE_SEC`-windowed for ~10s cheap iteration)
   re-scores cpWER under midpoint / span / span+gap / +smooth re-attribution of each hyp word from the diar
