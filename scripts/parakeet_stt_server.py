@@ -297,10 +297,20 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
     # TDT path byte-identical and passes them only to a canary model, which needs them to
     # do plain (English, punctuated) ASR. Word timestamps come from the same
     # timestamps=True path (use canary-1b-flash, which supports them).
-    if "canary" in model_name.lower():
+    is_canary = "canary" in model_name.lower()
+    if is_canary:
         lang = os.getenv("NOTO_CANARY_LANG", "en")
-        opt_candidates.update({"source_lang": lang, "target_lang": lang, "pnc": "yes"})
+        # pnc='no' → no punctuation/capitalization, so canary's output matches the plain
+        # lowercase form parakeet and the AMI reference use (punctuated output would score
+        # every comma/period as an error and pollute a repair splice). Overridable.
+        pnc = os.getenv("NOTO_CANARY_PNC", "no")
+        opt_candidates.update({"source_lang": lang, "target_lang": lang, "pnc": pnc})
     opt = {k: v for k, v in opt_candidates.items() if k in sig}
+
+    # Canary is a 40 s-context model (max_duration=40); a full meeting fed whole to
+    # transcribe() is truncated to a fraction (measured: 1178 of 4531 words, WER 0.83).
+    # So canary decodes in fixed windows and stitches with per-window timestamp offsets.
+    canary_window_sec = float(os.getenv("NOTO_CANARY_WINDOW_SEC", "30") or 30)
 
     # Encoder frame duration for offset→seconds fallback (8× subsampled 10 ms).
     try:
@@ -308,7 +318,7 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
     except Exception:
         frame_sec = 0.08
 
-    def words_of(hyp, time_scale: float = 1.0) -> dict:
+    def words_of(hyp, time_scale: float = 1.0, time_offset: float = 0.0) -> dict:
         if isinstance(hyp, list):  # n-best shape → best hypothesis
             hyp = hyp[0] if hyp else ""
         if isinstance(hyp, str):  # no timestamp support → let Go fall back
@@ -333,7 +343,7 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
                 end = float(w.get("end_offset", 0)) * frame_sec
             # Map perturbed-timeline stamps back to the original audio (speed warp);
             # time_scale is 1.0 for unperturbed / non-time-warping perturbations.
-            words.append((word, float(start) * time_scale, float(end) * time_scale))
+            words.append((word, float(start) * time_scale + time_offset, float(end) * time_scale + time_offset))
             # Prefer a per-word confidence carried on the timestamp dict; else the
             # parallel hyp.word_confidence list; else this word drops out of the
             # confidence stream (so a partial list never misaligns the rest).
@@ -419,9 +429,68 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
         # All inputs share one NOTO_PARAKEET_PERTURB → one time-scale for the batch.
         time_scale = perturbed[0][1] if perturbed else 1.0
 
-        def _decode():
+        def _decode_paths(decode_wavs):
             with torch.inference_mode(), amp:
-                return model.transcribe(audio=wavs, batch_size=min(batch, len(paths)), **opt)
+                return model.transcribe(audio=decode_wavs, batch_size=min(batch, len(decode_wavs)), **opt)
+
+        def _decode():
+            return _decode_paths(wavs)
+
+        def _canary_long(wav, decode, scratch_list, scale, window_sec):
+            import soundfile as sf
+            import tempfile
+
+            data, sr = sf.read(wav, dtype="float32")
+            if getattr(data, "ndim", 1) > 1:
+                data = data.mean(axis=1)
+            win = int(window_sec * sr)
+            if win <= 0 or len(data) <= win:
+                h = decode([wav])
+                if isinstance(h, tuple):
+                    h = h[0]
+                return words_of(h[0] if h else "", scale)
+            win_paths: list[str] = []
+            offsets: list[float] = []
+            for s in range(0, len(data), win):
+                seg = data[s:s + win]
+                if len(seg) < int(0.2 * sr):  # skip a sub-200 ms tail
+                    continue
+                tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                sf.write(tmp.name, seg, sr)
+                scratch_list.append(tmp.name)
+                win_paths.append(tmp.name)
+                offsets.append(s / sr)
+            hyps = decode(win_paths)
+            if isinstance(hyps, tuple):
+                hyps = hyps[0]
+            merged: dict = {"text": "", "tokens": [], "timestamps": [], "durations": []}
+            confs: list[float] = []
+            have_conf = True
+            for off, h in zip(offsets, hyps):
+                wd = words_of(h, scale, off)
+                merged["text"] = (merged["text"] + " " + wd["text"]).strip()
+                merged["tokens"] += wd["tokens"]
+                merged["timestamps"] += wd["timestamps"]
+                merged["durations"] += wd["durations"]
+                if "confidences" in wd:
+                    confs += wd["confidences"]
+                else:
+                    have_conf = False
+            if have_conf and confs:
+                merged["confidences"] = confs
+            return merged
+
+        # Canary long-form: window each meeting into ≤canary_window_sec chunks, decode
+        # them, and stitch each meeting's words back with per-window timestamp offsets.
+        if is_canary:
+            try:
+                return [_canary_long(w, _decode_paths, scratch, time_scale, canary_window_sec) for w in wavs]
+            finally:
+                for p in scratch:
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
 
         try:
             try:
