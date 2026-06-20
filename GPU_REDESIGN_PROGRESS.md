@@ -195,7 +195,26 @@ needed) + the 2-speaker "transcribe both individually" recovery.
 **Production architecture (grounded, ready to design):** STT(mix) ∥ diar+overlap-detection → for overlap
 regions where mix confidence is LOW: separate → re-transcribe each stream → merge BOTH as attributed
 speakers; else keep the mix. The separation pass is a deferred/idle-GPU secondary stage, not a whole-meeting
-cost. **Step-3b — CONTEXT WINDOW improves separation (free, same model).** Separating the TIGHT overlap span
+cost. **Step-3c — no-reference selectors DON'T work; always-separate is robust (free analysis).** Tested whether
+a runtime-computable signal (separated/mixed word-count ratio, inter-stream distinctness) predicts the
+win/loss so we could gate WITHOUT the ref. They barely discriminate (wins sepw/mixw 1.86 vs losses 1.51;
+distinct 0.95 vs 0.88) and gating on them is WORSE than always-separate (61-63% vs 57.1%). So: (a)
+ALWAYS-SEPARATE the substantive overlap regions is the robust simple choice (+15pt, 57.1%); (b) the ONLY
+clean win/loss predictor is mix QUALITY (baseline cpWER 0.85 wins vs 0.50 losses) → production proxy = mix
+STT CONFIDENCE (the server emits `confidences[]` = normalized Tsallis entropy under `NOTO_PARAKEET_CONFIDENCE=1`,
+higher = more confident; low conf ≈ mix failing ≈ separate). The selector's role is thus mainly COMPUTE
+EFFICIENCY (which overlaps to bother separating) + trimming the −33pt losses, not the headline accuracy.
+**UPDATE — confidence proxy ALSO fails (validated, run `.modal-overlap-sep-conf`):** ran with
+`NOTO_PARAKEET_CONFIDENCE=1` and captured the mix's per-word confidence; on these short overlap clips the
+values compress to ~0 (wins 0.000 vs losses 0.002 — right direction but far too weak) and gating on them is
+worse than always-separate (60-62% vs 54.6%). parakeet's entropy-confidence is uninformative on short
+overlapping audio. **So BOTH candidate selector signals (no-ref + STT confidence) fail → the production
+design is ALWAYS-SEPARATE the substantive overlap regions (robust +12-15pt); the compute-efficiency gate
+(which regions to separate) uses cheap DIARIZER heuristics — overlap duration + ≥2 substantive speakers from
+pyannote's overlap detection — NOT STT confidence. The per-region keep-mix-vs-sep refinement to trim the
+−33pt losses is unsolved and deferred (not blocking the headline win).**
+
+**Step-3b — CONTEXT WINDOW improves separation (free, same model).** Separating the TIGHT overlap span
 starved SepFormer of context (it's trained on fully-overlapped clips). Fix: `pad_sec` separates a WIDER
 window (±2s of surrounding single-speaker audio) then transcribes only the overlap PORTION of each stream.
 Result on the same 82 regions: separated cpWER **58.7% → 57.1%** (recovery +13.6 → +15.2 pts, 36 → 38

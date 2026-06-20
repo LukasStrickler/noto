@@ -84,7 +84,8 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40, pad_sec: float = 
 
     # start the production parakeet STT server (one warm process)
     env = {**os.environ, "NOTO_PARAKEET_PROVIDER": "cuda", "NOTO_PARAKEET_PRECISION": "bf16",
-           "NOTO_PARAKEET_MODEL": "nvidia/parakeet-tdt-0.6b-v3", "NOTO_PARAKEET_BATCH": "8"}
+           "NOTO_PARAKEET_MODEL": "nvidia/parakeet-tdt-0.6b-v3", "NOTO_PARAKEET_BATCH": "8",
+           "NOTO_PARAKEET_CONFIDENCE": "1"}  # emit per-word confidence (the selector signal)
     proc = subprocess.Popen([sys.executable, str(REMOTE_REPO / "scripts" / "parakeet_stt_server.py")],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, text=True, bufsize=1)
     assert proc.stdin and proc.stdout
@@ -94,12 +95,13 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40, pad_sec: float = 
 
     rid = 0
 
-    def stt(wav_path: str) -> str:
+    def stt(wav_path: str):
         nonlocal rid
         proc.stdin.write(json.dumps({"id": rid, "wav": wav_path}) + "\n")
         proc.stdin.flush()
         rid += 1
-        return json.loads(proc.stdout.readline()).get("text", "")
+        r = json.loads(proc.stdout.readline())
+        return r.get("text", ""), r.get("confidences", []) or []
 
     out = {}
     for m, regions in jobs.items():
@@ -124,7 +126,7 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40, pad_sec: float = 
                 continue
             mixp = wavdir / f"{m}_{i}_mix.wav"
             sf.write(str(mixp), clip.numpy(), SR)
-            mixed_hyp = stt(str(mixp))
+            mixed_hyp, mix_confs = stt(str(mixp))
             # separate → [batch, time, n_src]. With pad_sec, separate a WIDER window
             # (surrounding single-speaker context helps the separator lock onto each
             # voice) then transcribe only the overlap [a,b] PORTION of each stream.
@@ -139,12 +141,16 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40, pad_sec: float = 
                 for s in range(est.shape[-1]):
                     sp = wavdir / f"{m}_{i}_s{s}.wav"
                     sf.write(str(sp), est[oa:ob, s].numpy(), SR)
-                    sep_hyps.append(stt(str(sp)))
+                    txt, _ = stt(str(sp))
+                    sep_hyps.append(txt)
             except Exception as e:  # noqa: BLE001
                 print(f"{m} region {i}: separation failed {e}")
                 sep_hyps = []
+            mc = [float(c) for c in mix_confs]
             res.append({"start": reg["start"], "end": reg["end"], "speakers": reg["speakers"],
-                        "mixed_hyp": mixed_hyp, "sep_hyps": sep_hyps})
+                        "mixed_hyp": mixed_hyp, "sep_hyps": sep_hyps,
+                        "mix_conf_mean": (sum(mc) / len(mc)) if mc else None,
+                        "mix_conf_min": min(mc) if mc else None})
         out[m] = res
         print(f"{m}: {len(res)} regions separated+transcribed")
     proc.stdin.close()
