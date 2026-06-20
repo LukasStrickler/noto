@@ -84,14 +84,6 @@ func (l DirectoryLayout) VersionChecksumPath(versionID string) string {
 	return filepath.Join(l.VersionDir(versionID), "checksum.sha256")
 }
 
-func (l DirectoryLayout) RelativeToRecordings(path string) string {
-	rel, err := filepath.Rel(l.RecordingsDir, path)
-	if err != nil {
-		return path
-	}
-	return rel
-}
-
 func EnsureDirs(layout DirectoryLayout) error {
 	dirs := []string{
 		layout.MeetingDir,
@@ -127,10 +119,6 @@ func ValidateLayout(layout DirectoryLayout) error {
 func ParseMeetingID(dir string) (uuid.UUID, error) {
 	base := filepath.Base(dir)
 	return uuid.Parse(base)
-}
-
-func ParseVersionID(versionDir string) (string, error) {
-	return filepath.Base(versionDir), nil
 }
 
 // ExtractDateFromPath pulls the YYYY/MM segments out of a noto meeting

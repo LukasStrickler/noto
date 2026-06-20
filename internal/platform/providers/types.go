@@ -1,7 +1,5 @@
 package providers
 
-import "sort"
-
 type Capability string
 
 const (
@@ -63,10 +61,4 @@ func (p ProviderSuite) HasCapability(cap Capability) bool {
 		}
 	}
 	return false
-}
-
-func SortedCapabilities(caps []Capability) []Capability {
-	out := append([]Capability(nil), caps...)
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
 }

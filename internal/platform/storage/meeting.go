@@ -13,22 +13,6 @@ import (
 	"github.com/lukasstrickler/noto/internal/core/artifacts"
 )
 
-type MeetingStore struct {
-	RecordingsDir string
-}
-
-func NewMeetingStore(recordingsDir string) *MeetingStore {
-	return &MeetingStore{RecordingsDir: recordingsDir}
-}
-
-func (s *MeetingStore) LayoutFor(meetingID uuid.UUID) (DirectoryLayout, error) {
-	return LayoutFor(s.RecordingsDir, meetingID)
-}
-
-func (s *MeetingStore) EnsureDirs(layout DirectoryLayout) error {
-	return EnsureDirs(layout)
-}
-
 func WriteManifest(layout DirectoryLayout, m *artifacts.MeetingManifest) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
