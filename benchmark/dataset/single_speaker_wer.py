@@ -10,11 +10,14 @@ single-speaker vs overlap time regions and scores each — same model, same audi
 just partitioned by what the product would see per channel.
 
 A word (ref or hyp) is assigned to a region by how many REFERENCE speakers are
-active at its midpoint: 1 -> single-speaker, >=2 -> overlap. WER is time-ordered
-word-level Levenshtein within each region. Normalization matches metrics.Normalize.
+active at its midpoint: 1 -> single-speaker, >=2 -> overlap. Overlap structure is a
+precomputed event-sweep timeline (per-speaker merged intervals) so classification
+is O(words log words). WER is time-ordered word-level Levenshtein within each region;
+normalization matches metrics.Normalize.
 
 Usage: python3 benchmark/dataset/single_speaker_wer.py <run_hyps_dir>
 """
+import bisect
 import json
 import os
 import re
@@ -35,16 +38,51 @@ def wer(ref: list[str], hyp: list[str]) -> tuple[int, int]:
     prev = list(range(m + 1))
     for i in range(1, n + 1):
         cur = [i] + [0] * m
+        ri = ref[i - 1]
         for j in range(1, m + 1):
-            cost = 0 if ref[i - 1] == hyp[j - 1] else 1
+            cost = 0 if ri == hyp[j - 1] else 1
             cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
         prev = cur
     return (prev[m], n)
 
 
-def active_count(intervals_by_spk: dict, t: float) -> int:
-    """How many distinct speakers are active at time t (their word covers t)."""
-    return sum(1 for ivs in intervals_by_spk.values() if any(s <= t < e for s, e in ivs))
+def overlap_timeline(ref):
+    """(times, counts): counts[i] = # distinct speakers active in [times[i], times[i+1])."""
+    by_spk = {}
+    for w in ref:
+        by_spk.setdefault(w.get("speaker", "?"), []).append((w.get("start", 0.0), w.get("end", 0.0)))
+    events = []
+    for ivs in by_spk.values():
+        ivs.sort()
+        merged = []
+        for s, e in ivs:
+            if merged and s <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], e)
+            else:
+                merged.append([s, e])
+        for s, e in merged:
+            events.append((s, 1))
+            events.append((e, -1))
+    events.sort()
+    times, counts, cur, last = [], [], 0, None
+    for t, d in events:
+        if last is not None and t != last:
+            times.append(last)
+            counts.append(cur)
+        cur += d
+        last = t
+    if last is not None:
+        times.append(last)
+        counts.append(cur)
+    return times, counts
+
+
+def region_of(times, counts, w):
+    if not times:
+        return "single"
+    t = (w.get("start", 0.0) + w.get("end", 0.0)) / 2
+    i = bisect.bisect_right(times, t) - 1
+    return "overlap" if (0 <= i < len(counts) and counts[i] >= 2) else "single"
 
 
 def main():
@@ -52,7 +90,7 @@ def main():
         print("usage: single_speaker_wer.py <run_hyps_dir>")
         return
     hyps_dir = sys.argv[1]
-    agg = {"single": [0, 0], "overlap": [0, 0]}  # region -> [errors, ref_words]
+    agg = {"single": [0, 0], "overlap": [0, 0]}
     print(f"{'meeting':10} {'single WER':>11} {'(ref_w)':>8}   {'overlap WER':>12} {'(ref_w)':>8}")
     for hf in sorted(os.listdir(hyps_dir)):
         if not hf.endswith(".json"):
@@ -63,45 +101,35 @@ def main():
             continue
         ref = json.load(open(rf))
         hyp = json.load(open(os.path.join(hyps_dir, hf))).get("words", [])
+        times, counts = overlap_timeline(ref)
 
-        # reference speaker activity intervals (ground-truth overlap structure)
-        ivs = {}
+        cells = {"single": ([], []), "overlap": ([], [])}  # region -> (ref_toks, hyp_toks)
         for w in ref:
-            ivs.setdefault(w.get("speaker", "?"), []).append((w.get("start", 0.0), w.get("end", 0.0)))
+            tok = norm_tok(w.get("text", ""))
+            if tok:
+                cells[region_of(times, counts, w)][0].append(tok)
+        for w in hyp:
+            tok = norm_tok(w.get("text", ""))
+            if tok:
+                cells[region_of(times, counts, w)][1].append(tok)
 
-        def region(w):
-            t = (w.get("start", 0.0) + w.get("end", 0.0)) / 2
-            return "overlap" if active_count(ivs, t) >= 2 else "single"
-
-        for w in ref + hyp:
-            w["_region"] = region(w)
-
+        line = [mid]
         for rgn in ("single", "overlap"):
-            rwords = [norm_tok(w["text"]) for w in ref if w["_region"] == rgn and norm_tok(w["text"])]
-            hwords = [norm_tok(w["text"]) for w in hyp if w["_region"] == rgn and norm_tok(w["text"])]
-            err, rlen = wer(rwords, hwords)
+            rt, ht = cells[rgn]
+            err, rlen = wer(rt, ht)
             agg[rgn][0] += err
             agg[rgn][1] += rlen
-        s_err, s_ref = wer(
-            [norm_tok(w["text"]) for w in ref if w["_region"] == "single" and norm_tok(w["text"])],
-            [norm_tok(w["text"]) for w in hyp if w["_region"] == "single" and norm_tok(w["text"])],
-        )
-        o_err, o_ref = wer(
-            [norm_tok(w["text"]) for w in ref if w["_region"] == "overlap" and norm_tok(w["text"])],
-            [norm_tok(w["text"]) for w in hyp if w["_region"] == "overlap" and norm_tok(w["text"])],
-        )
-        sw = s_err / s_ref if s_ref else 0.0
-        ow = o_err / o_ref if o_ref else 0.0
-        print(f"{mid:10} {sw:11.3f} {s_ref:8d}   {ow:12.3f} {o_ref:8d}")
+            line.append(f"{(err/rlen if rlen else 0):.3f}")
+            line.append(f"{rlen}")
+        print(f"{line[0]:10} {line[1]:>11} {line[2]:>8}   {line[3]:>12} {line[4]:>8}")
 
     print("\n" + "=" * 60)
     for rgn in ("single", "overlap"):
         e, r = agg[rgn]
         rate = e / r if r else 0.0
-        print(f"  {rgn:8} WER (micro-avg): {rate:.4f} ({100*rate:.1f}%)  over {r} ref words")
-    overall_e = agg["single"][0] + agg["overlap"][0]
-    overall_r = agg["single"][1] + agg["overlap"][1]
-    print(f"  overall  WER (both regions): {overall_e/overall_r:.4f}  (sanity vs ~0.207 anchor)")
+        print(f"  {rgn:8} WER (micro-avg): {rate:.4f} ({100 * rate:.1f}%)  over {r} ref words")
+    oe, orf = agg["single"][0] + agg["overlap"][0], agg["single"][1] + agg["overlap"][1]
+    print(f"  overall  WER (both regions): {oe / orf:.4f}  (sanity vs ~0.207 anchor)")
 
 
 if __name__ == "__main__":
