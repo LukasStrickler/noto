@@ -311,6 +311,11 @@ var knobLauncherEnv = map[string]string{
 	"diar_workers": "BENCH_DIAR_WORKERS",
 	"diar_streams": "BENCH_DIAR_STREAMS",
 	"cuda_mps":     "BENCH_CUDA_MPS",
+	// diar_speakers=auto runs the diarizer with NumSpeakers:0 (product-realistic
+	// auto-detect) instead of the bench's oracle count, so the KPIs reflect what a
+	// user actually gets (the count is unknown at meeting time). Default/unset =
+	// oracle, preserving the ledger baseline's comparability. ami_test.go reads it.
+	"diar_speakers": "BENCH_DIAR_SPEAKERS",
 	// confidence turns on NeMo word confidence (NOTO_PARAKEET_CONFIDENCE) so the
 	// run's hyps carry per-word P(correct) — the input B6 calibration and B7 repair
 	// candidate selection both need.

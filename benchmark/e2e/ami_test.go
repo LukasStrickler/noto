@@ -136,6 +136,23 @@ func distinctSpeakers(turns []dataset.Turn) int {
 	return len(set)
 }
 
+// diarHintSpeakers decides the NumSpeakers passed to the diarizer. The bench
+// DEFAULT is the ORACLE count (distinctSpeakers from the reference) — an
+// advantage PRODUCTION never has: jobs_pipeline.go passes NumSpeakers:0 because
+// the count is unknown at meeting time. Setting BENCH_DIAR_SPEAKERS=auto (or 0)
+// runs the product-realistic auto-detect path so the KPIs reflect what a user
+// actually gets; any other value keeps the oracle count (preserving the ledger
+// baseline). Only the diarizer INPUT changes — the reference/oracle count still
+// drives scoring (hypMeeting.NumSpeakers), so WER/DER/cpWER stay comparable.
+func diarHintSpeakers(oracle int) int {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BENCH_DIAR_SPEAKERS"))) {
+	case "auto", "0":
+		return 0
+	default:
+		return oracle
+	}
+}
+
 func turnsEnd(turns []dataset.Turn) float64 {
 	var end float64
 	for _, tn := range turns {
@@ -246,7 +263,7 @@ func TestAMICapture(t *testing.T) {
 			es := <-diarPool
 			defer func() { diarPool <- es }()
 			d0 := time.Now()
-			dTurns, diarErr = es.Diarize(ctx, audio, diarize.DiarizeOptions{MeetingID: m.ID, NumSpeakers: numSpk})
+			dTurns, diarErr = es.Diarize(ctx, audio, diarize.DiarizeOptions{MeetingID: m.ID, NumSpeakers: diarHintSpeakers(numSpk)})
 			diarWall = time.Since(d0)
 		}()
 		wg.Wait()

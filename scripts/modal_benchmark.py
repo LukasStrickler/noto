@@ -189,6 +189,11 @@ KNOB_FORWARDS: list[tuple[str, str, str]] = [
     ("BENCH_VAD_PAD", "NOTO_VAD_PAD", ""),
     ("BENCH_VAD_MIN_GAP", "NOTO_VAD_MIN_GAP", ""),
     ("BENCH_VAD_THRESHOLD", "NOTO_VAD_THRESHOLD", ""),
+    # diar_speakers=auto → the AMI bench passes NumSpeakers:0 (product-realistic
+    # auto-detect) instead of the oracle reference count. Forwarded as-is into the
+    # container; benchmark/e2e/ami_test.go (go test, inherits container env) reads
+    # BENCH_DIAR_SPEAKERS. Empty/unset = oracle (the ledger-baseline behaviour).
+    ("BENCH_DIAR_SPEAKERS", "BENCH_DIAR_SPEAKERS", ""),
 ]
 BATCH_SIZE = int(os.getenv("BENCH_BATCH_SIZE", "0") or 0)
 BATCH_WAIT_MS = int(os.getenv("BENCH_BATCH_WAIT_MS", "0") or 0)
