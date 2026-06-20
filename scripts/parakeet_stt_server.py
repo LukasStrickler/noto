@@ -289,7 +289,18 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
     # Pass optional kwargs only when this NeMo version's transcribe() has them,
     # so a signature drift degrades to defaults instead of crashing the server.
     sig = inspect.signature(model.transcribe).parameters
-    opt = {k: v for k, v in {"timestamps": True, "return_hypotheses": True, "verbose": False}.items() if k in sig}
+    opt_candidates: dict = {"timestamps": True, "return_hypotheses": True, "verbose": False}
+    # Canary is a multitask AED model (a genuinely different/stronger ASR than parakeet
+    # TDT — the B7 repair source for when same-family decodes are byte-identical). Its
+    # transcribe() takes language + punctuation prompts parakeet's does not; these keys
+    # are ABSENT from the parakeet signature, so the filter below leaves the validated
+    # TDT path byte-identical and passes them only to a canary model, which needs them to
+    # do plain (English, punctuated) ASR. Word timestamps come from the same
+    # timestamps=True path (use canary-1b-flash, which supports them).
+    if "canary" in model_name.lower():
+        lang = os.getenv("NOTO_CANARY_LANG", "en")
+        opt_candidates.update({"source_lang": lang, "target_lang": lang, "pnc": "yes"})
+    opt = {k: v for k, v in opt_candidates.items() if k in sig}
 
     # Encoder frame duration for offset→seconds fallback (8× subsampled 10 ms).
     try:
