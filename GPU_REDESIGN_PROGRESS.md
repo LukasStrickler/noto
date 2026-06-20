@@ -195,9 +195,16 @@ needed) + the 2-speaker "transcribe both individually" recovery.
 **Production architecture (grounded, ready to design):** STT(mix) ∥ diar+overlap-detection → for overlap
 regions where mix confidence is LOW: separate → re-transcribe each stream → merge BOTH as attributed
 speakers; else keep the mix. The separation pass is a deferred/idle-GPU secondary stage, not a whole-meeting
-cost. **Next: (1) validate the confidence PROXY predicts win/loss as well as oracle baseline cpWER (a run
-with `NOTO_PARAKEET_CONFIDENCE=1` on the mix); (2) a stronger/meeting-matched separator to lift the 54.4%
-ceiling; (3) then the production wire.**
+cost. **Step-3b — CONTEXT WINDOW improves separation (free, same model).** Separating the TIGHT overlap span
+starved SepFormer of context (it's trained on fully-overlapped clips). Fix: `pad_sec` separates a WIDER
+window (±2s of surrounding single-speaker audio) then transcribes only the overlap PORTION of each stream.
+Result on the same 82 regions: separated cpWER **58.7% → 57.1%** (recovery +13.6 → +15.2 pts, 36 → 38
+regions improved). Nearly free (SepFormer is tiny; STT still only sees the overlap portion). So the stack so
+far: always-mix 72.3% → tight-separate 58.7% → padded-separate 57.1% → +selector (~−2.5pt) on top → ~no-pad
+oracle 54.4%. **Next: (1) STRONGER separator (Mossformer2 / a meeting-matched model) — the 54% ceiling is
+SepFormer's synthetic-mix limit and the real product-quality lever; (2) validate the confidence PROXY for
+the selector (`NOTO_PARAKEET_CONFIDENCE=1` on the mix); (3) the production wire (overlap-detect → low-conf
+gate → padded-separate → re-transcribe → merge both attributed speakers).**
 
 ## GPU-efficiency / throughput frontier — grounded diagnosis (2026-06-20, user: "push throughput + strong accuracy")
 

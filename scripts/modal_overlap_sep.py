@@ -61,7 +61,7 @@ model_volume = modal.Volume.from_name(MODEL_VOLUME, create_if_missing=True, envi
 
 
 @app.function(gpu=GPU, volumes={str(MODEL_MOUNT): model_volume}, timeout=3600)
-def separate_and_transcribe(jobs: dict, max_regions: int = 40) -> dict:
+def separate_and_transcribe(jobs: dict, max_regions: int = 40, pad_sec: float = 0.0) -> dict:
     """jobs: {meeting: [{"start","end","speakers":{spk:[words]}}]} (2-spk regions)."""
     import soundfile as sf
     import torch
@@ -125,14 +125,20 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40) -> dict:
             mixp = wavdir / f"{m}_{i}_mix.wav"
             sf.write(str(mixp), clip.numpy(), SR)
             mixed_hyp = stt(str(mixp))
-            # separate → [batch, time, n_src]
+            # separate → [batch, time, n_src]. With pad_sec, separate a WIDER window
+            # (surrounding single-speaker context helps the separator lock onto each
+            # voice) then transcribe only the overlap [a,b] PORTION of each stream.
             try:
-                est = sep.separate_batch(clip.unsqueeze(0).to("cuda"))
+                pad = int(pad_sec * SR)
+                sa, sb = max(0, a - pad), min(wav.shape[0], b + pad)
+                sep_clip = wav[sa:sb]
+                est = sep.separate_batch(sep_clip.unsqueeze(0).to("cuda"))
                 est = est.squeeze(0).cpu()  # [time, n_src]
+                oa, ob = a - sa, b - sa  # overlap-span offsets within the padded clip
                 sep_hyps = []
                 for s in range(est.shape[-1]):
                     sp = wavdir / f"{m}_{i}_s{s}.wav"
-                    sf.write(str(sp), est[:, s].numpy(), SR)
+                    sf.write(str(sp), est[oa:ob, s].numpy(), SR)
                     sep_hyps.append(stt(str(sp)))
             except Exception as e:  # noqa: BLE001
                 print(f"{m} region {i}: separation failed {e}")
@@ -148,7 +154,7 @@ def separate_and_transcribe(jobs: dict, max_regions: int = 40) -> dict:
 
 @app.local_entrypoint()
 def main(meetings: str = "ES2002a,ES2002b", max_regions: int = 40, min_max_words: int = 3,
-         out: str = ".modal-overlap-sep.json"):
+         pad_sec: float = 0.0, out: str = ".modal-overlap-sep.json"):
     # build 2-speaker overlap regions locally from the reference timeline.
     # min_max_words filters to SUBSTANTIVE overlaps: the most-talkative speaker in
     # the region said >= this many words (skip dominant + 1-word-backchannel pairs,
@@ -170,6 +176,6 @@ def main(meetings: str = "ES2002a,ES2002b", max_regions: int = 40, min_max_words
         if regs:
             jobs[m] = regs
             print(f"{m}: {len(regs)} substantive two-speaker overlap regions")
-    res = separate_and_transcribe.remote(jobs, max_regions)
+    res = separate_and_transcribe.remote(jobs, max_regions, pad_sec)
     Path(out).write_text(json.dumps(res, indent=2))
     print(f"wrote {out}")
