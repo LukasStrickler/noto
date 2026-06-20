@@ -420,11 +420,39 @@ def nemo_transcribe_fn(provider: str, precision: str, batch: int, model_name: st
             log(f"perturb failed ({exc}); using original audio")
             return path, 1.0
 
+    def preproc_audio(path: str, scratch: list[str]) -> str:
+        """Apply NOTO_PARAKEET_PREPROC (e.g. "highpass:80,dc") before decode — pure-numpy
+        audio cleanup (scripts/audio_preproc.py) to cut sub-speech rumble/DC. No new deps
+        (numpy only), so it can't conflict with the pyannote/nemo image. Timeline-preserving
+        (same length/sr) so word timestamps are unaffected. Best-effort: any failure returns
+        the original audio. Empty/unset = passthrough."""
+        spec = os.getenv("NOTO_PARAKEET_PREPROC", "").strip().lower()
+        if not spec:
+            return path
+        try:
+            import audio_preproc
+            import soundfile as sf
+
+            data, sr = sf.read(path, dtype="float32")
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            out = audio_preproc.preprocess(data, sr, spec)
+            import tempfile
+
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            sf.write(tmp.name, out, sr)
+            scratch.append(tmp.name)
+            return tmp.name
+        except Exception as exc:  # noqa: BLE001
+            log(f"preproc failed ({exc}); using original audio")
+            return path
+
     def transcribe(paths: list[str]) -> list[dict]:
         scratch: list[str] = []
         amp = torch.autocast("cuda", dtype=torch.bfloat16) if use_bf16 else contextlib.nullcontext()
         mono = [mono_path(p, scratch) for p in paths]
-        perturbed = [perturb_audio(p, scratch) for p in mono]
+        preprocd = [preproc_audio(p, scratch) for p in mono]
+        perturbed = [perturb_audio(p, scratch) for p in preprocd]
         wavs = [w for w, _ in perturbed]
         # All inputs share one NOTO_PARAKEET_PERTURB → one time-scale for the batch.
         time_scale = perturbed[0][1] if perturbed else 1.0

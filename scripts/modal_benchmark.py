@@ -169,6 +169,7 @@ KNOB_FORWARDS: list[tuple[str, str, str]] = [
     # audio: the test-time-augmentation repair lever (a different hypothesis with no
     # weaker model). speed warps time; the server rescales timestamps back.
     ("BENCH_PARAKEET_PERTURB", "NOTO_PARAKEET_PERTURB", ""),
+    ("BENCH_PARAKEET_PREPROC", "NOTO_PARAKEET_PREPROC", ""),
     # Swap the NeMo STT weights (HF repo or .nemo path) → §10.5 alternate-ASR
     # repair method: re-decode low-confidence spans with a different/larger parakeet.
     # The model resolves from the HF cache the same way the default does (downloads

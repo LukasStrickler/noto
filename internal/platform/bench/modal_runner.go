@@ -332,6 +332,10 @@ var knobLauncherEnv = map[string]string{
 	// hypothesis WITHOUT a weaker model, the repair lever when same-model decode
 	// config is byte-identical. speed warps time (timestamps rescaled back).
 	"perturb": "BENCH_PARAKEET_PERTURB",
+	// preproc runs pure-numpy audio cleanup before STT (NOTO_PARAKEET_PREPROC, e.g.
+	// "highpass:80,dc") to cut sub-speech rumble/DC — the "cut out noise" lever, with
+	// NO new image deps (unlike WPE/scipy, which broke pyannote). Off by default.
+	"preproc": "BENCH_PARAKEET_PREPROC",
 	// stt_model swaps the NeMo STT weights (NOTO_PARAKEET_MODEL) — the §10.5
 	// alternate-ASR repair method: re-decode low-confidence spans with a different
 	// (e.g. larger) parakeet, the genuine-quality alternate when same-model beam
