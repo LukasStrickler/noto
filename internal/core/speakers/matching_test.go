@@ -521,3 +521,38 @@ func TestRunningMean_ClampsAndValidates(t *testing.T) {
 		t.Error("expected dimension-mismatch error")
 	}
 }
+
+func TestWeightedMean_FavorsHeavierSide(t *testing.T) {
+	a := Embedding{1, 0}
+	b := Embedding{0, 1}
+
+	// Merging a 1-weight profile into a 20-weight one should leave the result
+	// dominated by A (the heavier side), not a 50/50 split.
+	heavy, err := WeightedMean(a, 20, b, 1)
+	if err != nil {
+		t.Fatalf("WeightedMean: %v", err)
+	}
+	simA, _ := CosineSimilarity(heavy, a)
+	simB, _ := CosineSimilarity(heavy, b)
+	if simA <= simB {
+		t.Errorf("20:1 merge should stay closer to A: A=%.4f B=%.4f", simA, simB)
+	}
+
+	// Equal weights are the symmetric midpoint.
+	even, _ := WeightedMean(a, 3, b, 3)
+	evenA, _ := CosineSimilarity(even, a)
+	evenB, _ := CosineSimilarity(even, b)
+	if math.Abs(evenA-evenB) > 1e-9 {
+		t.Errorf("equal weights should be equidistant: A=%.4f B=%.4f", evenA, evenB)
+	}
+
+	// Negative weight clamps to 0 (the other side wins entirely).
+	clamped, _ := WeightedMean(a, -5, b, 2)
+	if cb, _ := CosineSimilarity(clamped, b); cb < 0.999 {
+		t.Errorf("negative weight should clamp to 0, leaving B: cos=%.4f", cb)
+	}
+
+	if _, err := WeightedMean(Embedding{1, 0}, 1, Embedding{1, 0, 0}, 1); err == nil {
+		t.Error("expected dimension-mismatch error")
+	}
+}

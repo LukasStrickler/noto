@@ -6,8 +6,58 @@ import (
 	"time"
 
 	"github.com/lukasstrickler/noto/internal/core/artifacts"
+	"github.com/lukasstrickler/noto/internal/core/speakers"
 	"github.com/lukasstrickler/noto/internal/platform/speakerstore"
 )
+
+// TestFoldEmbeddingIntoProfile covers the shared learning core used by BOTH the
+// auto-match and the manual-confirmation paths: a new enrollment is folded as a
+// count-weighted running mean, and degenerate inputs are safe no-ops.
+func TestFoldEmbeddingIntoProfile(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	a := []float64{1, 0}
+	b := []float64{0, 1}
+
+	pr := &memorySpeakerProfileRepo{}
+	_ = pr.Create(ctx, speakerstore.SpeakerProfile{
+		ID: "p1", DisplayName: "Alice",
+		EmbeddingVector: a, EmbeddingDim: 2, EmbeddingCount: 9,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	svc := &Service{speakerProfiles: pr}
+
+	// A new observation toward B, folded into a count-9 profile: count -> 10, and
+	// the voiceprint stays much closer to A than to B (1/10 pull, not 1/2).
+	svc.foldEmbeddingIntoProfile(ctx, "p1", b)
+	got, _ := pr.Get(ctx, "p1")
+	if got.EmbeddingCount != 10 {
+		t.Errorf("EmbeddingCount = %d; want 10", got.EmbeddingCount)
+	}
+	simA, _ := speakers.CosineSimilarity(got.EmbeddingVector, a)
+	simB, _ := speakers.CosineSimilarity(got.EmbeddingVector, b)
+	if simA <= simB {
+		t.Errorf("established profile should stay closer to A: A=%.4f B=%.4f", simA, simB)
+	}
+
+	// Empty embedding and missing profile are no-ops (must never fail the caller).
+	before, _ := pr.Get(ctx, "p1")
+	svc.foldEmbeddingIntoProfile(ctx, "p1", nil)
+	svc.foldEmbeddingIntoProfile(ctx, "nope", a)
+	after, _ := pr.Get(ctx, "p1")
+	if after.EmbeddingCount != before.EmbeddingCount {
+		t.Errorf("no-op inputs changed the profile: %d -> %d", before.EmbeddingCount, after.EmbeddingCount)
+	}
+
+	// A profile with no prior voiceprint adopts the first observation at count 1.
+	_ = pr.Create(ctx, speakerstore.SpeakerProfile{ID: "p2", DisplayName: "Bob", CreatedAt: now, UpdatedAt: now})
+	svc.foldEmbeddingIntoProfile(ctx, "p2", b)
+	p2, _ := pr.Get(ctx, "p2")
+	if p2.EmbeddingCount != 1 || len(p2.EmbeddingVector) != 2 {
+		t.Errorf("first enrollment should set count=1 and the vector; got count=%d len=%d", p2.EmbeddingCount, len(p2.EmbeddingVector))
+	}
+}
 
 // TestMatchSpeakers_AutoMatchFoldsRunningMean proves the auto-match centroid
 // update is a TRUE running mean: an established profile (count=4) that auto-matches

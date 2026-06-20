@@ -63,6 +63,31 @@ func Centroid(embeddings []Embedding) (Embedding, error) {
 	return Normalize(result), nil
 }
 
+// WeightedMean combines two normalized centroids by their observation weights,
+// returning the normalized weighted-mean direction. Weighting by how many
+// observations each side represents is what keeps an established voiceprint
+// stable: folding a 1-enrollment profile into a 20-enrollment one moves it ~1/21,
+// not the 1/2 an unweighted average gives. Negative weights are treated as 0;
+// both inputs are normalized internally; the result is normalized.
+func WeightedMean(a Embedding, wa float64, b Embedding, wb float64) (Embedding, error) {
+	if len(a) != len(b) {
+		return nil, DimError(len(a), len(b))
+	}
+	if wa < 0 {
+		wa = 0
+	}
+	if wb < 0 {
+		wb = 0
+	}
+	an := Normalize(a)
+	bn := Normalize(b)
+	acc := make(Embedding, len(an))
+	for i := range acc {
+		acc[i] = an[i]*wa + bn[i]*wb
+	}
+	return Normalize(acc), nil
+}
+
 // RunningMean folds one new observation into a normalized centroid that already
 // summarizes `count` prior observations, returning the updated normalized
 // centroid. Unlike a two-point average (Centroid([stored, new]) — a 50/50 EMA
@@ -72,20 +97,10 @@ func Centroid(embeddings []Embedding) (Embedding, error) {
 // `count` < 1 is treated as 1 (a profile with one enrollment). Both inputs are
 // normalized internally; the result is normalized, matching Centroid's contract.
 func RunningMean(centroid Embedding, count int, x Embedding) (Embedding, error) {
-	if len(centroid) != len(x) {
-		return nil, DimError(len(centroid), len(x))
-	}
 	if count < 1 {
 		count = 1
 	}
-	c := Normalize(centroid)
-	xn := Normalize(x)
-	n := float64(count)
-	acc := make(Embedding, len(c))
-	for i := range acc {
-		acc[i] = c[i]*n + xn[i]
-	}
-	return Normalize(acc), nil
+	return WeightedMean(centroid, float64(count), x, 1)
 }
 
 // MatchConfig tunes the decision boundaries. Margin is the minimum lead the

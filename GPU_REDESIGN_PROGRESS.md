@@ -147,6 +147,22 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   robust voiceprints → better cross-meeting "same person" matching → better People-screen suggestions),
   serving the loop's "highly accurate diarization" — unlike the prior normalizer fix, this code IS in the
   default production path.
+- **★ Close the human-feedback learning loop + count-weighted merge (2026-06-20).** Follow-on to the
+  running-mean fix: the AUTO-match path folded a speaker's voiceprint into the profile, but the two MANUAL
+  paths did NOT — `assignMeetingSpeaker` and `PatchMeetingSpeakerMappings` set the profile + "manual" status
+  yet never updated the centroid. So the STRONGEST identity signal (a human explicitly confirming "this
+  speaker is Alice") taught the model NOTHING, while a lower-confidence auto-match did — backwards. Fix: a
+  shared `foldEmbeddingIntoProfile` helper (count-weighted running mean, best-effort) now teaches the profile
+  on a genuine manual (re)assignment too — gated on an ACTUAL profile change so a confirm-in-place doesn't
+  double-count an embedding the auto path already folded. The auto path was refactored onto the same helper
+  (one definition of "learn from an enrollment"). Also fixed `MergeSpeakerProfiles`, which combined two
+  profiles' voiceprints 50/50 (`Centroid([t,s])`) ignoring their enrollment counts — merging a 1-enrollment
+  profile into a 20-enrollment one swung the survivor halfway; now `speakers.WeightedMean` weights each side
+  by its count (and sums them). Added `speakers.WeightedMean` (general two-way weighted mean; `RunningMean`
+  now delegates to it). Tested: `WeightedMean` heavier-side/symmetry/clamp/dim-error, `foldEmbeddingIntoProfile`
+  count-weighting + no-op safety + first-enrollment, and the auto path's count increment (unchanged).
+  build/vet/lint(0)/race clean. Net: EVERY voiceprint update — auto, manual, merge — is now count-weighted,
+  and human corrections finally improve cross-meeting identity.
 
 ## Dead-code sweep — classified, don't re-investigate (2026-06-20)
 

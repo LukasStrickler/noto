@@ -114,6 +114,39 @@ func (s *Service) CreateSpeakerProfile(_ context.Context, req notoapi.CreateSpea
 	return s.profileToAPI(p), nil
 }
 
+// foldEmbeddingIntoProfile teaches a profile from one more enrollment observation,
+// updating its centroid as a count-weighted running mean (speakers.RunningMean) so
+// each new voiceprint — an auto-match OR a human confirmation — moves an established
+// profile only ~1/(count+1). Best-effort: a missing profile or empty embedding is a
+// no-op, since identity learning must never fail the operation that triggered it.
+func (s *Service) foldEmbeddingIntoProfile(ctx context.Context, profileID string, emb []float64) {
+	if profileID == "" || len(emb) == 0 {
+		return
+	}
+	p, err := s.speakerProfiles.Get(ctx, profileID)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	if len(p.EmbeddingVector) == 0 {
+		// First voiceprint for this profile (e.g. one created without audio).
+		p.EmbeddingVector = emb
+		p.EmbeddingDim = len(emb)
+		p.EmbeddingCount = 1
+	} else {
+		centroid, cerr := speakers.RunningMean(p.EmbeddingVector, p.EmbeddingCount, emb)
+		if cerr != nil || len(centroid) == 0 {
+			return
+		}
+		p.EmbeddingVector = centroid
+		p.EmbeddingDim = len(centroid)
+		p.EmbeddingCount = max(p.EmbeddingCount, 1) + 1
+	}
+	p.LastSeenAt = &now
+	p.UpdatedAt = now
+	_ = s.speakerProfiles.Update(ctx, p)
+}
+
 // assignMeetingSpeaker links a meeting speaker to a profile and marks it manual.
 func (s *Service) assignMeetingSpeaker(meetingID, speakerID, profileID string) error {
 	maps, err := s.meetingMappings.ListByMeeting(context.Background(), meetingID)
@@ -204,14 +237,21 @@ func (s *Service) MergeSpeakerProfiles(_ context.Context, targetID, sourceID str
 		target.Notes = source.Notes
 	}
 	target.Affiliations = mergeAffiliations(target.Affiliations, source.Affiliations)
-	// Combine voiceprints so the surviving profile represents both enrollments.
+	// Combine voiceprints so the surviving profile represents both enrollments,
+	// weighted by how many each side accumulated — merging a 1-enrollment profile
+	// into a 20-enrollment one must barely move the latter, not average it 50/50.
 	if len(source.EmbeddingVector) > 0 {
 		if len(target.EmbeddingVector) == 0 {
 			target.EmbeddingVector = source.EmbeddingVector
 			target.EmbeddingDim = source.EmbeddingDim
-		} else if c, cerr := speakers.Centroid([]speakers.Embedding{target.EmbeddingVector, source.EmbeddingVector}); cerr == nil && len(c) > 0 {
-			target.EmbeddingVector = c
-			target.EmbeddingDim = len(c)
+			target.EmbeddingCount = max(source.EmbeddingCount, 1)
+		} else {
+			tc, sc := max(target.EmbeddingCount, 1), max(source.EmbeddingCount, 1)
+			if c, cerr := speakers.WeightedMean(target.EmbeddingVector, float64(tc), source.EmbeddingVector, float64(sc)); cerr == nil && len(c) > 0 {
+				target.EmbeddingVector = c
+				target.EmbeddingDim = len(c)
+				target.EmbeddingCount = tc + sc
+			}
 		}
 	}
 	target.UpdatedAt = time.Now()
@@ -264,6 +304,10 @@ func (s *Service) PatchMeetingSpeakerMappings(_ context.Context, meetingID strin
 		for _, m := range existing {
 			if m.MeetingSpeakerID == entry.MeetingSpeakerID {
 				found = true
+				oldProfile := ""
+				if m.ProfileID != nil {
+					oldProfile = *m.ProfileID
+				}
 				if entry.ProfileID != nil {
 					m.ProfileID = entry.ProfileID
 				}
@@ -276,6 +320,14 @@ func (s *Service) PatchMeetingSpeakerMappings(_ context.Context, meetingID strin
 				m.UpdatedAt = time.Now()
 				if err := s.meetingMappings.Upsert(context.Background(), m); err != nil {
 					return notoapi.MeetingSpeakerMappings{}, err
+				}
+				// A human (re)assigning this speaker to a DIFFERENT profile is the
+				// strongest enrollment signal there is — teach that profile from the
+				// speaker's stored voiceprint. Only on an actual profile change: a
+				// confirm-in-place (same profile) was already folded by the auto path,
+				// so re-folding would double-count the same embedding.
+				if m.ProfileID != nil && *m.ProfileID != "" && *m.ProfileID != oldProfile {
+					s.foldEmbeddingIntoProfile(context.Background(), *m.ProfileID, m.EmbeddingVector)
 				}
 				break
 			}
