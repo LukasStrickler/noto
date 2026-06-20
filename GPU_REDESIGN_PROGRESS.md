@@ -197,6 +197,16 @@ cpWER ≈ separate) — which the B6 confidence pipeline (`NOTO_PARAKEET_CONFIDE
 fuses the loop's asks: smart preprocessing (separate) + targeted compute on idle GPU (gated, only-when-
 needed) + the 2-speaker "transcribe both individually" recovery.
 
+**Stream→speaker ASSIGNMENT is a real, non-trivial step (confirmed 2026-06-20).** Attempted a no-GPU
+end-to-end meeting-level measurement (splice ES2005a's separated streams into its stored base transcript,
+score full cpWER) — it produced a bogus −13pt because the separated streams were assigned via the REF
+speaker labels while the base transcript uses pyannote's OWN labels: mixing two label spaces breaks cpWER's
+permutation. The lesson: separated streams must be assigned to the BASE TRANSCRIPT's speaker labels, which
+can't be done from text — it needs ACOUSTIC (ECAPA) assignment (embed each stream, match to the meeting's
+speaker centroids). So the ADR-0007 `stream→speaker assign` step is a genuine architecture piece, not a
+detail, and the clean meeting-level number needs it (lives in the gated orchestrator). The ground-truth
+estimate **~1.3pt aggregate** stands as the best meeting-level figure until then.
+
 **Production architecture (grounded, ready to design):** STT(mix) ∥ diar+overlap-detection → for overlap
 regions where mix confidence is LOW: separate → re-transcribe each stream → merge BOTH as attributed
 speakers; else keep the mix. The separation pass is a deferred/idle-GPU secondary stage, not a whole-meeting
