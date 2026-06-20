@@ -179,9 +179,25 @@ AMI far-field/balanced-mix mismatch leave headroom (a meeting-matched separator 
 detector in front; (c) SepFormer is 2-speaker, so 3-4-way AMI overlaps (the worst) are out of scope; (d)
 overlap is ~20% of words, so the meeting-level cpWER gain is smaller (~2-3 pts) but real, and it's exactly
 the "who said what" the product cares about. Total overlap-sep GPU ~$0.10.
-**Next: (1) estimate meeting-level cpWER impact end-to-end; (2) design the production wire — pyannote
-overlap-detection → separate ONLY overlap regions (cheap, ~5 min/meeting) → re-transcribe → merge both into
-the transcript as two attributed speakers; (3) try a stronger/meeting-matched separator to push past 58.7%.**
+**★★★ Step-3 — SELECTOR finding = the production architecture (82-region analysis, no extra GPU).**
+Separation is HIGH-VARIANCE: helped 36 / hurt 13 / neutral 33; when it wins it's +33pts, when it loses
+−33pts. Root cause (grounded): **separation helps when the MIX is failing, hurts when the mix already got
+the dominant speaker** — wins have avg baseline cpWER 0.85, losses 0.50. So gate it:
+- always-mix (today) 72.3% → always-separate 58.7% → **confidence-gated selector 56.2%** (separate only
+  when mix cpWER ≥ ~0.5) → oracle-selector ceiling 54.4%.
+The gate is a DOUBLE win: more accuracy (56.2 vs 58.7) AND compute efficiency — separation runs ONLY on the
+overlaps the mix can't handle (a fraction of the ~20% overlap), so the added GPU is tiny and deferrable to
+idle time. **Production selector signal = the MIXED transcript's STT word confidence** (low conf ≈ high mix
+cpWER ≈ separate) — which the B6 confidence pipeline (`NOTO_PARAKEET_CONFIDENCE=1`) already emits. This
+fuses the loop's asks: smart preprocessing (separate) + targeted compute on idle GPU (gated, only-when-
+needed) + the 2-speaker "transcribe both individually" recovery.
+
+**Production architecture (grounded, ready to design):** STT(mix) ∥ diar+overlap-detection → for overlap
+regions where mix confidence is LOW: separate → re-transcribe each stream → merge BOTH as attributed
+speakers; else keep the mix. The separation pass is a deferred/idle-GPU secondary stage, not a whole-meeting
+cost. **Next: (1) validate the confidence PROXY predicts win/loss as well as oracle baseline cpWER (a run
+with `NOTO_PARAKEET_CONFIDENCE=1` on the mix); (2) a stronger/meeting-matched separator to lift the 54.4%
+ceiling; (3) then the production wire.**
 
 ## GPU-efficiency / throughput frontier — grounded diagnosis (2026-06-20, user: "push throughput + strong accuracy")
 
