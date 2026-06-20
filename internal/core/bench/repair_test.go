@@ -78,12 +78,12 @@ func TestRepairCeiling_FlatWhenErrorsAreHighConfidence(t *testing.T) {
 
 func TestSpansFromWords_GroupsContiguousRiskyRuns(t *testing.T) {
 	words := []bench.RepairWord{
-		{StartSec: 0, EndSec: 1, Confidence: 0.95, HasConfidence: true},                      // high-conf → break
-		{StartSec: 1, EndSec: 2, Confidence: 0.30, HasConfidence: true, ProductValue: 1},      // risky run A
-		{StartSec: 2, EndSec: 3, Confidence: 0.20, HasConfidence: true, ProductValue: 3},      // risky run A (entity)
-		{StartSec: 3, EndSec: 4, Confidence: 0.99, HasConfidence: true},                       // high-conf → break
-		{StartSec: 4, EndSec: 5, Confidence: 0.10, HasConfidence: false},                      // no confidence → skip
-		{StartSec: 5, EndSec: 6, Confidence: 0.40, HasConfidence: true, ProductValue: 1},      // risky run B
+		{StartSec: 0, EndSec: 1, Confidence: 0.95, HasConfidence: true},                  // high-conf → break
+		{StartSec: 1, EndSec: 2, Confidence: 0.30, HasConfidence: true, ProductValue: 1}, // risky run A
+		{StartSec: 2, EndSec: 3, Confidence: 0.20, HasConfidence: true, ProductValue: 3}, // risky run A (entity)
+		{StartSec: 3, EndSec: 4, Confidence: 0.99, HasConfidence: true},                  // high-conf → break
+		{StartSec: 4, EndSec: 5, Confidence: 0.10, HasConfidence: false},                 // no confidence → skip
+		{StartSec: 5, EndSec: 6, Confidence: 0.40, HasConfidence: true, ProductValue: 1}, // risky run B
 	}
 	spans := bench.SpansFromWords(words, 0.5, 0.8, true)
 	if len(spans) != 2 {
@@ -138,9 +138,9 @@ func TestRepairBudget_SecBudget(t *testing.T) {
 
 func TestPlanRepairs_RanksByEVAndRespectsBudget(t *testing.T) {
 	spans := []bench.RepairSpan{
-		{StartSec: 0, EndSec: 10, PError: 0.9, PSuccess: 0.9, ProductValue: 3, ContextOK: true}, // high EV, 10s
-		{StartSec: 10, EndSec: 20, PError: 0.5, PSuccess: 0.5, ProductValue: 1, ContextOK: true}, // low EV, 10s
-		{StartSec: 20, EndSec: 25, PError: 0.2, PSuccess: 0.1, ProductValue: 1, ContextOK: true}, // tiny EV
+		{StartSec: 0, EndSec: 10, PError: 0.9, PSuccess: 0.9, ProductValue: 3, ContextOK: true},   // high EV, 10s
+		{StartSec: 10, EndSec: 20, PError: 0.5, PSuccess: 0.5, ProductValue: 1, ContextOK: true},  // low EV, 10s
+		{StartSec: 20, EndSec: 25, PError: 0.2, PSuccess: 0.1, ProductValue: 1, ContextOK: true},  // tiny EV
 		{StartSec: 25, EndSec: 30, PError: 0.9, PSuccess: 0.9, ProductValue: 2, IsHighConf: true}, // ineligible
 	}
 	// Budget = 600s speech × 2% = 12s → only ~one 10s span fits.
@@ -237,5 +237,44 @@ func TestRepairReport_UnknownCostDoesNotFailEfficiency(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("a known inefficient cost (1 accepted/$1) must still fail: %v", reasons2)
+	}
+}
+
+// A small word slice (fewer than 1/fraction words) must still select at least one
+// word for the oracle ceiling: bare truncation gave k=0 → a flat zero-headroom
+// ceiling that wrongly read "repair buys nothing" and contradicted BottomDecileCapture.
+func TestRepairCeiling_SmallSliceSelectsAtLeastOneWord(t *testing.T) {
+	words := []bench.WordConfidence{
+		{Confidence: 0.10, Correct: false}, // lowest-confidence word IS the error
+		{Confidence: 0.50, Correct: true},
+		{Confidence: 0.60, Correct: true},
+		{Confidence: 0.70, Correct: true},
+		{Confidence: 0.90, Correct: true},
+	}
+	res := bench.RepairCeiling(words, 0.10)
+	if res.WordsRepaired < 1 {
+		t.Fatalf("WordsRepaired=%d; want >=1 for a positive fraction on a small slice", res.WordsRepaired)
+	}
+	if res.FixableErrors != 1 {
+		t.Fatalf("FixableErrors=%d; want 1 (the lowest-confidence word is fixable)", res.FixableErrors)
+	}
+	if res.CeilingErrorRate >= res.CurrentErrorRate {
+		t.Fatalf("ceiling (%v) must be below current (%v) — repair has headroom", res.CeilingErrorRate, res.CurrentErrorRate)
+	}
+}
+
+// fraction==0 must repair nothing (a flat ceiling is correct there), not get
+// floored up to one word.
+func TestRepairCeiling_ZeroFractionRepairsNothing(t *testing.T) {
+	words := []bench.WordConfidence{
+		{Confidence: 0.10, Correct: false},
+		{Confidence: 0.90, Correct: true},
+	}
+	res := bench.RepairCeiling(words, 0)
+	if res.WordsRepaired != 0 || res.FixableErrors != 0 {
+		t.Fatalf("fraction 0 must repair nothing: WordsRepaired=%d FixableErrors=%d", res.WordsRepaired, res.FixableErrors)
+	}
+	if res.CeilingErrorRate != res.CurrentErrorRate {
+		t.Fatalf("fraction 0 ceiling must equal current: ceiling=%v current=%v", res.CeilingErrorRate, res.CurrentErrorRate)
 	}
 }

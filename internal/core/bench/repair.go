@@ -1,6 +1,9 @@
 package bench
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
 
 // repair.go is the PURE core of the B7 dry-run repair system (§10): decide which
 // transcript spans are worth a second pass, by expected value, under budget — then
@@ -92,7 +95,19 @@ func RepairCeiling(words []WordConfidence, fraction float64) RepairCeilingResult
 	}
 	sorted := append([]WordConfidence(nil), words...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Confidence < sorted[j].Confidence })
-	k := int(fraction * float64(n))
+	// Round the bottom-fraction cutoff UP (and floor it at 1 word when fraction>0),
+	// matching BottomFractionCapture. Bare truncation — int(fraction*n) — collapsed
+	// to 0 for any slice under 1/fraction words (e.g. <10 words at the 0.10 decile),
+	// reporting a flat zero-headroom ceiling that contradicts BottomDecileCapture on
+	// the same words. An oracle inspecting the lowest-confidence word CAN fix it, so
+	// a true upper bound must select ≥1 word whenever it's asked for a positive slice.
+	k := int(math.Ceil(fraction * float64(n)))
+	if k < 1 && fraction > 0 {
+		k = 1
+	}
+	if k > n {
+		k = n
+	}
 	res.WordsRepaired = k
 	for i, w := range sorted {
 		if !w.Correct {

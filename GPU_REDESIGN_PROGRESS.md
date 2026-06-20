@@ -50,6 +50,18 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   ("data dog"→"Datadog") + standalone name parts. Conservative (exact/confident words untouched,
   segment-safe), glossary-gated (`contextBiasTerms` now also emits individual name parts).
 - **OpenRouter/LLM repair path REMOVED** (per directive); summary path untouched.
+- **KPI/cost-math correctness audit (9 bugs fixed, +11 regression tests).** Adversarial audit of the
+  measurement spine's math (the "really good kpis" foundation) found and fixed 9 verified
+  wrong-result bugs: (trace_summary) degraded telemetry billed every meeting the full container cost
+  → `ComputeUSD = N×total`; per-stage `round4` drift pushed `ComputeUSD` past `TotalUSD` and the clamp
+  hid it as 0% unattributed; run-wide `diarSub`/`diar_emb_ms` reused per-meeting → skewed asr/diar split
+  and an N× `diar_emb_ms` column. (metrics) an empty-reference meeting injected hyp insertions into the
+  aggregate WER numerator with a zero denominator; `MetricsFromSummaryKPIs` dropped a *measured* 0.0 via
+  `value!=0` (a perfect synthetic run read as "no data" and flipped scale/ceiling gates pass→fail).
+  (kpi) absent quality AND absent cost were scored as worst-possible (0) with their weight kept in the
+  denominator → smoke runs dragged ~10pts, unmeasured-cost runs 2× misranked; now renormalized out.
+  (repair) `RepairCeiling` truncated the bottom-decile count to 0 for <10-word slices → false flat
+  ceiling; now ceils + floors-at-1 like `BottomFractionCapture`. All conserve invariants now hold.
 - **Optimizations embedded in the TUI ("embed it nicely in the tui").** New **Accuracy**
   config section (`internal/ui/tui/screen_config.go`, `secAccuracy`) surfaces the production
   opts that were previously config-file-only: **VAD silence-trim** is a live toggle (Enter /

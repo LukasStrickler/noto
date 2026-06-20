@@ -61,10 +61,24 @@ type WeightedScore struct {
 // mean is gated to 0 on any guardrail breach.
 func ScoreRun(in KPIInputs, w KPIWeights) WeightedScore {
 	comp := map[string]float64{}
+	var notes []string
+	// num/wsum accumulate ONLY the dials a run was actually measured on. An absent
+	// dial is dropped from BOTH — scoring it as the worst value (0) while leaving
+	// its weight in the denominator would penalize a run for not being measured,
+	// so two runs identical on the dials they share would score differently purely
+	// because one carried an extra (absent) metric. The gate already excludes
+	// absent quality; the weighted mean now excludes absent dials the same way.
+	var num, wsum float64
 
+	// Cost: present when measured (>0) and the anchor/target band is valid. cost==0
+	// here means "no cost audit" (store sets 0 when the audit is missing), not free.
 	costScore := 0.0
-	if in.AnchorCostUSD > in.TargetCostUSD && in.CostPerAudioHourUSD > 0 {
+	if in.CostPerAudioHourUSD > 0 && in.AnchorCostUSD > in.TargetCostUSD {
 		costScore = clamp01((in.AnchorCostUSD - in.CostPerAudioHourUSD) / (in.AnchorCostUSD - in.TargetCostUSD))
+		num += w.Cost * costScore
+		wsum += w.Cost
+	} else {
+		notes = append(notes, "no cost metric on this run — cost component scored 0 (not in the weighted mean)")
 	}
 	comp["cost"] = costScore
 
@@ -87,23 +101,25 @@ func ScoreRun(in KPIInputs, w KPIWeights) WeightedScore {
 	qualityScore := 0.0
 	if qN > 0 {
 		qualityScore = qSum / float64(qN)
+		num += w.Quality * qualityScore
+		wsum += w.Quality
+	} else {
+		notes = append(notes, "no quality metrics on this run — quality component scored 0 (not gated, not in the weighted mean)")
 	}
 	comp["quality"] = qualityScore
 
+	// Utilization is always a real reading: a GPU run reports busy%, a CPU run is a
+	// genuine 0%. So it always contributes (unlike cost/quality, which can be absent).
 	utilScore := clamp01(in.BusyPct / 100)
 	comp["utilization"] = utilScore
+	num += w.Utilization * utilScore
+	wsum += w.Utilization
 
-	wsum := w.Cost + w.Quality + w.Utilization
 	if wsum <= 0 {
 		wsum = 1
 	}
-	base := (w.Cost*costScore + w.Quality*qualityScore + w.Utilization*utilScore) / wsum
-	score := 100 * base
+	score := 100 * num / wsum
 
-	var notes []string
-	if qN == 0 {
-		notes = append(notes, "no quality metrics on this run — quality component scored 0 (not gated)")
-	}
 	if !pass {
 		score = 0
 		notes = append(notes, "quality guardrail breached — score gated to 0 (a cost win that regresses quality is a reject, §4.1)")

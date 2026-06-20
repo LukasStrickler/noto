@@ -94,13 +94,20 @@ func MetricsFromSummaryKPIs(runID string, summary ModalSummary) (corebench.Metri
 	if !ok {
 		return out, false
 	}
-	if kpi.WERPct != 0 {
+	// Record a metric when it was actually MEASURED, not merely when it is
+	// non-zero — a real 0.0 (a perfect synthetic run) must be stored as 0.0, not
+	// dropped, or downstream readers (QualityWithinCeilings, scale-readiness) treat
+	// the perfect run as "no data" and flip its gate from pass to fail. "Measured"
+	// is proven by the metric's own reference denominator (RefWords for WER/cpWER,
+	// RefSpeechSec for DER/cpWER); the value!=0 clause keeps older summaries that
+	// omit the denominators working for any non-zero metric.
+	if kpi.WERPct != 0 || kpi.RefWords > 0 {
 		out.Aggregate["wer"] = kpi.WERPct / 100
 	}
-	if kpi.DERPct != 0 {
+	if kpi.DERPct != 0 || kpi.RefSpeechSec > 0 {
 		out.Aggregate["der"] = kpi.DERPct / 100
 	}
-	if kpi.CpWERPct != 0 {
+	if kpi.CpWERPct != 0 || (kpi.RefWords > 0 && kpi.RefSpeechSec > 0) {
 		out.Aggregate["cpwer"] = kpi.CpWERPct / 100
 	}
 	if kpi.AttributionTaxPts != 0 {
@@ -143,12 +150,23 @@ type qualityRow struct {
 
 func (s *qualitySums) add(row qualityRow) {
 	s.MeetingsScored++
-	s.WERErrors += row.WERErrors
-	s.WERRef += row.WERRef
-	s.DERErrors += row.DERErrors
-	s.DERRef += row.DERRef
-	s.CpWERErrors += row.CpWERErrors
-	s.CpWERRef += row.CpWERRef
+	// Micro-average per metric, but only over meetings that HAVE a reference for
+	// that metric. A meeting whose reference is empty (RefLen==0) has no defined
+	// rate — folding its hypothesis insertions into the numerator while its zero
+	// reference adds nothing to the denominator would bias the whole-corpus rate
+	// upward without bound. Skip each metric independently when its ref is empty.
+	if row.WERRef > 0 {
+		s.WERErrors += row.WERErrors
+		s.WERRef += row.WERRef
+	}
+	if row.DERRef > 0 {
+		s.DERErrors += row.DERErrors
+		s.DERRef += row.DERRef
+	}
+	if row.CpWERRef > 0 {
+		s.CpWERErrors += row.CpWERErrors
+		s.CpWERRef += row.CpWERRef
+	}
 }
 
 func addDuration(s *qualitySums, hyp MeetingHyp) {

@@ -12,9 +12,15 @@ const AllocationParallelMaxV1 = "parallel_max_v1"
 // BuildTraceSummary constructs trace_summary.v1 from modal summary + meeting hyps + pyannote timing.
 func BuildTraceSummary(summary ModalSummary, hyps []MeetingHyp, pyannote PyannoteTiming, stageMap PyannoteStageMap) corebench.TraceSummary {
 	total := summary.EstimatedCostUSD
-	perMeetings := allocateMeetings(total, hyps, pyannote, stageMap)
+	perMeetings, allocatedUSD := allocateMeetings(total, hyps, pyannote, stageMap)
 	computeStages := aggregateStages(perMeetings)
 	traceMode := "summary"
+	// computeUSD drives the waterfall invariant (Compute + Unattributed == Total).
+	// Take it from the UN-rounded allocation sum, not from re-summing the rounded
+	// per-stage USD — the latter accumulates round4 drift across meetings and could
+	// push Compute above Total, which the old max(0,…) clamp then hid as a false 0%
+	// unattributed. The allocation conserves by construction (shares sum to 1).
+	computeUSD := allocatedUSD
 	if len(hyps) == 0 && total > 0 {
 		traceMode = "summary_coarse"
 		computeStages = []corebench.StageCost{{
@@ -24,12 +30,9 @@ func BuildTraceSummary(summary ModalSummary, hyps []MeetingHyp, pyannote Pyannot
 			USD:          round4(total),
 			PctOfCompute: 100,
 		}}
+		computeUSD = total
 	}
 
-	computeUSD := 0.0
-	for _, s := range computeStages {
-		computeUSD += s.USD
-	}
 	unattributed := math.Max(0, total-computeUSD)
 	unattributedPct := 0.0
 	if total > 0 {
@@ -84,9 +87,13 @@ func gpuUtilization(s ModalSummary) *corebench.GPUUtilization {
 	return g
 }
 
-func allocateMeetings(containerUSD float64, hyps []MeetingHyp, pyannote PyannoteTiming, stageMap PyannoteStageMap) []corebench.PerMeetingTrace {
+// allocateMeetings splits the container cost across meetings by their wall share
+// and, within each meeting, across asr vs diar by their per-meeting work. It also
+// returns the UN-rounded sum of allocated USD so the caller's waterfall conserves
+// exactly (shares sum to 1, so this equals containerUSD).
+func allocateMeetings(containerUSD float64, hyps []MeetingHyp, pyannote PyannoteTiming, stageMap PyannoteStageMap) ([]corebench.PerMeetingTrace, float64) {
 	if len(hyps) == 0 {
-		return nil
+		return nil, 0
 	}
 	maxWalls := make([]float64, len(hyps))
 	sumMax := 0.0
@@ -107,22 +114,28 @@ func allocateMeetings(containerUSD float64, hyps []MeetingHyp, pyannote Pyannote
 	}
 
 	out := make([]corebench.PerMeetingTrace, len(hyps))
+	allocatedUSD := 0.0
 	for i, h := range hyps {
-		share := 1.0
+		// Distribute by each meeting's wall share. When NO meeting carries a wall
+		// (degraded telemetry — no stages_ms stderr and no per-meeting walls), use
+		// an EVEN split so the shares still sum to 1 and Compute == Total, rather
+		// than leaving share=1 for every meeting (which billed each the whole
+		// container and N-folded the cost KPI).
+		share := 1.0 / float64(len(hyps))
 		if sumMax > 0 {
 			share = maxWalls[i] / sumMax
 		}
 		meetingUSD := containerUSD * share
 		sttMS := h.STTMS
-		// Split the meeting cost across asr vs diar by their work. Prefer the
-		// pyannote stderr substage timing (diarSub, precise seg+emb+cluster);
-		// when it is unavailable — live runs where the server's stages_ms stderr
-		// isn't captured — fall back to the per-meeting diar wall already carried
-		// in the hyp, so diar (the §5.6 GPU bottleneck) gets its real share
-		// instead of collapsing to $0 with everything billed to asr.
-		diarWork := diarSub
+		// Split asr vs diar by this meeting's OWN work. Use the per-meeting diar
+		// wall (h.DiarMS) — diarSub from the pyannote stderr is a RUN-WIDE substage
+		// total, so weighting every meeting's split by it skewed the ratio toward
+		// whichever meetings had large/small STT walls. When the per-meeting wall is
+		// absent, apportion the run-wide diarSub by this meeting's share so diar
+		// still gets a scaled (not run-wide) figure instead of collapsing to $0.
+		diarWork := h.DiarMS
 		if diarWork <= 0 {
-			diarWork = h.DiarMS
+			diarWork = diarSub * share
 		}
 		denom := sttMS + diarWork
 		asrUSD := meetingUSD
@@ -131,6 +144,7 @@ func allocateMeetings(containerUSD float64, hyps []MeetingHyp, pyannote Pyannote
 			asrUSD = meetingUSD * (sttMS / denom)
 			diarUSD = meetingUSD - asrUSD
 		}
+		allocatedUSD += asrUSD + diarUSD
 		usdByStage := map[string]float64{
 			"asr":      round4(asrUSD),
 			"diar_emb": round4(diarUSD),
@@ -139,7 +153,11 @@ func allocateMeetings(containerUSD float64, hyps []MeetingHyp, pyannote Pyannote
 		if speech <= 0 && pyannote.VADKept > 0 {
 			speech = h.AudioSec * pyannote.VADKept
 		}
-		diarEmbMS := mapped["diar_emb"]
+		// diar_emb_ms is a PER-MEETING timing: apportion the run-wide embedding time
+		// by this meeting's share so the column sums to the real total. It used to
+		// copy the run-wide value into every row, so summing the column over-counted
+		// N-fold and hid per-meeting stragglers.
+		diarEmbMS := mapped["diar_emb"] * share
 		if diarEmbMS <= 0 {
 			diarEmbMS = diarWork
 		}
@@ -158,7 +176,7 @@ func allocateMeetings(containerUSD float64, hyps []MeetingHyp, pyannote Pyannote
 			},
 		}
 	}
-	return out
+	return out, allocatedUSD
 }
 
 func aggregateStages(meetings []corebench.PerMeetingTrace) []corebench.StageCost {

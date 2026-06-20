@@ -1,6 +1,7 @@
 package bench_test
 
 import (
+	"math"
 	"testing"
 
 	bench "github.com/lukasstrickler/noto/internal/core/bench"
@@ -82,6 +83,43 @@ func TestScoreRun_NoMetricsNotGated(t *testing.T) {
 	}
 	if s.Score <= 0 {
 		t.Error("a run with cost+util but no metrics should still score > 0")
+	}
+}
+
+func TestScoreRun_AbsentQualityRenormalizedOut(t *testing.T) {
+	// A smoke run with no quality metrics: quality's weight must be dropped from
+	// the denominator, so the score is the cost/util weighted mean over only the
+	// two measured dials — not dragged down by a phantom quality=0 with full weight.
+	w := bench.DefaultKPIWeights()
+	s := bench.ScoreRun(bench.KPIInputs{
+		CostPerAudioHourUSD: 0.015,
+		AnchorCostUSD:       bench.AnchorCostPerProcessedAudioHourUSD,
+		TargetCostUSD:       bench.StretchTargetCostPerAudioHourUSD,
+		BusyPct:             60,
+	}, w)
+	want := 100 * (w.Cost*s.Components["cost"] + w.Utilization*s.Components["utilization"]) / (w.Cost + w.Utilization)
+	if math.Abs(s.Score-want) > 1e-9 {
+		t.Fatalf("absent quality not renormalized out: score=%v want=%v", s.Score, want)
+	}
+}
+
+func TestScoreRun_AbsentCostRenormalizedOut(t *testing.T) {
+	// No cost audit (CostPerAudioHourUSD==0): cost's heavy weight must be dropped
+	// from the denominator, not contribute a hard 0 that halves the score.
+	w := bench.DefaultKPIWeights()
+	s := bench.ScoreRun(bench.KPIInputs{
+		CostPerAudioHourUSD: 0,
+		AnchorCostUSD:       bench.AnchorCostPerProcessedAudioHourUSD,
+		TargetCostUSD:       bench.StretchTargetCostPerAudioHourUSD,
+		WER:                 0.21, DER: 0.10, CpWER: 0.28,
+		BusyPct: 80,
+	}, w)
+	if s.Components["cost"] != 0 {
+		t.Fatalf("absent cost component should report 0, got %v", s.Components["cost"])
+	}
+	want := 100 * (w.Quality*s.Components["quality"] + w.Utilization*s.Components["utilization"]) / (w.Quality + w.Utilization)
+	if math.Abs(s.Score-want) > 1e-9 {
+		t.Fatalf("absent cost not renormalized out: score=%v want=%v", s.Score, want)
 	}
 }
 
