@@ -87,16 +87,17 @@ func (s *Service) AgentGetMeeting(ctx context.Context, id string) (notoapi.Agent
 	// DisplayName), so an AUTO-identified speaker — which the system already counts
 	// as resolved — reaches the agent as the identified person, not "spk_0".
 	if t, err := s.repo.LoadTranscript(ctx, mid); err == nil && t != nil {
-		out.Transcript = buildAgentTranscript(t, s.agentSpeakerNames(ctx, id, t))
+		out.Transcript = buildAgentTranscript(t, s.meetingSpeakerNames(ctx, id, t))
 	}
 
 	return out, nil
 }
 
-// agentSpeakerNames resolves each meeting speaker to its best-known display name
-// for the agent view, joining the transcript against the identity mappings +
-// profile library (the same authoritative source the People view reads).
-func (s *Service) agentSpeakerNames(ctx context.Context, meetingID string, t *artifacts.Transcript) map[string]string {
+// meetingSpeakerNames resolves each meeting speaker to its best-known display name,
+// joining the transcript against the identity mappings + profile library (the same
+// authoritative source the People view reads). Shared by the agent handoff and the
+// search index so an auto-identified speaker is named consistently everywhere.
+func (s *Service) meetingSpeakerNames(ctx context.Context, meetingID string, t *artifacts.Transcript) map[string]string {
 	var mappings []speakerstore.MeetingSpeakerMapping
 	if s.meetingMappings != nil {
 		mappings, _ = s.meetingMappings.ListByMeeting(ctx, meetingID)
@@ -109,17 +110,18 @@ func (s *Service) agentSpeakerNames(ctx context.Context, meetingID string, t *ar
 			}
 		}
 	}
-	return resolveAgentSpeakerNames(t, mappings, profileName)
+	return resolveSpeakerDisplayNames(t, mappings, profileName)
 }
 
-// resolveAgentSpeakerNames builds speakerID → best-known display name. A transcript
+// resolveSpeakerDisplayNames builds speakerID → best-known display name. A transcript
 // speaker carries a DisplayName only when it's been explicitly named (the manual
 // rename path writes it back); an AUTO-identified speaker's name lives in its
 // mapping→profile, never the transcript. Since the system treats an "auto"/"manual"
-// mapping as RESOLVED (isUnresolved excludes them), the agent must see the profile
-// name for such a speaker. Precedence: explicit transcript name > resolved profile
-// name > transcript label > id. Pure (no I/O) so the join is unit-testable.
-func resolveAgentSpeakerNames(t *artifacts.Transcript, mappings []speakerstore.MeetingSpeakerMapping, profileName map[string]string) map[string]string {
+// mapping as RESOLVED (isUnresolved excludes them), a resolved speaker must surface as
+// the profile name everywhere it's read (agent handoff, search index). Precedence:
+// explicit transcript name > resolved profile name > transcript label > id. Pure (no
+// I/O) so the join is unit-testable.
+func resolveSpeakerDisplayNames(t *artifacts.Transcript, mappings []speakerstore.MeetingSpeakerMapping, profileName map[string]string) map[string]string {
 	resolved := make(map[string]string)
 	for _, m := range mappings {
 		if m.ProfileID == nil || (m.MatchStatus != "auto" && m.MatchStatus != "manual") {

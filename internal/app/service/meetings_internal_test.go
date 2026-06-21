@@ -27,7 +27,7 @@ func TestResolveAgentSpeakerNames(t *testing.T) {
 	}
 	profileName := map[string]string{"p-maya": "Maya", "p-guess": "Probably Sam"}
 
-	got := resolveAgentSpeakerNames(tr, mappings, profileName)
+	got := resolveSpeakerDisplayNames(tr, mappings, profileName)
 	want := map[string]string{
 		"spk_0": "Bob",       // explicit name wins
 		"spk_1": "Maya",      // auto match resolves from the profile

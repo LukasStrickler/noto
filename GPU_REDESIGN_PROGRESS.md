@@ -103,8 +103,18 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
-- **Identification: the agent handoff showed "spk_0" for AUTO-identified speakers (1 bug, +1 test,
-  2026-06-21).** `AgentGetMeeting` promises "speaker display names PRE-RESOLVED," but `buildAgentTranscript`
+- **Identification: SEARCH didn't find auto-identified people by name either — unified the resolver (1 bug,
+  +1 test, 2026-06-21).** Same root cause as the agent-handoff fix, now in search: `indexOneMeeting` indexed
+  speaker names via `speakerLabelsByID` (transcript DisplayName→Label→id), so an AUTO-identified speaker —
+  whose name lives only in the mapping→profile — was indexed as "Speaker 2", and a query for their name
+  missed their meetings. Rather than fix it twice, **unified the name resolution**: the agent handoff and the
+  search index now share ONE resolver (`resolveSpeakerDisplayNames` / the `meetingSpeakerNames` service
+  join), and the redundant `speakerLabelsByID` (subset, transcript-only) was deleted. So "name once →
+  everywhere" now holds for auto-ID across agent + search, not just manual renames. End-to-end test: a
+  speaker with no transcript DisplayName but an "auto" mapping to profile "Maya" is found by searching
+  "Maya"; verified it returns 0 hits without the mapping-aware resolver. Net for the loop: identity now
+  resolves the same way at every read site (People view, agent, search), closing the consumer-divergence
+  this thread kept surfacing. `AgentGetMeeting` promises "speaker display names PRE-RESOLVED," but `buildAgentTranscript`
   read names ONLY from `transcript.Speakers[].DisplayName`. That field is written back only by the MANUAL
   rename path (`UpdateSpeakerName`); an AUTO-identified speaker's name lives in its mapping→profile and never
   reaches the transcript. Yet the system already treats an "auto" mapping as RESOLVED (`isUnresolved`
