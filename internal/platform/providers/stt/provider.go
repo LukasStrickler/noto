@@ -43,8 +43,9 @@ type TranscribeOptions struct {
 	ContextBias []string
 	// NumSpeakers hints the expected number of speakers for diarization.
 	NumSpeakers int
-	// Model is the transcription model to use (provider-specific).
-	// AssemblyAI currently chooses its production speech model in the adapter.
+	// Model is the transcription model to use (provider-specific). Empty lets the
+	// adapter resolve its production model — the local Parakeet adapter picks the
+	// pinned parakeet-tdt model from the registry/config.
 	Model string
 	// MeetingID is the noto meeting ID for artifact lineage.
 	MeetingID string

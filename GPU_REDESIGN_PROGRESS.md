@@ -41,6 +41,25 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Adherence/docs: AGENTS.md described a retired AssemblyAI STT pipeline that no longer exists (doc fix,
+  verified against code, 2026-06-21).** AGENTS.md (the architecture reference every loop fire reads) claimed
+  "AssemblyAI STT", "transcribes + diarizes it with AssemblyAI", "Production STT is AssemblyAI only", and
+  pointed `How STT is integrated` at `stt/{provider,assemblyai}.go` — but `find -iname '*assembly*'` returns
+  nothing (no such file), and the registered/default STT provider is `parakeet-local` (`registry.go:24`,
+  `defaults.go:113`), with diarization a separate pyannote stage and a remote/Modal offload path via
+  `computewire`. Corrected every AssemblyAI claim to the real stack (local Parakeet STT + pyannote
+  diarization, in-process or remote-offloaded; OpenRouter LLM, which IS accurate, kept), added the missing
+  `diarize/` and `computewire/` packages to the tree, and fixed the stale `stt/provider.go:47` "AssemblyAI
+  chooses its model" comment. This was the headline adherence gap; chosen this fire after an exhaustive +
+  EMPIRICAL audit found the code itself clean (see below). Verification is code-vs-doc, not a unit test:
+  every corrected path was confirmed to exist; build/vet/tests green. (Deliberately scoped to AGENTS.md +
+  the one comment, NOT README — README's AssemblyAI staleness is entangled with the unresolved
+  Modal-vs-local-default strategy and is a separate follow-up. Audited clean & empirically verified this
+  fire, no bug: the `merge` who-said-what attribution; the bias-glossary (single-sourced for STT + repair);
+  speaker display-name resolution; the local-vs-bundled diarizer turn merge (shared `mergeAdjacent`); the
+  summary evidence grounding (`sanitizeEvidence` runs before `ValidateSummary` on BOTH passes); and FTS
+  search — a live probe confirmed single non-ASCII queries don't error and diacritic folding matches
+  accented↔unaccented on both index and query sides, so international search already works.)
 - **Accuracy/repair: entity-repair silently excluded every non-Latin glossary name (1 consistency-seam bug,
   +1 test, 2026-06-21).** `entityrepair.normalize` (the deterministic CPU glossary repair that snaps ASR
   near-misses of participant/product names to the canonical spelling — a cpWER lever) kept only ASCII

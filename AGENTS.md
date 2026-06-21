@@ -1,15 +1,17 @@
 # noto — repo knowledge base
 
 Terminal-first meeting recorder, transcriber, summarizer, and searchable memory
-(Go 1.25 · Bubble Tea v2 TUI · SQLite FTS5 · AssemblyAI STT · OpenRouter LLM).
+(Go 1.25 · Bubble Tea v2 TUI · SQLite FTS5 · local Parakeet STT + pyannote diarization · OpenRouter LLM).
 This is the big-picture entry point; each `internal/` role group has its own
 `AGENTS.md` with the layer rule and per-file map. For the product overview see
 [README.md](README.md); for TUI key/layout/mouse conventions see [CLAUDE.md](CLAUDE.md).
 
 ## What this project is
 
-noto records or imports meeting audio, transcribes + diarizes it with AssemblyAI,
-generates a cited summary via an OpenRouter-compatible LLM, links the same voice
+noto records or imports meeting audio, transcribes it with a local Parakeet
+(NeMo TDT) recognizer and diarizes it in a separate pyannote stage — both run
+in-process or offload to a remote GPU / Modal compute node over the same HTTP
+contract — generates a cited summary via an OpenRouter-compatible LLM, links the same voice
 across meetings with an in-process CPU-only speaker embedder, and indexes
 everything in SQLite FTS5 — all behind one backend that a keyboard-first TUI, a
 `--json` CLI, and an HTTP/SSE API all read through.
@@ -53,7 +55,9 @@ noto/
 │   │   ├── search/            # SQLite FTS5 index + query parser
 │   │   ├── speakerstore/      # speaker profile + meeting-mapping repos (SQLite)
 │   │   └── providers/         # provider registry + adapters
-│   │       ├── stt/           # AssemblyAI production STT adapter
+│   │       ├── stt/           # local Parakeet STT (sherpa/NeMo) + remote-offload adapter
+│   │       ├── diarize/       # speaker-turn stage (pyannote) + remote-offload adapter
+│   │       ├── computewire/   # shared HTTP contract for remote STT/diarize offload
 │   │       ├── speech/        # transcript normalization
 │   │       ├── speaker/       # in-process ECAPA voice embedder (ONNX, CPU-only)
 │   │       └── llm/           # OpenRouter LLM adapter
@@ -98,7 +102,7 @@ per-file map and local conventions.
 
 ### Provider Registry
 
-`internal/platform/providers/registry.go` — pluggable provider registry. Production STT is AssemblyAI only for now; summaries use OpenRouter-compatible LLMs. Providers implement interfaces in `types.go`.
+`internal/platform/providers/registry.go` — pluggable provider registry. Production STT is the local Parakeet recognizer (`parakeet-local`); diarization is a separate stage, and both have a remote-offload path (a `noto serve` GPU/Modal node) via `computewire`. Summaries use OpenRouter-compatible LLMs. Providers implement interfaces in `types.go`.
 
 ### Artifacts as Structured Types
 
@@ -106,7 +110,7 @@ per-file map and local conventions.
 
 ### Jobs Pipeline
 
-Recording/import → job queued → AssemblyAI transcription/diarization → speaker profile mapping → summarize → index → artifacts written → FTS updated. Jobs are stored in SQLite (`noto-jobs.sqlite`), cancellable via `context.CancelFunc` map.
+Recording/import → job queued → Parakeet transcription + pyannote diarization (in-process or remote-offloaded) → speaker profile mapping → summarize → index → artifacts written → FTS updated. Jobs are stored in SQLite (`noto-jobs.sqlite`), cancellable via `context.CancelFunc` map.
 
 ### appsocket IPC
 
@@ -127,7 +131,7 @@ Recording/import → job queued → AssemblyAI transcription/diarization → spe
 | How recording is triggered | `internal/app/service/recording.go` |
 | How the pipeline runs (stages) | `internal/app/service/jobs_pipeline.go` (ingest/transcribe/summarize/index) |
 | How jobs are queued/executed | `jobs.go` (queue) · `jobs_worker.go` (runtime) — both in `internal/app/service/` |
-| How STT is integrated | `internal/platform/providers/stt/{provider,assemblyai}.go` |
+| How STT is integrated | `internal/platform/providers/stt/{provider,parakeet,remote}.go`; diarization in `internal/platform/providers/diarize/` |
 | How speaker identity works | `internal/platform/providers/speaker/` (embedder) + `internal/core/speakers/` (matching) |
 | How artifacts are written/read | `internal/core/artifacts/artifact.go`, `internal/app/service/storage.go` |
 | How search / FTS query parsing works | `internal/platform/search/` |
@@ -199,4 +203,6 @@ noto speaker-model download|status   # install the in-process voice model
 - FTS5 search ranks by recency + BM25-like scoring
 - Artifact checksum tracks integrity of stored JSON vs generated Markdown
 - Speaker recognition runs **in-process** (pure-Go fbank + ONNX ECAPA, CPU-only);
-  biometrics never leave the backend. AssemblyAI is used for transcription only.
+  biometrics never leave the backend. Transcription/diarization run locally
+  (Parakeet/pyannote) or on the operator's own remote GPU/Modal node — never a
+  third-party cloud STT.
