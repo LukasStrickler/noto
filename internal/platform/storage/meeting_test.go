@@ -52,6 +52,57 @@ func TestWriteManifest(t *testing.T) {
 	}
 }
 
+// TestReadManifestRecoversFromInterruptedCommit pins the durability fix: the
+// manifest and its checksum can't be renamed atomically together, so a crash
+// between them leaves the new manifest paired with the old checksum. ReadManifest
+// must NOT hard-fail that — doing so permanently bricks the meeting and silently
+// drops it from ListMeetings over an unrelated power loss. A structurally-valid
+// manifest on a checksum mismatch is an interrupted commit, not corruption, and is
+// accepted; a manifest that fails to validate stays rejected.
+func TestReadManifestRecoversFromInterruptedCommit(t *testing.T) {
+	tmpDir := t.TempDir()
+	meetingID := uuid.New()
+	layout, err := LayoutFor(filepath.Join(tmpDir, "recordings"), meetingID)
+	if err != nil {
+		t.Fatalf("LayoutFor: %v", err)
+	}
+	if err := EnsureDirs(layout); err != nil {
+		t.Fatalf("EnsureDirs: %v", err)
+	}
+
+	m := &artifacts.MeetingManifest{
+		SchemaVersion:    "manifest.v1",
+		MeetingID:        meetingID.String(),
+		CurrentVersionID: "ver_001",
+		Versions:         []artifacts.ManifestVersion{{VersionID: "ver_001", CreatedAt: time.Now(), Reason: "initial"}},
+	}
+	if err := WriteManifest(layout, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	// Interrupted-commit state: the (valid) manifest is intact but the checksum is
+	// the OLD/stale one. ReadManifest must recover, not brick the meeting.
+	if err := os.WriteFile(layout.ChecksumPath, []byte("sha256:0000000000000000000000000000000000000000000000000000000000000000"), 0644); err != nil {
+		t.Fatalf("stale checksum write: %v", err)
+	}
+	read, err := ReadManifest(layout)
+	if err != nil {
+		t.Fatalf("ReadManifest must recover an interrupted commit, got: %v", err)
+	}
+	if read.MeetingID != meetingID.String() || read.CurrentVersionID != "ver_001" {
+		t.Errorf("recovered manifest mismatch: %+v", read)
+	}
+
+	// Genuine corruption stays rejected: an invalid manifest (empty object fails
+	// Validate) whose checksum also mismatches must NOT be accepted.
+	if err := os.WriteFile(layout.ManifestPath, []byte("{}"), 0644); err != nil {
+		t.Fatalf("corrupt manifest write: %v", err)
+	}
+	if _, err := ReadManifest(layout); err == nil {
+		t.Error("ReadManifest accepted a checksum-mismatched, invalid manifest; want error")
+	}
+}
+
 func TestReadManifest(t *testing.T) {
 	tmpDir := t.TempDir()
 	recordingsDir := filepath.Join(tmpDir, "recordings")

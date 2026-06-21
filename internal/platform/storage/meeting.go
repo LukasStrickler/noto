@@ -22,22 +22,16 @@ func WriteManifest(layout DirectoryLayout, m *artifacts.MeetingManifest) error {
 	checksum := artifacts.ComputeChecksum(data)
 	checksumPath := layout.ChecksumPath
 
-	tmpChecksumPath := filepath.Join(layout.TmpDir, "manifest_checksum.tmp")
-	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
-		return ErrWriteFailed(tmpChecksumPath, err)
-	}
-	if err := fsyncFile(tmpChecksumPath); err != nil {
-		os.Remove(tmpChecksumPath)
-		return ErrWriteFailed(tmpChecksumPath, err)
-	}
-	if err := os.Rename(tmpChecksumPath, checksumPath); err != nil {
-		os.Remove(tmpChecksumPath)
-		return ErrAtomicWrite(checksumPath, err)
-	}
-	if err := fsyncDir(filepath.Dir(checksumPath)); err != nil {
-		return err
-	}
-
+	// Commit the manifest BEFORE its checksum (data before the integrity-tag that
+	// describes it). The two files can't be renamed atomically together, so a crash
+	// in the window between them is unavoidable — but the ORDER decides which side
+	// is left stale. Checksum-first (the old order) could leave a NEW checksum over
+	// an OLD manifest: the new data is lost AND every later ReadManifest sees a
+	// mismatch and used to hard-fail forever, silently dropping the meeting from
+	// ListMeetings. Manifest-first instead leaves the NEW, complete manifest paired
+	// with the OLD checksum — recoverable (ReadManifest validates-and-accepts a
+	// parseable manifest on mismatch; see there). Stage both temps, then do the two
+	// renames back-to-back to keep the window as small as possible.
 	tmpPath := filepath.Join(layout.TmpDir, "manifest.tmp")
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return ErrWriteFailed(tmpPath, err)
@@ -46,11 +40,32 @@ func WriteManifest(layout DirectoryLayout, m *artifacts.MeetingManifest) error {
 		os.Remove(tmpPath)
 		return ErrWriteFailed(tmpPath, err)
 	}
+
+	tmpChecksumPath := filepath.Join(layout.TmpDir, "manifest_checksum.tmp")
+	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
+		os.Remove(tmpPath)
+		return ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := fsyncFile(tmpChecksumPath); err != nil {
+		os.Remove(tmpPath)
+		os.Remove(tmpChecksumPath)
+		return ErrWriteFailed(tmpChecksumPath, err)
+	}
+
 	if err := os.Rename(tmpPath, layout.ManifestPath); err != nil {
 		os.Remove(tmpPath)
+		os.Remove(tmpChecksumPath)
 		return ErrAtomicWrite(layout.ManifestPath, err)
 	}
 	if err := fsyncDir(filepath.Dir(layout.ManifestPath)); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpChecksumPath, checksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return ErrAtomicWrite(checksumPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(checksumPath)); err != nil {
 		return err
 	}
 
@@ -93,13 +108,36 @@ func ReadManifest(layout DirectoryLayout) (*artifacts.MeetingManifest, error) {
 		return nil, ErrReadFailed(checksumPath, err)
 	}
 
-	if err := artifacts.VerifyChecksum(data, string(expectedChecksum)); err != nil {
-		return nil, ErrChecksumMismatch(string(expectedChecksum), artifacts.ComputeChecksum(data), layout.ManifestPath)
-	}
+	checksumOK := artifacts.VerifyChecksum(data, string(expectedChecksum)) == nil
 
 	var m artifacts.MeetingManifest
 	if err := json.Unmarshal(data, &m); err != nil {
+		// Unparseable. A matching checksum means a malformed-but-intact file; a
+		// mismatch means corruption — either way it can't be read, but surface the
+		// mismatch as the checksum error to match the verify path's vocabulary.
+		if !checksumOK {
+			return nil, ErrChecksumMismatch(string(expectedChecksum), artifacts.ComputeChecksum(data), layout.ManifestPath)
+		}
 		return nil, ErrReadFailed(layout.ManifestPath, err)
+	}
+
+	if !checksumOK {
+		// The checksum disagrees with the manifest. WriteManifest commits the
+		// manifest before its checksum and each file lands via temp+fsync+rename, so
+		// a crash between the two renames leaves the NEW, complete manifest paired
+		// with the OLD checksum — bytes on disk are always a whole JSON document, not
+		// a half-write. Distinguish that interrupted commit from genuine bit-rot by
+		// STRUCTURE: a manifest that still parses AND validates is the former, so
+		// accept it. Hard-failing here would let an unrelated power loss permanently
+		// brick the meeting and silently drop it from ListMeetings — a far worse
+		// outcome than trusting a structurally-sound manifest whose sidecar checksum
+		// is merely stale. Real corruption (or tampering) almost always breaks
+		// parse/validate and still hard-fails. The checksum self-heals on the next
+		// WriteManifest; VerifyMeetingChecksums (the explicit integrity audit) still
+		// reports the mismatch until then.
+		if verr := m.Validate(); verr != nil {
+			return nil, ErrChecksumMismatch(string(expectedChecksum), artifacts.ComputeChecksum(data), layout.ManifestPath)
+		}
 	}
 
 	return &m, nil
@@ -307,23 +345,11 @@ func WriteVersionManifest(layout DirectoryLayout, versionID string, m *artifacts
 
 	checksum := artifacts.ComputeChecksum(data)
 	checksumPath := layout.VersionChecksumPath(versionID)
+	finalPath := layout.VersionManifestPath(versionID)
 
-	tmpChecksumPath := filepath.Join(layout.TmpDir, "version_checksum.tmp")
-	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
-		return ErrWriteFailed(tmpChecksumPath, err)
-	}
-	if err := fsyncFile(tmpChecksumPath); err != nil {
-		os.Remove(tmpChecksumPath)
-		return ErrWriteFailed(tmpChecksumPath, err)
-	}
-	if err := os.Rename(tmpChecksumPath, checksumPath); err != nil {
-		os.Remove(tmpChecksumPath)
-		return ErrAtomicWrite(checksumPath, err)
-	}
-	if err := fsyncDir(filepath.Dir(checksumPath)); err != nil {
-		return err
-	}
-
+	// Manifest before its checksum, same ordering rule as WriteManifest: an
+	// interrupted commit must leave the NEW manifest with a stale checksum
+	// (recoverable), never a new checksum over old/absent data.
 	tmpPath := filepath.Join(layout.TmpDir, "version_manifest.tmp")
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return ErrWriteFailed(tmpPath, err)
@@ -333,12 +359,31 @@ func WriteVersionManifest(layout DirectoryLayout, versionID string, m *artifacts
 		return ErrWriteFailed(tmpPath, err)
 	}
 
-	finalPath := layout.VersionManifestPath(versionID)
+	tmpChecksumPath := filepath.Join(layout.TmpDir, "version_checksum.tmp")
+	if err := os.WriteFile(tmpChecksumPath, []byte(checksum), 0644); err != nil {
+		os.Remove(tmpPath)
+		return ErrWriteFailed(tmpChecksumPath, err)
+	}
+	if err := fsyncFile(tmpChecksumPath); err != nil {
+		os.Remove(tmpPath)
+		os.Remove(tmpChecksumPath)
+		return ErrWriteFailed(tmpChecksumPath, err)
+	}
+
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		os.Remove(tmpPath)
+		os.Remove(tmpChecksumPath)
 		return ErrAtomicWrite(finalPath, err)
 	}
 	if err := fsyncDir(filepath.Dir(finalPath)); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpChecksumPath, checksumPath); err != nil {
+		os.Remove(tmpChecksumPath)
+		return ErrAtomicWrite(checksumPath, err)
+	}
+	if err := fsyncDir(filepath.Dir(checksumPath)); err != nil {
 		return err
 	}
 

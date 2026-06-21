@@ -41,6 +41,22 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Storage: a crash mid-manifest-commit permanently bricked a meeting and silently dropped it (1 data
+  bug, +1 test, 2026-06-21).** Second of the audit's two "fix the data bugs first" items. `WriteManifest`
+  committed the checksum file BEFORE the manifest, in two separate `rename`s. The two files can't be
+  renamed atomically together, so a power loss in the window left the NEW checksum over the OLD manifest;
+  every later `ReadManifest` then recomputed the old manifest's hash, mismatched the new checksum, and
+  hard-failed with `ErrChecksumMismatch` FOREVER — and `ListMeetings` silently drops a meeting whose
+  manifest won't read, so the meeting just vanished. Fix is two parts: (1) commit the manifest BEFORE its
+  checksum (data before the integrity-tag that describes it; stage both temps then rename back-to-back to
+  shrink the window) so an interrupted commit leaves the NEW manifest with a stale checksum — recoverable,
+  not lossy; (2) `ReadManifest` now distinguishes an interrupted commit from real corruption by STRUCTURE:
+  on a checksum mismatch, a manifest that still parses AND `Validate()`s is accepted (each file lands via
+  temp+fsync+rename, so on-disk bytes are always a whole JSON doc, not a half-write), while one that fails
+  parse/validate stays hard-rejected. The checksum self-heals on the next write; `VerifyMeetingChecksums`
+  (the explicit integrity audit) still reports the mismatch until then. Same order swap applied to
+  `WriteVersionManifest`. Test simulates the post-crash state (valid manifest + stale checksum → recovers;
+  invalid manifest + mismatch → still rejected); pre-fix the recovery case hard-fails, revert-checked.
 - **Identity: concurrent folds into one profile lost updates and corrupted the running mean (1 data
   bug, +1 race-checked test, 2026-06-21).** Surfaced by a full release-readiness audit (Modal-default
   is the confirmed target; "fix the data bugs first" was the user's directive). `foldEmbeddingIntoProfile`
