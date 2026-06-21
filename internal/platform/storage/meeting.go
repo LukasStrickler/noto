@@ -195,6 +195,15 @@ func ReadSummary(layout DirectoryLayout) (string, error) {
 }
 
 func WriteAudioMetadata(layout DirectoryLayout, audio *artifacts.AudioMetadata) error {
+	// Same write/read symmetry as WriteTranscript: ReadAudioMetadata validates on the
+	// way out, so an invalid metadata written here would be persisted yet permanently
+	// unreadable. Refuse it at the source instead — if it can't be read back, don't write it.
+	if audio == nil {
+		return ErrWriteFailed(layout.AudioPath+".json", fmt.Errorf("nil audio metadata"))
+	}
+	if verr := audio.Validate(); verr != nil {
+		return ErrWriteFailed(layout.AudioPath+".json", verr)
+	}
 	data, err := json.MarshalIndent(audio, "", "  ")
 	if err != nil {
 		return ErrWriteFailed(layout.AudioPath+".json", err)

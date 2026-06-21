@@ -103,6 +103,16 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **Integrity follow-on: same write/read asymmetry in WriteAudioMetadata (1 bug, +1 test, 2026-06-21).**
+  Swept the other storage artifacts for the transcript bug's CLASS. `ReadAudioMetadata` validates
+  (schema, asset_id, positive duration/sample-rate/channels) but `WriteAudioMetadata` didn't — the
+  identical saved-but-unreadable landmine. Added the same validate-before-write + nil guard, completing
+  the storage symmetry so the layer's contract is uniform. (Honest scope: `WriteAudioMetadata` has no
+  production caller yet — this is completing a public primitive's contract, not an active-path fix; the
+  active one was the transcript. The OTHER artifacts are symmetric and need nothing: `ReadManifest`/
+  `ReadSummary` don't validate on read, so there's no asymmetry to close, and the manifest read path
+  already degrades gracefully on a stale `current_version_id` via `extractCreatedAt`.) Test writes 5
+  invalid shapes + nil, asserts each is rejected and unreadable-after; fails pre-fix, passes after.
 - **Integrity: WriteTranscript didn't validate but ReadTranscript did — saved-but-unreadable artifacts
   (2 bugs, +1 multi-case test, 2026-06-21).** Root cause behind the empty-diarization symptom (below):
   `ReadTranscript` runs `ValidateTranscript` on the way out, but `WriteTranscript` wrote ANY transcript.

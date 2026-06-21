@@ -201,6 +201,60 @@ func TestWriteTranscriptRejectsUnreadable(t *testing.T) {
 	}
 }
 
+// TestWriteAudioMetadataRejectsUnreadable mirrors the transcript symmetry for the
+// audio-metadata artifact: ReadAudioMetadata validates, so WriteAudioMetadata must
+// refuse anything that wouldn't read back — no saved-but-unreadable artifacts.
+func TestWriteAudioMetadataRejectsUnreadable(t *testing.T) {
+	layout, err := LayoutFor(filepath.Join(t.TempDir(), "recordings"), uuid.New())
+	if err != nil {
+		t.Fatalf("LayoutFor: %v", err)
+	}
+	if err := EnsureDirs(layout); err != nil {
+		t.Fatalf("EnsureDirs: %v", err)
+	}
+
+	valid := func() *artifacts.AudioMetadata {
+		return &artifacts.AudioMetadata{
+			SchemaVersion:   "audio-asset.v1",
+			MeetingID:       layout.MeetingID.String(),
+			AssetID:         "asset_1",
+			DurationSeconds: 12.5,
+			Channels:        2,
+			SampleRateHz:    16000,
+		}
+	}
+
+	cases := map[string]func(*artifacts.AudioMetadata){
+		"nil":             nil,
+		"zero duration":   func(a *artifacts.AudioMetadata) { a.DurationSeconds = 0 },
+		"zero samplerate": func(a *artifacts.AudioMetadata) { a.SampleRateHz = 0 },
+		"zero channels":   func(a *artifacts.AudioMetadata) { a.Channels = 0 },
+		"blank asset":     func(a *artifacts.AudioMetadata) { a.AssetID = "" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			var a *artifacts.AudioMetadata
+			if mutate != nil {
+				a = valid()
+				mutate(a)
+			}
+			if err := WriteAudioMetadata(layout, a); err == nil {
+				t.Fatalf("WriteAudioMetadata accepted unreadable metadata (%s); it must reject", name)
+			}
+			if _, rerr := ReadAudioMetadata(layout); rerr == nil {
+				t.Fatalf("unreadable audio metadata (%s) was persisted and read back", name)
+			}
+		})
+	}
+
+	if err := WriteAudioMetadata(layout, valid()); err != nil {
+		t.Fatalf("WriteAudioMetadata rejected valid metadata: %v", err)
+	}
+	if _, err := ReadAudioMetadata(layout); err != nil {
+		t.Fatalf("ReadAudioMetadata failed on valid metadata: %v", err)
+	}
+}
+
 func TestReadTranscript(t *testing.T) {
 	tmpDir := t.TempDir()
 	recordingsDir := filepath.Join(tmpDir, "recordings")
