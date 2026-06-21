@@ -292,7 +292,15 @@ func (s *Service) UpdateSpeakerName(ctx context.Context, meetingID, speakerID, d
 	if !found {
 		return notoapi.NewError(notoapi.CodeNotFound, "speaker not found in meeting", map[string]any{"speaker_id": speakerID})
 	}
-	return s.repo.SaveTranscript(ctx, mid, t)
+	if err := s.repo.SaveTranscript(ctx, mid, t); err != nil {
+		return err
+	}
+	// Refresh the search index so the renamed speaker is immediately searchable
+	// by name (the FTS speaker column is built from the transcript's display
+	// names). Best-effort: the rename already succeeded; a stale index self-heals
+	// on the next reindex. Passing "" lets indexOneMeeting resolve the title.
+	_ = s.indexOneMeeting(ctx, mid, "")
+	return nil
 }
 
 // VerifyMeeting kicks an async verify job for one meeting and returns it.

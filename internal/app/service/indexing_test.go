@@ -75,3 +75,50 @@ func TestIndexOneMeeting_IndexesSpeakerName(t *testing.T) {
 		t.Errorf("searching the speaker's name should find their meeting; got %d hits", len(hits))
 	}
 }
+
+// TestUpdateSpeakerName_RefreshesSearchIndex closes the staleness gap: renaming a
+// speaker must re-index the meeting so the NEW name is immediately searchable,
+// not stuck until a manual reindex.
+func TestUpdateSpeakerName_RefreshesSearchIndex(t *testing.T) {
+	ctx := context.Background()
+	idx, err := search.NewSearchIndex(filepath.Join(t.TempDir(), "idx.db"))
+	if err != nil {
+		t.Fatalf("search index: %v", err)
+	}
+	defer idx.Close()
+
+	fr := testutil.NewFakeRepo()
+	mid := uuid.New()
+	if err := fr.CreateMeeting(ctx, mid, repo.CreateMeetingOpts{Title: "Standup"}); err != nil {
+		t.Fatalf("create meeting: %v", err)
+	}
+	if err := fr.SaveTranscript(ctx, mid, &artifacts.Transcript{
+		SchemaVersion: "transcript.v1",
+		MeetingID:     mid.String(),
+		Speakers:      []artifacts.Speaker{{ID: "spk_0", Label: "Speaker 1"}}, // not yet named
+		Segments:      []artifacts.Segment{{ID: "s0", SpeakerID: "spk_0", Text: "kicking off the review"}},
+	}); err != nil {
+		t.Fatalf("save transcript: %v", err)
+	}
+
+	svc := &Service{search: idx, repo: fr}
+	if err := svc.indexOneMeeting(ctx, mid, "Standup"); err != nil {
+		t.Fatalf("initial index: %v", err)
+	}
+	// Before the rename, "Alice" matches nothing.
+	if hits, _ := idx.Search("Alice"); len(hits) != 0 {
+		t.Fatalf("precondition: Alice should not match yet, got %d", len(hits))
+	}
+
+	if err := svc.UpdateSpeakerName(ctx, mid.String(), "spk_0", "Alice"); err != nil {
+		t.Fatalf("UpdateSpeakerName: %v", err)
+	}
+
+	hits, err := idx.Search("Alice")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) == 0 {
+		t.Error("renaming a speaker should re-index so the new name is searchable")
+	}
+}

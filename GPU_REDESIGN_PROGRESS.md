@@ -223,6 +223,13 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   startup processes it → the recording becomes a meeting instead of being dropped. Tested: a dry-run recording
   active at Close leaves a QUEUED pipeline job for its meeting. build/vet/lint(0)/race(service) clean.
 
+- **★ Renaming a speaker now refreshes the search index (2026-06-21) — closes the iter-18 staleness gap.**
+  `UpdateSpeakerName` wrote the renamed speaker into the transcript via `repo.SaveTranscript` but never
+  re-indexed, so the new name wasn't searchable until a manual `reindex` — defeating the search-by-name win
+  below for the exact action that creates a name. Now re-indexes the meeting (best-effort) after the save, so
+  identifying a speaker makes their name immediately findable. Tested end-to-end: rename spk_0→"Alice", then
+  `Search("Alice")` returns the meeting (empty before the rename). The general re-index-on-mutation staleness
+  (standalone re-summarize) is still deferred — that path isn't a normal product flow; the speaker-rename one is.
 - **★ Search now indexes the speaker NAME, not the opaque "spk_0" (2026-06-21) — UX for the identity feature.**
   `indexOneMeeting` put `seg.SpeakerID` (e.g. "spk_0") into the FTS `speaker` column, so search results read
   "spk_0" and a query for a person's NAME never matched their segments — undercutting the whole identity feature
