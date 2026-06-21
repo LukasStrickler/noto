@@ -50,12 +50,17 @@ func TestFoldEmbeddingIntoProfile(t *testing.T) {
 		t.Errorf("no-op inputs changed the profile: %d -> %d", before.EmbeddingCount, after.EmbeddingCount)
 	}
 
-	// A profile with no prior voiceprint adopts the first observation at count 1.
+	// A profile with no prior voiceprint adopts the first observation at count 1, and
+	// records the embedding space it now lives in (so a later model switch can tell
+	// which voiceprints to re-embed) — like every other voiceprint-writing path.
 	_ = pr.Create(ctx, speakerstore.SpeakerProfile{ID: "p2", DisplayName: "Bob", CreatedAt: now, UpdatedAt: now})
 	svc.foldEmbeddingIntoProfile(ctx, "p2", b)
 	p2, _ := pr.Get(ctx, "p2")
 	if p2.EmbeddingCount != 1 || len(p2.EmbeddingVector) != 2 {
 		t.Errorf("first enrollment should set count=1 and the vector; got count=%d len=%d", p2.EmbeddingCount, len(p2.EmbeddingVector))
+	}
+	if p2.EmbeddingModel == "" {
+		t.Error("first enrollment must tag the embedding model, else the voiceprint's space is untracked")
 	}
 }
 

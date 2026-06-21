@@ -41,6 +41,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Identity: a human-assigned voiceprint recorded no embedding-space tag (1 bug, +1 assertion,
+  2026-06-21).** `foldEmbeddingIntoProfile`'s first-voiceprint branch (a name-only person created without
+  audio, later assigned to a meeting speaker via `PatchMeetingSpeakerMappings`→`shouldFoldOnPatch`) set the
+  vector/dim/count but NOT `EmbeddingModel` — so that profile's voiceprint carried no model id. EVERY other
+  voiceprint-writing path tags the space: auto-mint (`jobs_pipeline.go:720`), "+ new person" seed
+  (`speaker_profiles.go:100`), and merge (the iter-28 empty-voiceprint fix). This fold path was the lone
+  omission, leaving the voiceprint's embedding space untracked (a latent re-embed-on-model-switch hazard,
+  since nothing currently branches on the tag). Fixed by tagging with `s.embedderModelID()` like the
+  siblings; extended the existing first-enrollment test to assert it (fails pre-fix, revert-checked). Found
+  while auditing the recently-shipped running-mean folding (c58acb2/89c7ea1): the fold-once invariant
+  (`shouldFoldOnPatch`), the `RunningMean`→`WeightedMean` dim-mismatch guard (safe no-op), and `max(count,1)`
+  count handling are all otherwise SOUND — and the whole computewire offload contract (client/server header
+  parity, ASCII-bias escaping, 4 GiB cap) is consistent. Suite + vet + lint(0) clean.
 - **★ Adherence/topology: `System.Mode` lied about the effective backend posture (1 bug, +1 test,
   2026-06-21).** Same cross-reference class as the JobWorkers fix below. `GetSystem` reports where this
   backend runs so a client labels the connection ("local · Mac M1" vs "remote · linux-cuda") — and EVERY

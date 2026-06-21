@@ -129,10 +129,15 @@ func (s *Service) foldEmbeddingIntoProfile(ctx context.Context, profileID string
 	}
 	now := time.Now()
 	if len(p.EmbeddingVector) == 0 {
-		// First voiceprint for this profile (e.g. one created without audio).
+		// First voiceprint for this profile (e.g. a name-only person created without
+		// audio, later assigned to a meeting speaker). Tag the embedding space, same as
+		// every other voiceprint-writing path (auto-mint, "+ new person" seed, merge) —
+		// otherwise this profile's voiceprint carries no model id, so a future model
+		// switch can't tell which space it lives in to re-embed it.
 		p.EmbeddingVector = emb
 		p.EmbeddingDim = len(emb)
 		p.EmbeddingCount = 1
+		p.EmbeddingModel = s.embedderModelID()
 	} else {
 		centroid, cerr := speakers.RunningMean(p.EmbeddingVector, p.EmbeddingCount, emb)
 		if cerr != nil || len(centroid) == 0 {
