@@ -237,14 +237,23 @@ instant some of the 10 workers are in summarize/index → **effective concurrent
 fed BELOW its own optimum**. The dilution scales with the summarize fraction of pipeline wall-time (LLM on a
 long transcript is non-trivial). This is invisible to the bench (no LLM) and not captured by the posture pool.
 
-**Fix (DOUBLE win, not yet built — architectural + behavior-changing, so flagged for a decision):** decouple the
-GPU-bound stages from the non-GPU tail — transcribe enqueues a follow-on summarize+index job and RETURNS, so the
-GPU-feeding workers churn transcribe jobs at the true batch concurrency while summarize/index run separately
-(and at a lower priority — the user already has their transcript). Wins: (a) GPU fed at the real optimum on
-hosted; (b) FASTER transcript-to-user (the transcript appears without waiting for the LLM summary). Risk to get
-right: job-chaining + crash-resume (idempotent re-run could double-enqueue the follow-on — needs a dedup/keyed
-enqueue), and it changes the user-visible ordering. The durable-queue + crash-resume + graceful-shutdown infra
-built this loop is exactly what makes it safe; it's a deliberate change, not a quick fix.
+**Fix — CORRECTED 2026-06-21 (the first cut was incomplete).** Splitting the pipeline into a follow-on
+summarize+index job is necessary for the UX win but does NOT by itself fix the dilution: a follow-on job run in
+the SAME worker pool still occupies a worker slot doing non-GPU work, so the same number of workers are tied up
+off-GPU and effective GPU concurrency is unchanged. The dilution's true root cause is **one undifferentiated
+pool running both GPU and non-GPU work**, so to feed the GPU at N you'd need >N workers — but a flat oversize
+risks N+ concurrent GPU requests (past the contention point) whenever many workers ARE in the GPU stage. The
+correct fix DECOUPLES GPU concurrency from worker count: either (a) a **GPU semaphore** of size N that workers
+hold only across the GPU call (pool sized larger, GPU requests capped at N exactly), or (b) **separate pools** —
+a GPU pool (transcribe, sized to N) + a non-GPU pool (summarize/index). Both keep N concurrent GPU requests
+regardless of how many meetings are in the LLM/index tail.
+**Big caveat — impact depends on the GPU deployment:** with a RESERVED/fixed GPU (`min_containers≥1`, one box)
+the dilution wastes capacity you've paid for → real throughput loss, worth fixing. With Modal AUTOSCALING /
+pay-per-request, a worker in summarize just means fewer concurrent requests = lower instantaneous throughput but
+NO wasted spend (you don't pay for GPU during summarize) — so the fix mostly buys peak throughput, not cost.
+Which regime the product targets decides whether this is worth the infra. **Needs a measured hosted run
+(summarize fraction of pipeline wall-time × deployment regime) before building — flagged, not assumed.** The UX
+half (transcript-before-summary via a follow-on job) is independently worthwhile and lower-risk.
 
 ## GPU utilization — analysis for the user's "avg util / sustained, not just peak" question (2026-06-21)
 

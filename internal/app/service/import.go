@@ -123,7 +123,11 @@ func streamToFile(r io.Reader, dst string) error {
 		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp) // don't leave a stray .tmp behind (matches copyFile)
+		return err
+	}
+	return nil
 }
 
 func copyFile(src, dst string) error {
