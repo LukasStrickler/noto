@@ -22,7 +22,10 @@
 // Only equal-token-count windows are replaced, so word timestamps and IDs stay aligned.
 package entityrepair
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Options tunes how aggressively the repair fires. The zero value is intentionally inert
 // (MinSimilarity 0 would match everything) — always construct via DefaultOptions and
@@ -271,11 +274,16 @@ func levenshtein(a, b string) int {
 }
 
 // normalize lowercases and keeps only letters/digits, so comparison ignores case and
-// punctuation ("O'Brien," vs "obrien").
+// punctuation ("O'Brien," vs "obrien"). It uses the SAME unicode-aware class as the
+// rest of noto (metrics.Normalize, artifacts.normalizeForMatch): an ASCII-only filter
+// would drop every non-Latin character, so a CJK/Cyrillic participant name normalizes
+// to "" and is silently excluded from repair entirely (prepareTerms rejects an
+// empty-token term), and an accented name is undercounted against MinTermLen — exactly
+// the international entities the bias glossary goes out of its way to preserve.
 func normalize(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
 			b.WriteRune(r)
 		}
 	}

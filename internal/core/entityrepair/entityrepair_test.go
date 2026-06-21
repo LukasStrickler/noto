@@ -12,6 +12,23 @@ func words(texts ...string) []Word {
 
 func conf(v float64) *float64 { return &v }
 
+// TestApply_RepairsNonLatinEntity proves the repair pass covers international
+// glossary terms. entityrepair.normalize must use the SAME unicode-aware token class
+// as the rest of noto (metrics.Normalize / artifacts.normalizeForMatch): an ASCII-only
+// filter normalized a non-Latin name to "" and prepareTerms then dropped it, so a
+// CJK/Cyrillic participant name could never be repaired. A 6-char Cyrillic name with a
+// one-character ASR slip clears the 0.80 bar and snaps to the canonical spelling.
+func TestApply_RepairsNonLatinEntity(t *testing.T) {
+	in := words("Москве") // the ASR heard "Москве"; the participant glossary has "Москва"
+	out, repairs := Apply(in, []string{"Москва"}, DefaultOptions())
+	if len(repairs) != 1 {
+		t.Fatalf("expected 1 repair of a non-Latin entity, got %d: %+v", len(repairs), repairs)
+	}
+	if out[0] != "Москва" {
+		t.Errorf("out[0] = %q; want %q (snapped to the canonical Cyrillic spelling)", out[0], "Москва")
+	}
+}
+
 func TestApply_SnapsCloseSingleTokenEntity(t *testing.T) {
 	in := words("the", "kubernates", "cluster") // misspelled "kubernetes"
 	out, reps := Apply(in, []string{"Kubernetes"}, DefaultOptions())

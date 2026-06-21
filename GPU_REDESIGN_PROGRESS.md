@@ -41,6 +41,18 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Accuracy/repair: entity-repair silently excluded every non-Latin glossary name (1 consistency-seam bug,
+  +1 test, 2026-06-21).** `entityrepair.normalize` (the deterministic CPU glossary repair that snaps ASR
+  near-misses of participant/product names to the canonical spelling — a cpWER lever) kept only ASCII
+  `a-z`/`0-9`, while the rest of noto (`metrics.Normalize`, `artifacts.normalizeForMatch`) uses
+  `unicode.IsLetter/IsNumber`. So `normalize` was the divergent sibling: a CJK/Cyrillic participant name
+  normalized to "" and `prepareTerms` then dropped it — the term could NEVER be repaired — and an accented
+  name was undercounted against `MinTermLen`. This directly contradicts the codebase's stated care for
+  international entities (the `asciiJSONMarshal` bias-header work exists precisely so "Réunion"/"会議"
+  survive). The doc even said "keeps only letters/digits" (intent: all letters); the code was ASCII-only.
+  Fixed to the shared unicode-aware class — ASCII behavior is byte-identical (every existing test still
+  passes), only non-ASCII now participates. Test: a 6-char Cyrillic name with a one-character ASR slip
+  clears the 0.80 bar and snaps to canonical; pre-fix the term is excluded → 0 repairs, revert-checked.
 - **Identity store: a corrupt voiceprint blob silently became a wrong-dimension vector (1 data-integrity
   guard, +1 test, 2026-06-21).** `unmarshalEmbedding` (`speakerstore/sqlite.go`) derived the vector length
   as `len(data)/8` with no validity check, so a corrupt/partial blob (length not a multiple of 8) decoded
