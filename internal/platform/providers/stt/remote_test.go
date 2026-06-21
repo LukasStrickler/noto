@@ -130,3 +130,32 @@ func TestMarshalBoundedBias(t *testing.T) {
 		t.Errorf("trimming must keep the leading terms; got first %q want %q", trimmed[0], huge[0])
 	}
 }
+
+// TestMarshalBoundedBiasASCIISafe pins that international participant names produce a
+// PURE-ASCII header value (so a proxy fronting a hosted compute endpoint can't strip
+// the non-ASCII header and lose the bias glossary) while still decoding back to the
+// exact original names — \uXXXX is valid JSON, so the remote needs no change.
+func TestMarshalBoundedBiasASCIISafe(t *testing.T) {
+	terms := []string{"Réunion", "François", "会議", "naïve café", "Bob"}
+	got := marshalBoundedBias(terms, maxBiasHeaderBytes)
+	if got == "" {
+		t.Fatal("expected a bias header value")
+	}
+	for i := 0; i < len(got); i++ {
+		if got[i] >= 0x80 {
+			t.Fatalf("bias header carries a non-ASCII byte at %d: %q", i, got)
+		}
+	}
+	var round []string
+	if err := json.Unmarshal([]byte(got), &round); err != nil {
+		t.Fatalf("escaped bias must be valid JSON: %v", err)
+	}
+	if len(round) != len(terms) {
+		t.Fatalf("round-trip changed the term count: got %v want %v", round, terms)
+	}
+	for i := range terms {
+		if round[i] != terms[i] {
+			t.Errorf("round-trip[%d] = %q, want %q", i, round[i], terms[i])
+		}
+	}
+}

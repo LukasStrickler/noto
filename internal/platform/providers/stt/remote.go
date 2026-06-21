@@ -56,25 +56,62 @@ func (r *RemoteSTT) FeatureMap() ProviderFeatures {
 // other X-Noto-* headers + auth.
 const maxBiasHeaderBytes = 6144
 
-// marshalBoundedBias JSON-encodes terms, keeping the LARGEST leading prefix whose
-// encoding fits within limit bytes (the builder orders the most relevant first).
-// Returns "" only if even a single term can't fit — then no bias header is sent,
-// since a rejected request is worse than an unbiased decode.
+// marshalBoundedBias ASCII-JSON-encodes terms, keeping the LARGEST leading prefix
+// whose encoding fits within limit bytes (the builder orders the most relevant
+// first). Returns "" only if even a single term can't fit — then no bias header is
+// sent, since a rejected request is worse than an unbiased decode.
 func marshalBoundedBias(terms []string, limit int) string {
-	if b, err := json.Marshal(terms); err == nil && len(b) <= limit {
-		return string(b)
+	if s := asciiJSONMarshal(terms); s != "" && len(s) <= limit {
+		return s
 	}
 	lo, hi, best := 1, len(terms)-1, ""
 	for lo <= hi {
 		mid := (lo + hi) / 2
-		if b, err := json.Marshal(terms[:mid]); err == nil && len(b) <= limit {
-			best = string(b)
+		if s := asciiJSONMarshal(terms[:mid]); s != "" && len(s) <= limit {
+			best = s
 			lo = mid + 1
 		} else {
 			hi = mid - 1
 		}
 	}
 	return best
+}
+
+// asciiJSONMarshal JSON-encodes v and \u-escapes every non-ASCII rune, so the result
+// is PURE ASCII — still valid JSON that any Unmarshal/json.loads decodes back to the
+// same strings, but safe in an HTTP header. A raw UTF-8 byte in a header value is
+// RFC-7230-noncompliant, and a proxy fronting a hosted compute endpoint may strip the
+// whole header — silently dropping international participant names ("Réunion", "会議")
+// from the bias glossary so they never get biased/repaired. No server change is
+// needed: \uXXXX is the standard JSON string escape. A no-op for an all-ASCII
+// glossary. Returns "" on a marshal error.
+func asciiJSONMarshal(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	const hexDigits = "0123456789abcdef"
+	var sb strings.Builder
+	appendU := func(code uint16) {
+		sb.WriteString(`\u`)
+		sb.WriteByte(hexDigits[code>>12&0xf])
+		sb.WriteByte(hexDigits[code>>8&0xf])
+		sb.WriteByte(hexDigits[code>>4&0xf])
+		sb.WriteByte(hexDigits[code&0xf])
+	}
+	for _, r := range string(b) {
+		switch {
+		case r < 0x80:
+			sb.WriteRune(r)
+		case r <= 0xffff:
+			appendU(uint16(r))
+		default: // astral plane → UTF-16 surrogate pair
+			r -= 0x10000
+			appendU(uint16(0xd800 + (r >> 10)))
+			appendU(uint16(0xdc00 + (r & 0x3ff)))
+		}
+	}
+	return sb.String()
 }
 
 func (r *RemoteSTT) Transcribe(ctx context.Context, audio []byte, opts TranscribeOptions) (*artifacts.Transcript, error) {

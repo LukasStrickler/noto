@@ -103,8 +103,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
-- **Identification: GetTranscript was the LAST divergent read site — now every consumer resolves the same
-  (1 bug, +1 test, 2026-06-21).** Completing the sweep: `GetTranscript` resolved segment speaker names only
+- **Hosted accuracy: the context-bias header dropped international names behind a proxy (1 bug, +1 test,
+  2026-06-21).** Same class as the upload-header fix (iter "non-ASCII titles"), in a DIFFERENT, unfixed
+  header: `RemoteSTT` sends the bias glossary as JSON in `X-Noto-Context-Bias`, and `json.Marshal` emits RAW
+  UTF-8 for non-ASCII. The glossary is PARTICIPANT NAMES — very often non-ASCII for international users — so
+  on a hosted-behind-proxy deployment a name like "Réunion"/"会議" put non-ASCII bytes in the header, which a
+  proxy may strip → those names never reach the remote decoder's bias OR (downstream) entity-repair → worse
+  transcription/identification accuracy for exactly the names that matter. Fixed with `asciiJSONMarshal`:
+  `\u`-escapes every non-ASCII rune (incl. astral→surrogate-pair) so the header is PURE ASCII yet still valid
+  JSON that any `json.Unmarshal`/`json.loads` decodes back identically — **no server change, backward/forward
+  compatible, a no-op for an all-ASCII glossary**, and the 6KB bound now measures the real (escaped) header
+  size. Test: an international glossary yields zero non-ASCII header bytes and round-trips to the exact
+  original names; verified it carries raw UTF-8 without the fix. Closes the header-encoding gap left after
+  iter 26 (titles/filenames fixed then; the bias header was the other user-text-in-a-header site). Completing the sweep: `GetTranscript` resolved segment speaker names only
   from the transcript's own DisplayName, so the transcript detail / CLI / direct-API showed "spk_0" for an
   AUTO-identified speaker (the TUI was fine — it has its own mapping-based `resolveSpeaker`). Switched it to
   the same shared `meetingSpeakerNames` join used by the agent handoff + search index. **Now all four read
