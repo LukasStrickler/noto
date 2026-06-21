@@ -41,6 +41,22 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Identity: concurrent folds into one profile lost updates and corrupted the running mean (1 data
+  bug, +1 race-checked test, 2026-06-21).** Surfaced by a full release-readiness audit (Modal-default
+  is the confirmed target; "fix the data bugs first" was the user's directive). `foldEmbeddingIntoProfile`
+  does `Get → RunningMean → Update` with no transaction; the job worker pool runs N meetings concurrently,
+  so two that auto-match the SAME returning speaker both read `EmbeddingCount=k` and both write `k+1` — a
+  lost fold that silently drifts the count and corrupts the count-weighted running mean the recent identity
+  work added. `SetMaxOpenConns(1)` serializes individual statements, NOT this multi-statement sequence.
+  Fixed with a sharded per-profile lock on `Service` (`profileLocks [64]sync.Mutex`, `lockProfile(id)`):
+  the same id always serializes, different profiles run in parallel; one process owns the store so an
+  in-process lock suffices. Guards both `foldEmbeddingIntoProfile` AND `PatchSpeakerProfile` (a human
+  rename and a worker fold are the same single-profile RMW and would clobber each other's fields). Gave the
+  in-memory test repo statement-level locking so it models the real store's statement-atomicity and the
+  pre-fix failure is a clean count mismatch, not a torn-slice panic. New test: 64 concurrent folds into a
+  count-1 profile must land at count 65 — pre-fix yields ~55 (lost updates), revert-checked, race-clean.
+  (NOT in scope, still deferred: `MergeSpeakerProfiles` cross-store atomicity — profile update + mapping
+  reassign + source delete across two stores needs a store-level transaction, a separate item.)
 - **UX/normalize: the canonical speaker label disagreed with itself (1 bug, +doc, +2 assertions,
   2026-06-21).** `SpeakerLabelNormalizer` (one of the two ACTIVE production normalizers) canonicalizes an
   unidentified speaker's `Label` — the user-facing fallback name shown wherever no profile/DisplayName

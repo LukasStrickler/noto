@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"hash/fnv"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,6 +10,24 @@ import (
 	"github.com/lukasstrickler/noto/internal/platform/speakerstore"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
+
+// profileLockShards is the number of per-profile locks (see Service.profileLocks).
+// Bigger than any realistic concurrent-fold fan-out, so distinct profiles almost
+// never share a shard.
+const profileLockShards = 64
+
+// lockProfile acquires the shard guarding profileID's read-modify-write sequence
+// and returns its unlock func. The same id always maps to the same shard, so two
+// goroutines folding into one profile serialize; different profiles run in
+// parallel (modulo rare shard collisions, which only cost a little extra waiting,
+// never correctness).
+func (s *Service) lockProfile(profileID string) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(profileID))
+	mu := &s.profileLocks[h.Sum32()%profileLockShards]
+	mu.Lock()
+	return mu.Unlock
+}
 
 func (s *Service) ListSpeakerProfiles(_ context.Context) ([]notoapi.SpeakerProfile, error) {
 	profiles, err := s.speakerProfiles.List(context.Background())
@@ -123,6 +142,10 @@ func (s *Service) foldEmbeddingIntoProfile(ctx context.Context, profileID string
 	if profileID == "" || len(emb) == 0 {
 		return
 	}
+	// Serialize the Get→fold→Update on this profile so concurrent worker-pool jobs
+	// matching the same returning speaker can't lose a fold (count drift / corrupted
+	// running mean). See Service.profileLocks.
+	defer s.lockProfile(profileID)()
 	p, err := s.speakerProfiles.Get(ctx, profileID)
 	if err != nil {
 		return
@@ -203,6 +226,10 @@ func (s *Service) PatchSpeakerProfile(_ context.Context, id string, patch notoap
 	if _, err := uuid.Parse(id); err != nil {
 		return notoapi.SpeakerProfile{}, notoapi.NewError(notoapi.CodeInvalidRequest, "profile id is not a valid UUID", map[string]any{"id": id})
 	}
+	// Same per-profile lock as the embedding fold: a human edit and a worker-pool
+	// fold both Get→modify→Update this profile, and unguarded they'd clobber each
+	// other's fields (a rename losing a just-folded voiceprint, or vice versa).
+	defer s.lockProfile(id)()
 	p, err := s.speakerProfiles.Get(context.Background(), id)
 	if err != nil {
 		return notoapi.SpeakerProfile{}, notoapi.NewError(notoapi.CodeNotFound, "speaker profile not found", map[string]any{"id": id})

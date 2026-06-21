@@ -56,6 +56,17 @@ type Service struct {
 	diarizer          diarize.Diarizer // standalone speaker-turn seam; nil disables diarization
 	sttAdapterFactory func(providerID string) (stt.STTProvider, error)
 
+	// profileLocks serializes the read-modify-write sequence on a single speaker
+	// profile (Get → fold/patch → Update). The job worker pool runs meetings
+	// concurrently, so two that auto-match the SAME returning speaker would
+	// otherwise both read count=k and both write count=k+1 — a lost update that
+	// silently corrupts the count-weighted running mean the identity system relies
+	// on. SetMaxOpenConns(1) serializes individual statements, NOT this multi-
+	// statement sequence. Sharded by id hash: the same profile always maps to the
+	// same lock (serialized), different profiles run in parallel. One process owns
+	// the store, so an in-process lock is sufficient. See lockProfile.
+	profileLocks [profileLockShards]sync.Mutex
+
 	// compute is the accelerator plan resolved once at backend startup and
 	// injected into the local model-runtime constructors. Surfaced via
 	// /v1/system so a client can show "backend: Mac M1, CoreML".

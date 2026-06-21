@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,43 @@ func TestFoldEmbeddingIntoProfile(t *testing.T) {
 	}
 	if p2.EmbeddingModel == "" {
 		t.Error("first enrollment must tag the embedding model, else the voiceprint's space is untracked")
+	}
+}
+
+// TestFoldEmbeddingIntoProfile_ConcurrentNoLostUpdate proves the fold's
+// read-modify-write is serialized per profile. The worker pool runs meetings
+// concurrently, and two that auto-match the SAME returning speaker both fold into
+// one profile. Without per-profile serialization they read the same EmbeddingCount
+// and both write count+1 — a lost update that silently corrupts the count-weighted
+// running mean (the very weighting the recent identity work added). N concurrent
+// folds into a count-1 profile must land at exactly count = 1 + N.
+func TestFoldEmbeddingIntoProfile_ConcurrentNoLostUpdate(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	pr := &memorySpeakerProfileRepo{}
+	_ = pr.Create(ctx, speakerstore.SpeakerProfile{
+		ID: "p1", DisplayName: "Alice",
+		EmbeddingVector: []float64{1, 0}, EmbeddingDim: 2, EmbeddingCount: 1,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	svc := &Service{speakerProfiles: pr}
+
+	const n = 64
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			// Same id, same observation — every call must count exactly once.
+			svc.foldEmbeddingIntoProfile(ctx, "p1", []float64{1, 0})
+		}()
+	}
+	wg.Wait()
+
+	got, _ := pr.Get(ctx, "p1")
+	if got.EmbeddingCount != 1+n {
+		t.Errorf("EmbeddingCount = %d; want %d — concurrent folds lost updates (unserialized read-modify-write)", got.EmbeddingCount, 1+n)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,15 +20,26 @@ import (
 )
 
 type memorySpeakerProfileRepo struct {
+	// mu makes each method atomic on its own — modelling the real SQLite store,
+	// whose SetMaxOpenConns(1) serializes individual statements. It deliberately
+	// does NOT span a Get→Update pair: that cross-call atomicity is the service's
+	// job (Service.profileLocks), and leaving it unguarded here is what lets
+	// TestFoldEmbeddingIntoProfile_ConcurrentNoLostUpdate observe a lost fold if
+	// the service ever drops its lock.
+	mu       sync.Mutex
 	profiles []speakerstore.SpeakerProfile
 }
 
 func (r *memorySpeakerProfileRepo) Create(ctx context.Context, p speakerstore.SpeakerProfile) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.profiles = append(r.profiles, p)
 	return nil
 }
 
 func (r *memorySpeakerProfileRepo) Get(ctx context.Context, id string) (speakerstore.SpeakerProfile, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, p := range r.profiles {
 		if p.ID == id {
 			return p, nil
@@ -37,10 +49,14 @@ func (r *memorySpeakerProfileRepo) Get(ctx context.Context, id string) (speakers
 }
 
 func (r *memorySpeakerProfileRepo) List(ctx context.Context) ([]speakerstore.SpeakerProfile, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return append([]speakerstore.SpeakerProfile(nil), r.profiles...), nil
 }
 
 func (r *memorySpeakerProfileRepo) Update(ctx context.Context, p speakerstore.SpeakerProfile) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for i := range r.profiles {
 		if r.profiles[i].ID == p.ID {
 			r.profiles[i] = p
