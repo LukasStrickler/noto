@@ -103,6 +103,18 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **Identity: profile merge left "last seen" stale and the model label disagreeing with the vector (2 bugs,
+  +1 test, 2026-06-21).** `MergeSpeakerProfiles` combines two people into one, but unlike the fold path
+  (`foldEmbeddingIntoProfile`, which keeps `LastSeenAt` fresh) it never updated `LastSeenAt` — so merging a
+  recently-seen profile into an older one left the People view showing the STALE older date. And when the
+  surviving target had no voiceprint of its own and adopted source's vector, it kept its OWN (often empty)
+  `EmbeddingModel` — so the namespace label disagreed with the vector it describes. Fixed by extracting the
+  pure `mergeProfileFields` (the codebase's "gnarly decision → testable predicate" pattern): the survivor
+  takes `laterSeen(target, source)` and adopts source's embedding model alongside source's vector. Test pins
+  target-metadata-wins, count-weighted voiceprint (20:1 barely moves the centroid), later-last-seen (both
+  directions), and model-adoption; fails pre-fix on the stale stamp + empty model. (Also reviewed the merge's
+  non-atomicity — Update→Reassign→Delete isn't transactional, so a mid-merge failure + retry could double-fold
+  source — but that needs a store-level transaction, not a local fix; noted.)
 - **UX: the summary preview could surface the meeting's "# title" heading instead of the summary (1 bug,
   +1 test, 2026-06-21).** `GetSummary` falls back to the rendered markdown when the structured short-summary
   is absent (a meeting with `summary.md` but a missing/empty `summary.json` — partial write or legacy). The

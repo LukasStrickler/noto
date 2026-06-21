@@ -269,6 +269,31 @@ func (s *Service) MergeSpeakerProfiles(_ context.Context, targetID, sourceID str
 	if err != nil {
 		return notoapi.SpeakerProfile{}, notoapi.NewError(notoapi.CodeNotFound, "source speaker profile not found", map[string]any{"id": sourceID})
 	}
+	target = mergeProfileFields(target, source)
+	target.UpdatedAt = time.Now()
+	if err := s.speakerProfiles.Update(context.Background(), target); err != nil {
+		return notoapi.SpeakerProfile{}, err
+	}
+	// Re-point every mapping that referenced source so nothing dangles at the
+	// soon-to-be-deleted profile, then drop source.
+	if err := s.meetingMappings.ReassignProfile(context.Background(), sourceID, targetID); err != nil {
+		return notoapi.SpeakerProfile{}, err
+	}
+	_ = s.speakerProfiles.Delete(context.Background(), sourceID)
+	s.emitStatusBar() // merging folds two people into one — recount unresolved
+	return s.profileToAPI(target), nil
+}
+
+// mergeProfileFields folds source into target IN MEMORY and returns the combined
+// profile — the pure half of MergeSpeakerProfiles (the method then stamps UpdatedAt,
+// persists it, re-points mappings, and deletes source). Target's own metadata wins;
+// source fills only the gaps. Voiceprints combine count-weighted (WeightedMean) so a
+// 1-enrollment source barely moves a 20-enrollment target instead of a 50/50 average.
+// The survivor also takes the LATER LastSeenAt (the person was seen at source's time
+// too — the fold path keeps this fresh, so the merge must as well) and, when it had no
+// voiceprint of its own, adopts source's embedding MODEL alongside source's vector so
+// the namespace label never disagrees with the vector it describes.
+func mergeProfileFields(target, source speakerstore.SpeakerProfile) speakerstore.SpeakerProfile {
 	if target.DisplayName == "" && source.DisplayName != "" {
 		target.DisplayName = source.DisplayName
 	}
@@ -282,14 +307,12 @@ func (s *Service) MergeSpeakerProfiles(_ context.Context, targetID, sourceID str
 		target.Notes = source.Notes
 	}
 	target.Affiliations = mergeAffiliations(target.Affiliations, source.Affiliations)
-	// Combine voiceprints so the surviving profile represents both enrollments,
-	// weighted by how many each side accumulated — merging a 1-enrollment profile
-	// into a 20-enrollment one must barely move the latter, not average it 50/50.
 	if len(source.EmbeddingVector) > 0 {
 		if len(target.EmbeddingVector) == 0 {
 			target.EmbeddingVector = source.EmbeddingVector
 			target.EmbeddingDim = source.EmbeddingDim
 			target.EmbeddingCount = max(source.EmbeddingCount, 1)
+			target.EmbeddingModel = source.EmbeddingModel
 		} else {
 			tc, sc := max(target.EmbeddingCount, 1), max(source.EmbeddingCount, 1)
 			if c, cerr := speakers.WeightedMean(target.EmbeddingVector, float64(tc), source.EmbeddingVector, float64(sc)); cerr == nil && len(c) > 0 {
@@ -299,18 +322,22 @@ func (s *Service) MergeSpeakerProfiles(_ context.Context, targetID, sourceID str
 			}
 		}
 	}
-	target.UpdatedAt = time.Now()
-	if err := s.speakerProfiles.Update(context.Background(), target); err != nil {
-		return notoapi.SpeakerProfile{}, err
+	target.LastSeenAt = laterSeen(target.LastSeenAt, source.LastSeenAt)
+	return target
+}
+
+// laterSeen returns the more recent of two optional "last seen" stamps (nil = never).
+func laterSeen(a, b *time.Time) *time.Time {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case b.After(*a):
+		return b
+	default:
+		return a
 	}
-	// Re-point every mapping that referenced source so nothing dangles at the
-	// soon-to-be-deleted profile, then drop source.
-	if err := s.meetingMappings.ReassignProfile(context.Background(), sourceID, targetID); err != nil {
-		return notoapi.SpeakerProfile{}, err
-	}
-	_ = s.speakerProfiles.Delete(context.Background(), sourceID)
-	s.emitStatusBar() // merging folds two people into one — recount unresolved
-	return s.profileToAPI(target), nil
 }
 
 // mergeAffiliations concatenates two affiliation lists, dropping exact dupes.
