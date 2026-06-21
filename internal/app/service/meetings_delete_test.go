@@ -54,3 +54,40 @@ func TestDeleteMeeting_RemovesOrphanedSpeakerMappings(t *testing.T) {
 		t.Errorf("only the surviving meeting's unresolved mapping should remain, got %d", after)
 	}
 }
+
+// TestDeleteSpeakerProfile_ReopensMappings pins the sibling cleanup: deleting a
+// person must RE-OPEN their speaker mappings as unresolved (not leave them
+// dangling at a deleted profile), so those speakers return to the identify queue.
+func TestDeleteSpeakerProfile_ReopensMappings(t *testing.T) {
+	s := newJobsTestSvc(t)
+	ctx := context.Background()
+
+	pr := &memorySpeakerProfileRepo{}
+	mr := &memoryMeetingMappingRepo{}
+	s.speakerProfiles = pr
+	s.meetingMappings = mr
+
+	pid := uuid.New().String()
+	now := time.Now()
+	_ = pr.Create(ctx, speakerstore.SpeakerProfile{ID: pid, DisplayName: "Alice", CreatedAt: now, UpdatedAt: now})
+	_ = mr.Upsert(ctx, speakerstore.MeetingSpeakerMapping{
+		MeetingID: "m1", MeetingSpeakerID: "spk_0", ProfileID: &pid, MatchStatus: "manual",
+		CreatedAt: now, UpdatedAt: now,
+	})
+	// Resolved (manual) → not counted as unresolved yet.
+	if n, _ := mr.CountUnresolved(ctx); n != 0 {
+		t.Fatalf("precondition: a manual mapping is resolved, want 0 unresolved, got %d", n)
+	}
+
+	if err := s.DeleteSpeakerProfile(ctx, pid); err != nil {
+		t.Fatalf("DeleteSpeakerProfile: %v", err)
+	}
+
+	got, _ := mr.ListByMeeting(ctx, "m1")
+	if len(got) != 1 || got[0].ProfileID != nil || got[0].MatchStatus != "new" {
+		t.Fatalf("mapping should be re-opened (nil profile, status new), got %+v", got)
+	}
+	if n, _ := mr.CountUnresolved(ctx); n != 1 {
+		t.Errorf("the re-opened speaker should now count as unresolved, got %d", n)
+	}
+}

@@ -231,7 +231,23 @@ func (s *Service) DeleteSpeakerProfile(_ context.Context, id string) error {
 	if err := s.speakerProfiles.Delete(context.Background(), id); err != nil {
 		return notoapi.NewError(notoapi.CodeNotFound, "speaker profile not found", map[string]any{"id": id})
 	}
-	s.emitStatusBar() // unlinking a person can re-open speakers as unresolved
+	// Re-open this profile's speaker mappings as UNRESOLVED instead of leaving them
+	// dangling at a now-deleted profile (resolved-to-nobody, blank name, and still
+	// counted as resolved so the "to identify" badge never updates). Merge re-points
+	// mappings to the survivor; delete has no survivor, so the speakers go back into
+	// the identify queue — which is exactly what the status-bar refresh below assumes.
+	if s.meetingMappings != nil {
+		if maps, err := s.meetingMappings.ListByProfile(context.Background(), id); err == nil {
+			for _, m := range maps {
+				m.ProfileID = nil
+				m.MatchConfidence = nil
+				m.MatchStatus = "new"
+				m.UpdatedAt = time.Now()
+				_ = s.meetingMappings.Upsert(context.Background(), m)
+			}
+		}
+	}
+	s.emitStatusBar() // re-opened speakers change the "to identify" count
 	return nil
 }
 

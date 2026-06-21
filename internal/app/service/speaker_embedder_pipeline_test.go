@@ -57,6 +57,14 @@ type memoryMeetingMappingRepo struct {
 }
 
 func (r *memoryMeetingMappingRepo) Upsert(ctx context.Context, m speakerstore.MeetingSpeakerMapping) error {
+	// Replace-by-key, mirroring the real store's PK (meeting_id, meeting_speaker_id)
+	// ON CONFLICT DO UPDATE — so a re-upsert updates the row in place, not appends.
+	for i := range r.mappings {
+		if r.mappings[i].MeetingID == m.MeetingID && r.mappings[i].MeetingSpeakerID == m.MeetingSpeakerID {
+			r.mappings[i] = m
+			return nil
+		}
+	}
 	r.mappings = append(r.mappings, m)
 	return nil
 }
