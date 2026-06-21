@@ -459,6 +459,14 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   `canceled` (not resumed), covering a crash between the `CancelJob` write and the worker finalizing. Tested:
   expanded `finalizeJobStatus` table (user-cancel-wins-over-shutdown case) + a recovery test (cancel_requested
   row → canceled while a normal in-flight row still resumes). build/vet/lint(0)/race(service) clean.
+  **Upgrade-safety follow-up (2026-06-21):** making `recoverInterruptedJobs` READ `cancel_requested` at startup
+  exposed that the column was only in the `CREATE TABLE` (fresh DBs), NOT in `JobsColumnMigrations` — it predates
+  the migration system (added pre-778c257) while `priority` correctly lives in BOTH. So a DB created before the
+  column existed gets `priority` back-filled but not `cancel_requested`, and the new startup READ (and the
+  pre-existing `CancelJob` WRITE) would then fail to boot it. Added `cancel_requested` to `JobsColumnMigrations`
+  (PRAGMA-guarded no-op on every current DB; back-fills the rest, legacy rows → 0). Extended the upgrade test to
+  assert both columns are added. This is the convention `priority` already follows; the gap was just never closed
+  for the older column.
 - **★ Graceful shutdown — Close now joins the worker goroutines (2026-06-20).** `Start` launched the worker
   pool + status-bar/evictor loops as FIRE-AND-FORGET goroutines tied to the caller's ctx, but `Close()`
   neither canceled nor WAITED for them — and it tore down the event hub + model pool FIRST. So a worker

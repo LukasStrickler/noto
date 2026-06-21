@@ -91,6 +91,13 @@ var JobsSchema = []string{
 // IF NOT EXISTS, so the helper guards on PRAGMA table_info rather than erroring.
 var JobsColumnMigrations = []ColumnSpec{
 	{Table: "jobs", Column: "priority", DDL: "INTEGER NOT NULL DEFAULT 50"},
+	// cancel_requested predates this migration system, so it lives in the CREATE
+	// TABLE above but a DB created before the column existed would lack it. It's
+	// now load-bearing — CancelJob writes it and recoverInterruptedJobs READS it at
+	// startup to honor a cancel that raced a crash — so back-fill it on upgrade,
+	// else such a DB would fail to boot. AddColumnIfMissing is a PRAGMA-guarded
+	// no-op when the column is already present (every post-CREATE-TABLE DB).
+	{Table: "jobs", Column: "cancel_requested", DDL: "INTEGER DEFAULT 0"},
 }
 
 // ColumnSpec describes one additive column for AddColumnIfMissing.

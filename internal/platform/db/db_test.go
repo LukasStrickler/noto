@@ -43,6 +43,20 @@ func TestAddColumnIfMissingUpgradesExistingTable(t *testing.T) {
 		t.Errorf("legacy row priority = %d; want default 50", prio)
 	}
 
+	// cancel_requested predates this migration system but is now read at startup
+	// (recoverInterruptedJobs), so a pre-column DB must get it back-filled too —
+	// else the service would crash on boot. The legacy row defaults to 0.
+	if has, err := d.hasColumn("jobs", "cancel_requested"); err != nil || !has {
+		t.Fatalf("cancel_requested should exist after migrate: has=%v err=%v", has, err)
+	}
+	var canceled int
+	if err := d.QueryRow(`SELECT cancel_requested FROM jobs WHERE id = 'j1'`).Scan(&canceled); err != nil {
+		t.Fatalf("read cancel_requested: %v", err)
+	}
+	if canceled != 0 {
+		t.Errorf("legacy row cancel_requested = %d; want default 0", canceled)
+	}
+
 	// Idempotent: a second call must not error (no ALTER twice).
 	if err := d.AddColumnIfMissing(JobsColumnMigrations); err != nil {
 		t.Fatalf("second migrate (should be no-op): %v", err)
