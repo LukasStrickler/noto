@@ -91,6 +91,13 @@ func (r *memoryMeetingMappingRepo) ReassignProfile(ctx context.Context, oldID, n
 }
 
 func (r *memoryMeetingMappingRepo) DeleteByMeeting(ctx context.Context, meetingID string) error {
+	kept := r.mappings[:0]
+	for _, m := range r.mappings {
+		if m.MeetingID != meetingID {
+			kept = append(kept, m)
+		}
+	}
+	r.mappings = kept
 	return nil
 }
 

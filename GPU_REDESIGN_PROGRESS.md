@@ -190,6 +190,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   Tested: a 256-dim stale profile alongside a 192-dim match → no error, auto-matches the 192-dim one (the test
   errors without the fix, since List returns the stale profile first). build/vet/lint(0)/race clean.
 
+- **★ Delete a meeting → clean up its speaker mappings (2026-06-21).** `DeleteMeeting` (and the low-level
+  `RepoDeleteMeeting`) removed the meeting artifacts + the search-index entry but NOT its
+  `meeting_speaker_mappings` rows — which live in a SEPARATE store the artifact repo can't reach. So every
+  deleted meeting ORPHANED its mappings: a deleted meeting with unresolved speakers kept inflating the "to
+  identify" nav badge forever (phantom work the user can never clear), and the orphans skewed the cross-meeting
+  identity priors (`coAttendance` / `profileMeetingCount` / `meetingsForProfiles`) and made `profileMeetings`
+  list a meeting that no longer exists. The seed/reset path ALREADY deletes both (so cleanup is the established
+  intent); the user-facing delete just never matched it. Fix: both delete paths now `DeleteByMeeting` on the
+  mapping store (nil-guarded like the `search` cleanup), and `DeleteMeeting` emits a status-bar refresh so the
+  badge drops immediately (consistent with `DeleteSpeakerProfile`). Tested: deleting a meeting removes its
+  mappings and decrements `CountUnresolved`, while a mapping in another meeting survives. Also made the in-memory
+  mapping fake's `DeleteByMeeting` actually delete (was a no-op, which would have hidden this). build/vet/lint(0)/race clean.
+
 ## Dead-code sweep — classified, don't re-investigate (2026-06-20)
 
 Ran `golang.org/x/tools/cmd/deadcode` over production reachability, cross-checked vs tests +

@@ -45,6 +45,12 @@ func (s *Service) RepoDeleteMeeting(ctx context.Context, id uuid.UUID) error {
 	if s.search != nil {
 		_ = s.search.DeleteFromIndex(id.String())
 	}
+	// Mappings live in a separate store, so they must be cleaned here too or they
+	// orphan (see DeleteMeeting). This low-level repo op leaves UI signalling to
+	// the caller.
+	if s.meetingMappings != nil {
+		_ = s.meetingMappings.DeleteByMeeting(ctx, id.String())
+	}
 	return nil
 }
 

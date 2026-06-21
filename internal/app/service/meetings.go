@@ -256,6 +256,15 @@ func (s *Service) DeleteMeeting(ctx context.Context, id string) error {
 	if s.search != nil {
 		_ = s.search.DeleteFromIndex(id)
 	}
+	// Drop this meeting's speaker mappings too — they live in a SEPARATE store the
+	// artifact repo can't reach, so without this they orphan: a deleted meeting's
+	// unresolved speakers keep inflating the "to identify" badge forever and skew
+	// the cross-meeting identity priors (co-attendance / per-person meeting counts).
+	// The seed/reset path already does this; the user-facing delete must match.
+	if s.meetingMappings != nil {
+		_ = s.meetingMappings.DeleteByMeeting(ctx, id)
+	}
+	s.emitStatusBar() // a deleted meeting can change the "to identify" count
 	return nil
 }
 
