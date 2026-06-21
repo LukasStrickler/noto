@@ -103,6 +103,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **Identification: the agent handoff showed "spk_0" for AUTO-identified speakers (1 bug, +1 test,
+  2026-06-21).** `AgentGetMeeting` promises "speaker display names PRE-RESOLVED," but `buildAgentTranscript`
+  read names ONLY from `transcript.Speakers[].DisplayName`. That field is written back only by the MANUAL
+  rename path (`UpdateSpeakerName`); an AUTO-identified speaker's name lives in its mapping→profile and never
+  reaches the transcript. Yet the system already treats an "auto" mapping as RESOLVED (`isUnresolved`
+  excludes auto/manual) — so an agent reading a meeting got the raw `spk_0` for a speaker the system considers
+  identified, undermining the whole voiceprint feature for the agent use case ("processing that improves our
+  handling"). Fixed: `AgentGetMeeting` now joins the identity mappings + profile library (the same
+  authoritative source the People view uses) via a pure, testable `resolveAgentSpeakerNames` —
+  precedence explicit-transcript-name > resolved-profile-name (auto/manual only) > label > id; pending/new
+  guesses are NOT promoted (no unconfirmed identity fed to the agent). Test pins all four precedence cases.
+  (Also traced — but did NOT change — the broader split: identity assigned via `PatchMeetingSpeakerMappings`
+  doesn't write the transcript label; the TUI keeps them in sync with a deliberate second `UpdateSpeakerName`
+  call ("name once → everywhere"), so that separation is client-orchestrated by design. The agent fix
+  resolves at READ time instead, which is robust regardless of which client wrote the identity.)
 - **Accuracy-metric CORE verified correct — cpWER/WER/DER/Hungarian (audit, 0 bugs, 2026-06-21).** Deep
   read of `benchmark/metrics/` (the heart of the "accurate benchmark"): **CpWER** builds a square cost
   matrix (real/real = edit distance, unmatched ref = all-deletions, unmatched hyp = all-insertions,

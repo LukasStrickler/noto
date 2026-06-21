@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lukasstrickler/noto/internal/core/artifacts"
 	"github.com/lukasstrickler/noto/internal/platform/repo"
+	"github.com/lukasstrickler/noto/internal/platform/speakerstore"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
 
@@ -81,12 +82,67 @@ func (s *Service) AgentGetMeeting(ctx context.Context, id string) (notoapi.Agent
 		out.Summary = buildAgentSummary(raw)
 	}
 
-	// Transcript — silently omitted when not yet available.
+	// Transcript — silently omitted when not yet available. Speaker names are
+	// resolved against the identity mappings (not just the transcript's own
+	// DisplayName), so an AUTO-identified speaker — which the system already counts
+	// as resolved — reaches the agent as the identified person, not "spk_0".
 	if t, err := s.repo.LoadTranscript(ctx, mid); err == nil && t != nil {
-		out.Transcript = buildAgentTranscript(t)
+		out.Transcript = buildAgentTranscript(t, s.agentSpeakerNames(ctx, id, t))
 	}
 
 	return out, nil
+}
+
+// agentSpeakerNames resolves each meeting speaker to its best-known display name
+// for the agent view, joining the transcript against the identity mappings +
+// profile library (the same authoritative source the People view reads).
+func (s *Service) agentSpeakerNames(ctx context.Context, meetingID string, t *artifacts.Transcript) map[string]string {
+	var mappings []speakerstore.MeetingSpeakerMapping
+	if s.meetingMappings != nil {
+		mappings, _ = s.meetingMappings.ListByMeeting(ctx, meetingID)
+	}
+	profileName := map[string]string{}
+	if s.speakerProfiles != nil {
+		if profs, err := s.speakerProfiles.List(ctx); err == nil {
+			for _, p := range profs {
+				profileName[p.ID] = p.DisplayName
+			}
+		}
+	}
+	return resolveAgentSpeakerNames(t, mappings, profileName)
+}
+
+// resolveAgentSpeakerNames builds speakerID → best-known display name. A transcript
+// speaker carries a DisplayName only when it's been explicitly named (the manual
+// rename path writes it back); an AUTO-identified speaker's name lives in its
+// mapping→profile, never the transcript. Since the system treats an "auto"/"manual"
+// mapping as RESOLVED (isUnresolved excludes them), the agent must see the profile
+// name for such a speaker. Precedence: explicit transcript name > resolved profile
+// name > transcript label > id. Pure (no I/O) so the join is unit-testable.
+func resolveAgentSpeakerNames(t *artifacts.Transcript, mappings []speakerstore.MeetingSpeakerMapping, profileName map[string]string) map[string]string {
+	resolved := make(map[string]string)
+	for _, m := range mappings {
+		if m.ProfileID == nil || (m.MatchStatus != "auto" && m.MatchStatus != "manual") {
+			continue
+		}
+		if n := profileName[*m.ProfileID]; n != "" {
+			resolved[m.MeetingSpeakerID] = n
+		}
+	}
+	out := make(map[string]string, len(t.Speakers))
+	for _, sp := range t.Speakers {
+		switch {
+		case sp.DisplayName != "":
+			out[sp.ID] = sp.DisplayName
+		case resolved[sp.ID] != "":
+			out[sp.ID] = resolved[sp.ID]
+		case sp.Label != "":
+			out[sp.ID] = sp.Label
+		default:
+			out[sp.ID] = sp.ID
+		}
+	}
+	return out
 }
 
 func agentSummaryFromStored(sm *repo.StoredMeeting) notoapi.AgentMeetingSummary {
@@ -139,24 +195,18 @@ func buildAgentSummary(raw *artifacts.Summary) *notoapi.AgentSummaryBlock {
 	return block
 }
 
-func buildAgentTranscript(t *artifacts.Transcript) *notoapi.AgentTranscriptBlock {
-	nameIdx := make(map[string]string, len(t.Speakers))
+func buildAgentTranscript(t *artifacts.Transcript, nameByID map[string]string) *notoapi.AgentTranscriptBlock {
 	var speakers []notoapi.Speaker
 	for _, sp := range t.Speakers {
-		name := sp.DisplayName
-		if name == "" {
-			name = sp.Label
-		}
-		nameIdx[sp.ID] = name
 		speakers = append(speakers, notoapi.Speaker{
 			ID:          sp.ID,
-			DisplayName: sp.DisplayName,
+			DisplayName: nameByID[sp.ID], // identity-resolved (incl. auto matches), not just the raw transcript field
 			Role:        sp.Origin,
 		})
 	}
 	var segs []notoapi.AgentSegment
 	for _, seg := range t.Segments {
-		name := nameIdx[seg.SpeakerID]
+		name := nameByID[seg.SpeakerID]
 		if name == "" {
 			name = seg.SpeakerID
 		}

@@ -4,8 +4,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lukasstrickler/noto/internal/core/artifacts"
 	"github.com/lukasstrickler/noto/internal/platform/speakerstore"
 )
+
+// TestResolveAgentSpeakerNames pins the agent-handoff name resolution: an
+// AUTO-identified speaker (name only in its mapping→profile, not the transcript)
+// must resolve to the profile name, since the system treats "auto" as resolved;
+// an explicit transcript DisplayName still wins; an unresolved/pending mapping is
+// NOT promoted; and a speaker with nothing falls back to label then id.
+func TestResolveAgentSpeakerNames(t *testing.T) {
+	pid := func(s string) *string { return &s }
+	tr := &artifacts.Transcript{Speakers: []artifacts.Speaker{
+		{ID: "spk_0", DisplayName: "Bob"}, // explicitly named
+		{ID: "spk_1", Label: "Speaker 2"}, // auto-identified below
+		{ID: "spk_2", Label: "Speaker 3"}, // pending guess — must NOT resolve
+		{ID: "spk_3"},                     // nothing at all
+	}}
+	mappings := []speakerstore.MeetingSpeakerMapping{
+		{MeetingSpeakerID: "spk_1", ProfileID: pid("p-maya"), MatchStatus: "auto"},
+		{MeetingSpeakerID: "spk_2", ProfileID: pid("p-guess"), MatchStatus: "pending"},
+	}
+	profileName := map[string]string{"p-maya": "Maya", "p-guess": "Probably Sam"}
+
+	got := resolveAgentSpeakerNames(tr, mappings, profileName)
+	want := map[string]string{
+		"spk_0": "Bob",       // explicit name wins
+		"spk_1": "Maya",      // auto match resolves from the profile
+		"spk_2": "Speaker 3", // pending is not promoted → falls back to label
+		"spk_3": "spk_3",     // nothing → id
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("speaker %s resolved to %q, want %q", id, got[id], w)
+		}
+	}
+}
 
 // TestMergeProfileFields pins the in-memory merge: target metadata wins and source
 // fills gaps; voiceprints combine count-weighted; the survivor takes the LATER
