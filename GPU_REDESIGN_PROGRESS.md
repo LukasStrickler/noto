@@ -223,6 +223,15 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   startup processes it → the recording becomes a meeting instead of being dropped. Tested: a dry-run recording
   active at Close leaves a QUEUED pipeline job for its meeting. build/vet/lint(0)/race(service) clean.
 
+- **★ Search now indexes the speaker NAME, not the opaque "spk_0" (2026-06-21) — UX for the identity feature.**
+  `indexOneMeeting` put `seg.SpeakerID` (e.g. "spk_0") into the FTS `speaker` column, so search results read
+  "spk_0" and a query for a person's NAME never matched their segments — undercutting the whole identity feature
+  in search. Now resolves each segment's speaker to its human label via `speakerLabelsByID` (display name → the
+  normalized "Speaker N" label → raw id fallback) at index time, so after a speaker is identified, searching
+  their name finds their segments and the hit reads the name. Composes with the multi-word fix (`"Maya review"`
+  now works). Tested: pure resolver (fallback order) + end-to-end (index a meeting with speaker "Maya",
+  `Search("Maya")` returns it with hit.Speaker=="Maya"). Note: existing indexes carry the old value until the
+  next reindex (the standing re-index-staleness caveat); new/re-indexed meetings get the name.
 - **★ CLI search dropped every word after the first (2026-06-21) — the CLI half of the multi-word fix.** Even
   with the FTS layer fixed (below), `noto search ship plan` only ever searched "ship": `runSearch` used
   `stripFlags`, which returns the FIRST non-flag arg and discards the rest. So the multi-word FTS fix never

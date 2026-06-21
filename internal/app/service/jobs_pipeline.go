@@ -443,6 +443,25 @@ func (s *Service) runIndex(ctx context.Context, job *notoapi.Job) error {
 	return nil
 }
 
+// speakerLabelsByID maps each speaker ID to the most human-readable label
+// available: the resolved display name, else the normalized "Speaker N" label,
+// else the raw ID. Used to index searchable, readable speaker names instead of
+// internal IDs.
+func speakerLabelsByID(speakers []artifacts.Speaker) map[string]string {
+	out := make(map[string]string, len(speakers))
+	for _, sp := range speakers {
+		label := sp.DisplayName
+		if label == "" {
+			label = sp.Label
+		}
+		if label == "" {
+			label = sp.ID
+		}
+		out[sp.ID] = label
+	}
+	return out
+}
+
 // indexOneMeeting reads the meeting's transcript + summary and upserts
 // the FTS entry. Returns nil silently when no transcript exists yet.
 func (s *Service) indexOneMeeting(ctx context.Context, mid uuid.UUID, titleHint string) error {
@@ -482,12 +501,21 @@ func (s *Service) indexOneMeeting(ctx context.Context, mid uuid.UUID, titleHint 
 		}
 	}
 
+	// Index each segment's speaker by its HUMAN label (resolved name, else the
+	// normalized "Speaker N" label, else the raw id) instead of the opaque
+	// "spk_0" — so search results read "Maya" and a query for a person's name
+	// matches their segments.
+	speakerLabel := speakerLabelsByID(t.Speakers)
 	segs := make([]search.TranscriptSegment, 0, len(t.Segments))
 	for _, seg := range t.Segments {
+		label := speakerLabel[seg.SpeakerID]
+		if label == "" {
+			label = seg.SpeakerID
+		}
 		segs = append(segs, search.TranscriptSegment{
 			SegmentID: seg.ID,
 			Text:      seg.Text,
-			Speaker:   seg.SpeakerID,
+			Speaker:   label,
 			Timestamp: seg.StartSeconds,
 		})
 	}
