@@ -223,6 +223,29 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   startup processes it → the recording becomes a meeting instead of being dropped. Tested: a dry-run recording
   active at Close leaves a QUEUED pipeline job for its meeting. build/vet/lint(0)/race(service) clean.
 
+## ★ GPU-feeding DILUTION — the real hosted-util lever (2026-06-21, found; fix NOT yet built — needs greenlight)
+
+Sharper answer to "maximize GPU utilization on hosted" than the keep-warm/idle-backfill story below. **Production
+runs the FULL pipeline in ONE worker** (`JobPipeline` = ingest→transcribe→summarize→index; enqueued by
+`recording.go:161` + `import.go:95`). But two of those stages DON'T touch the GPU: `summarize` is an external
+LLM call (`OpenRouterAdapter`, seconds–tens-of-seconds on a long transcript) and `index` is local CPU. So a
+worker holding a pipeline slot spends a big chunk of its life NOT sending GPU requests.
+
+The offloaded pool is sized to **10 (the measured GPU batch optimum)** — but that optimum was measured on the
+GPU stages alone (the accuracy bench runs transcribe+diar, never summarize). With the full pipeline, at any
+instant some of the 10 workers are in summarize/index → **effective concurrent GPU requests < 10 → the GPU is
+fed BELOW its own optimum**. The dilution scales with the summarize fraction of pipeline wall-time (LLM on a
+long transcript is non-trivial). This is invisible to the bench (no LLM) and not captured by the posture pool.
+
+**Fix (DOUBLE win, not yet built — architectural + behavior-changing, so flagged for a decision):** decouple the
+GPU-bound stages from the non-GPU tail — transcribe enqueues a follow-on summarize+index job and RETURNS, so the
+GPU-feeding workers churn transcribe jobs at the true batch concurrency while summarize/index run separately
+(and at a lower priority — the user already has their transcript). Wins: (a) GPU fed at the real optimum on
+hosted; (b) FASTER transcript-to-user (the transcript appears without waiting for the LLM summary). Risk to get
+right: job-chaining + crash-resume (idempotent re-run could double-enqueue the follow-on — needs a dedup/keyed
+enqueue), and it changes the user-visible ordering. The durable-queue + crash-resume + graceful-shutdown infra
+built this loop is exactly what makes it safe; it's a deliberate change, not a quick fix.
+
 ## GPU utilization — analysis for the user's "avg util / sustained, not just peak" question (2026-06-21)
 
 Grounded in 72 real `.modal-results` runs + the sampler (`scripts/modal_benchmark.py:utilization_stats`,
