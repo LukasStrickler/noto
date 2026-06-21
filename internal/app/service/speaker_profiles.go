@@ -147,6 +147,35 @@ func (s *Service) foldEmbeddingIntoProfile(ctx context.Context, profileID string
 	_ = s.speakerProfiles.Update(ctx, p)
 }
 
+// shouldFoldOnPatch decides whether a human's mapping patch should teach the
+// target profile from this speaker's voiceprint. The rule exists to fold exactly
+// once per (embedding, profile) observation — never zero times for a genuine new
+// signal, never twice for one already counted:
+//
+//   - profile CHANGED (reassign to a different person): the new profile has never
+//     seen this voiceprint, so fold it in.
+//   - CONFIRMING a pending suggestion (same profile, pending -> auto/manual): a
+//     pending match was never folded (only the auto-match path folds), so the
+//     human confirmation is genuinely new learning. This is the single most common
+//     identity action — accepting the review queue's suggestion — and folding it is
+//     what actually closes the human-feedback loop; the earlier profile-changed-only
+//     guard silently dropped it.
+//
+// Every other same-profile patch is intentionally skipped to avoid double-counting:
+// an "auto" mapping was already folded by the auto path, a "new" mint was seeded
+// with this exact embedding at creation, and a "manual" mapping already folded when
+// it first became manual.
+func shouldFoldOnPatch(oldProfile, newProfile, oldStatus, newStatus string) bool {
+	if newProfile == "" {
+		return false
+	}
+	if newProfile != oldProfile {
+		return true
+	}
+	nowConfirmed := newStatus == "manual" || newStatus == "auto"
+	return oldStatus == "pending" && nowConfirmed
+}
+
 // assignMeetingSpeaker links a meeting speaker to a profile and marks it manual.
 func (s *Service) assignMeetingSpeaker(meetingID, speakerID, profileID string) error {
 	maps, err := s.meetingMappings.ListByMeeting(context.Background(), meetingID)
@@ -308,6 +337,7 @@ func (s *Service) PatchMeetingSpeakerMappings(_ context.Context, meetingID strin
 				if m.ProfileID != nil {
 					oldProfile = *m.ProfileID
 				}
+				oldStatus := m.MatchStatus
 				if entry.ProfileID != nil {
 					m.ProfileID = entry.ProfileID
 				}
@@ -326,7 +356,7 @@ func (s *Service) PatchMeetingSpeakerMappings(_ context.Context, meetingID strin
 				// speaker's stored voiceprint. Only on an actual profile change: a
 				// confirm-in-place (same profile) was already folded by the auto path,
 				// so re-folding would double-count the same embedding.
-				if m.ProfileID != nil && *m.ProfileID != "" && *m.ProfileID != oldProfile {
+				if m.ProfileID != nil && shouldFoldOnPatch(oldProfile, *m.ProfileID, oldStatus, m.MatchStatus) {
 					s.foldEmbeddingIntoProfile(context.Background(), *m.ProfileID, m.EmbeddingVector)
 				}
 				break

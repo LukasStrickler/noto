@@ -59,6 +59,36 @@ func TestFoldEmbeddingIntoProfile(t *testing.T) {
 	}
 }
 
+// TestShouldFoldOnPatch pins the human-feedback learning rule: fold exactly once
+// per (embedding, profile) observation. The case that motivated the fix is
+// "confirm pending in place" — accepting the review queue's suggestion without
+// changing the profile — which the earlier profile-changed-only guard dropped,
+// leaving the most common identity action teaching the model nothing.
+func TestShouldFoldOnPatch(t *testing.T) {
+	cases := []struct {
+		name                   string
+		oldProfile, newProfile string
+		oldStatus, newStatus   string
+		want                   bool
+	}{
+		{"confirm pending in place", "P", "P", "pending", "manual", true},
+		{"confirm pending -> auto", "P", "P", "pending", "auto", true},
+		{"reassign to different profile", "P", "Q", "manual", "manual", true},
+		{"assign a previously-unlinked speaker", "", "P", "new", "manual", true},
+		{"re-confirm already-folded manual (no double count)", "P", "P", "manual", "manual", false},
+		{"confirm an auto match already folded by auto path", "P", "P", "auto", "manual", false},
+		{"confirm a new mint already seeded at creation", "P", "P", "new", "manual", false},
+		{"pending stays pending (confidence-only patch)", "P", "P", "pending", "pending", false},
+		{"cleared to no profile", "P", "", "manual", "manual", false},
+	}
+	for _, c := range cases {
+		if got := shouldFoldOnPatch(c.oldProfile, c.newProfile, c.oldStatus, c.newStatus); got != c.want {
+			t.Errorf("%s: shouldFoldOnPatch(%q,%q,%q,%q) = %v; want %v",
+				c.name, c.oldProfile, c.newProfile, c.oldStatus, c.newStatus, got, c.want)
+		}
+	}
+}
+
 // TestMatchSpeakers_AutoMatchFoldsRunningMean proves the auto-match centroid
 // update is a TRUE running mean: an established profile (count=4) that auto-matches
 // a new meeting advances to count=5, so the new voiceprint is folded in with weight

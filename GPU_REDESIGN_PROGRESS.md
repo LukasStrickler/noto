@@ -163,6 +163,17 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   count-weighting + no-op safety + first-enrollment, and the auto path's count increment (unchanged).
   build/vet/lint(0)/race clean. Net: EVERY voiceprint update — auto, manual, merge — is now count-weighted,
   and human corrections finally improve cross-meeting identity.
+- **★ Close the loop for CONFIRMATIONS, not just reassignments (2026-06-21).** The count-weighted manual fold
+  above only fired when a patch CHANGED the profile (`*ProfileID != oldProfile`) — so a REASSIGN taught the
+  model, but **confirming a pending suggestion in place** (the single most common identity action: accepting
+  the review-queue's "is this Alice?" with the SAME profile) was treated as a no-op and folded NOTHING. The
+  guard's premise ("same profile ⇒ already folded by the auto path") is false for a PENDING match — only
+  `StatusAuto` folds; pending/new never did. So the human-feedback loop was still open for the very case it
+  most needed to close. Fix: extracted the decision into a pure, exhaustively-tested predicate
+  `shouldFoldOnPatch(oldProfile, newProfile, oldStatus, newStatus)` — fold iff the profile CHANGED (reassign;
+  new profile never saw the voiceprint) OR a PENDING mapping became confirmed in place (genuine new learning).
+  Still skips the already-counted cases (auto folded by the auto path, "new" seeded at creation, "manual"
+  folded once) so no double-count. 9-case table test pins every transition; build/vet/lint(0)/test clean.
 
 ## Dead-code sweep — classified, don't re-investigate (2026-06-20)
 
