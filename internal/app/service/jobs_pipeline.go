@@ -597,8 +597,24 @@ func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artif
 			speechBySpeaker[seg.SpeakerID] += d
 		}
 	}
+	// Preserve human work: a speaker the user MANUALLY assigned must survive a
+	// re-transcribe / re-process (reachable via the CreateJob API). Re-matching
+	// would otherwise upsert a fresh auto-guess over the same (meeting, speaker)
+	// key and silently destroy the strongest identity signal there is. Auto /
+	// pending / new mappings are safe to recompute; only "manual" is sacred.
+	manualSpeaker := map[string]bool{}
+	if maps, merr := s.meetingMappings.ListByMeeting(ctx, meetingID); merr == nil {
+		for _, m := range maps {
+			if m.MatchStatus == "manual" {
+				manualSpeaker[m.MeetingSpeakerID] = true
+			}
+		}
+	}
 	now := time.Now()
 	for _, sp := range tr.Speakers {
+		if manualSpeaker[sp.ID] {
+			continue // keep the user's manual assignment as-is
+		}
 		emb, ok := embeddings[sp.ProviderLabel]
 		if !ok || len(emb) == 0 {
 			_ = s.meetingMappings.Upsert(ctx, speakerstore.MeetingSpeakerMapping{

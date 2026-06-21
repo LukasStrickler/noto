@@ -137,6 +137,55 @@ func TestMatchSpeakers_AutoMatchFoldsRunningMean(t *testing.T) {
 	}
 }
 
+// TestMatchSpeakers_PreservesManualAssignment is the human-work contract: a
+// re-transcribe / re-process must NOT overwrite a speaker the user manually
+// assigned with a fresh auto-guess. Manual is the strongest identity signal.
+func TestMatchSpeakers_PreservesManualAssignment(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	v := make([]float64, 192)
+	for i := range v {
+		v[i] = 0.5
+	}
+
+	pr := &memorySpeakerProfileRepo{}
+	// A profile the auto-matcher WOULD pick (its centroid equals the query).
+	_ = pr.Create(ctx, speakerstore.SpeakerProfile{
+		ID: "auto-target", DisplayName: "Bob",
+		EmbeddingVector: v, EmbeddingDim: 192, EmbeddingCount: 4,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	mr := &memoryMeetingMappingRepo{}
+	// The user already MANUALLY assigned spk_0 to a DIFFERENT person.
+	manualPID := "alice-manual"
+	_ = mr.Upsert(ctx, speakerstore.MeetingSpeakerMapping{
+		MeetingID: "m1", MeetingSpeakerID: "spk_0", ProviderLabel: "A",
+		ProfileID: &manualPID, MatchStatus: "manual", EmbeddingVector: v, EmbeddingDim: 192,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	svc := &Service{speakerProfiles: pr, meetingMappings: mr}
+
+	tr := &artifacts.Transcript{
+		MeetingID: "m1",
+		Speakers:  []artifacts.Speaker{{ID: "spk_0", ProviderLabel: "A", DisplayName: "Alice"}},
+		Segments:  []artifacts.Segment{{ID: "s0", SpeakerID: "spk_0", StartSeconds: 0, EndSeconds: 60}},
+	}
+	embeddings := map[string][]float64{"A": v} // would auto-match "auto-target"
+
+	if err := svc.matchSpeakers(ctx, "m1", tr, embeddings); err != nil {
+		t.Fatalf("matchSpeakers: %v", err)
+	}
+
+	ms, _ := mr.ListByMeeting(ctx, "m1")
+	if len(ms) != 1 {
+		t.Fatalf("expected the single manual mapping to be preserved, got %d", len(ms))
+	}
+	if ms[0].MatchStatus != "manual" || ms[0].ProfileID == nil || *ms[0].ProfileID != "alice-manual" {
+		t.Errorf("manual assignment was overwritten: %+v", ms[0])
+	}
+}
+
 // TestMatchSpeakers_SkipsStaleDimensionProfile is the upgrade-safety contract: a
 // profile embedded by a different/older model (a different vector dimension) must
 // be SKIPPED, not fed to the matcher — whose strict contract errors on the first

@@ -203,6 +203,34 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   mappings and decrements `CountUnresolved`, while a mapping in another meeting survives. Also made the in-memory
   mapping fake's `DeleteByMeeting` actually delete (was a no-op, which would have hidden this). build/vet/lint(0)/race clean.
 
+- **★ Re-transcribe no longer destroys manual speaker assignments (2026-06-21).** `matchSpeakers` consulted
+  existing PROFILES but never existing MAPPINGS — it blindly `Upsert`ed a fresh auto-match per speaker. So
+  re-running transcribe/pipeline on an already-identified meeting (reachable via the generic `CreateJob` API)
+  OVERWROTE a user's MANUAL assignment (the strongest identity signal, the whole point of the human-feedback
+  loop) with a lower-confidence machine guess — silent data loss on the same (meeting, speaker) key. Fix:
+  matchSpeakers now loads the meeting's existing mappings first and SKIPS any speaker whose current mapping is
+  `manual`, preserving it as-is; auto/pending/new are still recomputed (safe — they're machine-derived). Tested:
+  a meeting with a manual spk_0→Alice survives a re-match whose embedding would otherwise auto-pick a different
+  profile. build/vet/lint(0)/race clean.
+
+## GPU utilization — analysis for the user's "avg util / sustained, not just peak" question (2026-06-21)
+
+Grounded in 72 real `.modal-results` runs + the sampler (`scripts/modal_benchmark.py:utilization_stats`,
+busy=samples≥50%, 0.5s cadence) and the Go KPI (`trace_summary.gpuUtilization`). Findings, so a future
+iteration doesn't re-derive:
+- **We are NOT just peak-utilizing.** `mean_utilization_pct ≈ busy_pct` in every run (best batch 93.7 vs 94.1,
+  peak 100) — when the card is busy it's genuinely SATURATED (the diar-embedding ResNet pins it), not spiking.
+- **The ~18% gap is fixed STARTUP (model load), not steady-state scheduler gaps.** busy% rises with run length:
+  `<60s 49% → 60–180s 47%(med)/87%(max) → 180–600s 87% → >600s 94%`. The scale model already decomposes this
+  (fixed $0.0189 amortizes to the $0.0139 marginal floor). No avoidable steady-state idle the scheduler leaves.
+- **Scheduler is near-optimal for FEEDING** (offloaded pool=10 @ batch optimum + chain-wake → 94% busy at
+  scale). The remaining "util all the time" levers are NOT scheduler code: (a) keep-warm — Modal
+  `scaledown_window=300s` default keeps warm across <5min gaps, `min_containers=0` scales truly-idle to zero;
+  set `min_containers≥1` for zero cold-starts at the cost of paid idle GPU; (b) idle-BACKFILL — the
+  `JobPriorityIdle` tier is built to run deferred refinement (overlap separation/repair) on spare GPU, gated on
+  the separation GPU endpoint, NOT the scheduler; (c) singular meetings can't be kept busy (no work) — the right
+  metric there is latency + idle-cost, not util. The bench CLI already surfaces mean/busy/peak separately.
+
 ## Dead-code sweep — classified, don't re-investigate (2026-06-20)
 
 Ran `golang.org/x/tools/cmd/deadcode` over production reachability, cross-checked vs tests +
