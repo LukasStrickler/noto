@@ -103,6 +103,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **KPI follow-on: utilization was the LAST asymmetric dial (1 bug, +1 test, 2026-06-21).** The 9-bug
+  pass (above) made `ScoreRun` drop *cost* and *quality* from the weighted mean when a run carries no
+  reading (so a smoke/integration run isn't penalized for an unmeasured dial) — but left **utilization**
+  folded in unconditionally, on the premise "a CPU run is a genuine 0%." That premise is wrong: the
+  caller (`bench.go`) collapses THREE distinct cases to `busy=0` — a CPU run, a run whose `AuditRun`
+  *errored*, and a run with no GPU samples (`audit.GPU==nil`) — none of which is a real 0% reading. So a
+  strong cost+quality run with no GPU sample had its headline KPI tanked by a phantom util=0 carrying full
+  weight (default 0.3): **a 15-point swing** in the regression test (36.18 vs the correct 51.69). Fixed by
+  treating `BusyPct<=0` as absent and renormalizing it out, exactly like cost/quality — utilization is no
+  longer the exception. The pathological "GPU provisioned but truly 0% busy" run loses no coverage: an idle
+  card is expensive, so the *cost* dial already punishes it. Verified the test fails pre-fix (reverted the
+  block → 36.18 ≠ 51.69) and passes after. Lesson: a "COMPLETE" audit can still miss a sibling branch in
+  the very function it fixed — the renormalization was added for 2 of 3 dials, not all 3.
 - **VAD/optimization is a DEPLOYMENT config, NOT a consumer-TUI toggle (corrected 2026-06-20).** An
   earlier pass (467e581) added an "Accuracy" config section to the TUI (VAD toggle + entity-repair status)
   — REVERTED, because the TUI is a CONSUMER frontend (like a web app: people just connect and use it), and

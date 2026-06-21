@@ -123,6 +123,36 @@ func TestScoreRun_AbsentCostRenormalizedOut(t *testing.T) {
 	}
 }
 
+func TestScoreRun_AbsentUtilizationRenormalizedOut(t *testing.T) {
+	// A run with no GPU sample (BusyPct==0): a CPU/integration run, a run whose GPU
+	// audit failed, or a remote decode the harness didn't profile. Utilization's
+	// weight must be dropped from the denominator — NOT contribute a hard 0 that
+	// tanks a strong cost+quality run for carrying no GPU reading. This mirrors the
+	// cost/quality absence handling; utilization is the dial that used to be the
+	// exception.
+	w := bench.DefaultKPIWeights()
+	s := bench.ScoreRun(bench.KPIInputs{
+		CostPerAudioHourUSD: 0.013,
+		AnchorCostUSD:       bench.AnchorCostPerProcessedAudioHourUSD,
+		TargetCostUSD:       bench.StretchTargetCostPerAudioHourUSD,
+		WER:                 0.21, DER: 0.10, CpWER: 0.28,
+		BusyPct: 0, // no GPU sample
+	}, w)
+	if s.Components["utilization"] != 0 {
+		t.Fatalf("absent utilization component should report 0, got %v", s.Components["utilization"])
+	}
+	want := 100 * (w.Cost*s.Components["cost"] + w.Quality*s.Components["quality"]) / (w.Cost + w.Quality)
+	if math.Abs(s.Score-want) > 1e-9 {
+		t.Fatalf("absent utilization not renormalized out: score=%v want=%v", s.Score, want)
+	}
+	// Sanity: had the 0 been folded in with full weight, the score would be strictly
+	// lower — prove the renormalization actually moved the number.
+	tanked := 100 * (w.Cost*s.Components["cost"] + w.Quality*s.Components["quality"]) / (w.Cost + w.Quality + w.Utilization)
+	if want <= tanked {
+		t.Fatalf("test is vacuous: renormalized %v not above folded-in %v", want, tanked)
+	}
+}
+
 func TestScoreRun_IdleWasteNoted(t *testing.T) {
 	s := bench.ScoreRun(bench.KPIInputs{
 		CostPerAudioHourUSD: 0.029, AnchorCostUSD: 0.0194, TargetCostUSD: 0.01,

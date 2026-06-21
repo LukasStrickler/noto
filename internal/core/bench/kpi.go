@@ -57,8 +57,10 @@ type WeightedScore struct {
 
 // ScoreRun computes the weighted composite. costScore maps anchor→0, target→1
 // (clamped, so beating the target still caps at 1); qualityScore is the mean margin
-// under each PRESENT guardrail; utilScore is the GPU busy fraction. The weighted
-// mean is gated to 0 on any guardrail breach.
+// under each PRESENT guardrail; utilScore is the GPU busy fraction. ALL THREE dials
+// are dropped from the weighted mean when the run wasn't measured on them, so a run
+// is never penalized for a dial it carries no reading for. The weighted mean is
+// gated to 0 on any guardrail breach.
 func ScoreRun(in KPIInputs, w KPIWeights) WeightedScore {
 	comp := map[string]float64{}
 	var notes []string
@@ -108,12 +110,25 @@ func ScoreRun(in KPIInputs, w KPIWeights) WeightedScore {
 	}
 	comp["quality"] = qualityScore
 
-	// Utilization is always a real reading: a GPU run reports busy%, a CPU run is a
-	// genuine 0%. So it always contributes (unlike cost/quality, which can be absent).
-	utilScore := clamp01(in.BusyPct / 100)
+	// Utilization is present only when the GPU was actually sampled (busy% > 0). A
+	// zero reading is NOT a "genuinely 0% efficient" GPU run — it's the absence of a
+	// GPU sample (a CPU/integration run, a run whose GPU audit failed, or a remote
+	// decode the harness didn't profile), which the caller collapses to 0. Scoring
+	// that absence as a hard 0 with full weight would tank a strong cost/quality run
+	// purely for carrying no GPU reading — the exact asymmetry the cost/quality dials
+	// avoid. So utilization is dropped from the weighted mean when absent, like them.
+	// The pathological "GPU provisioned but truly 0% busy" run is already punished by
+	// the cost dial (an idle card is expensive), so dropping its util term here is no
+	// blind spot.
+	utilScore := 0.0
+	if in.BusyPct > 0 {
+		utilScore = clamp01(in.BusyPct / 100)
+		num += w.Utilization * utilScore
+		wsum += w.Utilization
+	} else {
+		notes = append(notes, "no GPU utilization on this run — utilization component scored 0 (not in the weighted mean)")
+	}
 	comp["utilization"] = utilScore
-	num += w.Utilization * utilScore
-	wsum += w.Utilization
 
 	if wsum <= 0 {
 		wsum = 1
