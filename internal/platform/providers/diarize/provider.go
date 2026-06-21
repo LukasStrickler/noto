@@ -1,8 +1,8 @@
 // Package diarize is the standalone speaker-diarization seam: "who spoke when",
 // independent of what they said.
 //
-// Diarization used to be bundled inside the STT provider (AssemblyAI returns
-// speaker-labelled segments). The local-first pipeline splits the two — a local
+// Diarization used to be bundled inside the STT provider (an inline-diarizing
+// STT returns speaker-labelled segments). The local-first pipeline splits the two — a local
 // STT decoder emits words with no speaker labels, and a separate local diarizer
 // produces the turns — so the merge step can attribute words to speakers. This
 // package defines the seam both sides plug into, mirroring stt.STTProvider's
@@ -44,8 +44,8 @@ type DiarizeOptions struct {
 // particular sample rate beyond what they document; callers pass the same audio
 // bytes they would hand an STTProvider.
 type Diarizer interface {
-	// ProviderID identifies the diarizer (e.g. "assemblyai+bundled-diar",
-	// "pyannote-local").
+	// ProviderID identifies the diarizer (e.g. "pyannote-local",
+	// "bundled-diar").
 	ProviderID() string
 	// Diarize returns time-sorted speaker turns for the audio.
 	Diarize(ctx context.Context, audio []byte, opts DiarizeOptions) ([]Turn, error)

@@ -32,7 +32,7 @@ func (d *detailPane) renderSpeakers(ctx screenCtx, width, height int) string {
 		}
 		empty := []string{
 			s.Muted.Render("No diarization in this transcript yet."),
-			s.Muted.Render("Speaker labels appear after AssemblyAI runs with `speaker_labels=true`."),
+			s.Muted.Render("Speaker labels appear once diarization has run on the recording."),
 		}
 		return strings.Join(empty, "\n")
 	}

@@ -1,8 +1,8 @@
 // Package parakeet is noto's local speech-to-text provider, backed by
 // Parakeet-TDT-0.6b-v3 running through the sherpa-onnx transducer runtime
 // (CPU/CUDA on Linux, CoreML on Mac later). It implements stt.STTProvider, so
-// it drops into the registry + router exactly where AssemblyAI sits today — but
-// it runs on-device, emits native word timestamps, and does NOT diarize
+// it is the local-first STT provider in the registry + router — it runs
+// on-device, emits native word timestamps, and does NOT diarize
 // (diarization is a separate seam; see internal/platform/providers/diar).
 //
 // The decode loop (encoder→decoder→joint→greedy TDT) lives behind the `engine`

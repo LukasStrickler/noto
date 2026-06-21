@@ -4,7 +4,7 @@
 // A local STT emits words with timestamps but no speaker; a separate Diarizer
 // emits speaker turns but no text. Attribute assigns each word to the turn
 // covering its midpoint, stamps the speaker onto words and re-derived segments,
-// and rebuilds the Speakers list — the same shape the bundled (AssemblyAI)
+// and rebuilds the Speakers list — the same shape a bundled inline-diarizing
 // pipeline produces, so downstream (embedding, matching, scoring) is identical.
 //
 // This is the reference implementation production adopts; the benchmark e2e chain

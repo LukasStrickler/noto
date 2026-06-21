@@ -98,7 +98,8 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 			}
 		}
 		// Route to the configured speech provider — local-first by default
-		// (parakeet-local), with cloud (AssemblyAI) as an optional offload.
+		// (parakeet-local), with a remote GPU/Modal `noto serve` node as an
+		// optional offload (the same on-device decoder, just run elsewhere).
 		// Any failure here (model not installed, engine not built, missing
 		// cloud key, network error) is NON-fatal: we note it and fall through
 		// to the synthesized transcript so the job still completes and the

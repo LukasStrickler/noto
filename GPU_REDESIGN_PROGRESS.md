@@ -41,6 +41,25 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Adherence: stale AssemblyAI references across code comments + a USER-FACING TUI string (cleanup,
+  2026-06-21).** Completes last fire's AGENTS.md fix (which flagged "lingering code mentions as follow-up").
+  The worst was user-visible: the speakers-tab empty state told users "Speaker labels appear after
+  AssemblyAI runs with `speaker_labels=true`" (`detail_pane_speakers_view.go:35`) — flatly wrong (labels come
+  from the separate pyannote diarization stage; there is no AssemblyAI). Fixed it to a provider-agnostic
+  "appear once diarization has run." Also corrected misleading code comments: `jobs_pipeline.go:101` claimed
+  the STT offload is "cloud (AssemblyAI)" when it's a self-hosted remote/Modal `noto serve` node;
+  `parakeet.go` "drops in where AssemblyAI sits today"; the `MeetingSpeakerID` "AssemblyAI label" attribution;
+  a stale `assemblyai+bundled-diar` example provider id; the Format/Punctuation-normalizer rationale; and the
+  three "bundled (AssemblyAI)" historical examples → generic "inline-diarizing STT". Deliberately LEFT the two
+  intentional ones: the `fewshot.go` LLM few-shot example (a fake meeting that discusses AssemblyAI as its
+  topic — real-looking example content, not an architecture claim) and the `secrets/store.go` provider-key
+  mapping (a harmless key registry entry). Verified by grep (no stale AssemblyAI remains outside those two);
+  build + vet + full suite + lint green. (Found while verifying a hypothesized GPU bug that turned out NOT to
+  be real: the heavy STT/diar models reload per request via `newSTTAdapter` with the `modelPool.acquire`
+  lazy-load+evict path unwired — but the ONLY `newEngine` impl is the nil stub (`engine_stub.go`); the real
+  sherpa engine isn't in the repo yet, so nothing heavy loads today. The unwired `pool.acquire` is exactly the
+  infrastructure waiting for that engine to land — wire STT/diar through it BEFORE the sherpa engine ships, or
+  the compute node will reload multi-GB weights per request.)
 - **Adherence/docs: AGENTS.md described a retired AssemblyAI STT pipeline that no longer exists (doc fix,
   verified against code, 2026-06-21).** AGENTS.md (the architecture reference every loop fire reads) claimed
   "AssemblyAI STT", "transcribes + diarizes it with AssemblyAI", "Production STT is AssemblyAI only", and

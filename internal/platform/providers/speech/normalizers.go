@@ -461,7 +461,7 @@ type TranscriptNormalizers []TranscriptNormalizer
 //
 // The remaining normalizers (Timestamp gap-flagging, Confidence "[low
 // confidence]" tags, Format filler/partial-word edits, Punctuation) rewrite or
-// inject markers INTO Segment.Text. AssemblyAI already returns punctuated,
+// inject markers INTO Segment.Text. The recognizer already returns punctuated,
 // formatted text, so re-processing it corrupted real content (mangled
 // hyphenated words, dropped "like", fabricated "[potential gap]" segments the
 // model could cite) and leaked display markers into both the LLM prompt and FTS

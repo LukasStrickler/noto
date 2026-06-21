@@ -8,9 +8,9 @@ import (
 	"github.com/lukasstrickler/noto/internal/platform/providers/stt"
 )
 
-// BundledDiarizer adapts an stt.STTProvider that diarizes inline (e.g.
-// AssemblyAI, which returns speaker-labelled segments) into the standalone
-// Diarizer seam, by projecting the transcript's segments to turns.
+// BundledDiarizer adapts an stt.STTProvider that diarizes inline (one that
+// returns speaker-labelled segments) into the standalone Diarizer seam, by
+// projecting the transcript's segments to turns.
 //
 // It runs the full STT transcribe and discards the words — wasteful, but it
 // makes the *current* production diarization scoreable through the same DER path

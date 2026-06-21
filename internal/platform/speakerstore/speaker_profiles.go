@@ -36,7 +36,7 @@ type SpeakerProfile struct {
 // MeetingSpeakerMapping links a speaker in a specific meeting to a profile.
 type MeetingSpeakerMapping struct {
 	MeetingID        string
-	MeetingSpeakerID string  // AssemblyAI label like "A", "B"
+	MeetingSpeakerID string  // diarizer speaker label like "A", "B"
 	ProviderLabel    string  // Original from provider
 	ProfileID        *string // nil if unmatched
 	MatchConfidence  *float64
