@@ -41,7 +41,7 @@ func (s *Server) handleComputeTranscribe(w http.ResponseWriter, r *http.Request)
 	}
 	t, err := s.svc.ComputeTranscribe(r.Context(), audio, opts)
 	if err != nil {
-		writeError(w, err)
+		s.writeComputeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
@@ -63,10 +63,27 @@ func (s *Server) handleComputeDiarize(w http.ResponseWriter, r *http.Request) {
 	}
 	turns, err := s.svc.ComputeDiarize(r.Context(), audio, opts)
 	if err != nil {
-		writeError(w, err)
+		s.writeComputeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, diarize.TurnsResponse{Turns: turns})
+}
+
+// writeComputeError keeps the compute endpoints from leaking internals across the
+// network plane. These endpoints are exposed to OTHER nodes (a RemoteSTT /
+// RemoteDiarizer, potentially on a shared/hosted GPU box), and the STT/diarize
+// adapters fail with bare errors carrying filesystem paths, env var names, and
+// subprocess stderr / Python tracebacks — which writeError's fallback would copy
+// verbatim into the 500 body. A structured notoapi error (invalid request,
+// unsupported capability, …) is already safe and passes through with its real
+// code; anything else is logged here and returned as a generic internal error.
+func (s *Server) writeComputeError(w http.ResponseWriter, err error) {
+	if _, ok := notoapi.As(err); ok {
+		writeError(w, err)
+		return
+	}
+	s.logger.Printf("compute: %v", err)
+	writeError(w, notoapi.NewError(notoapi.CodeInternal, "compute backend error", nil))
 }
 
 func (s *Server) handleModalComputeStatus(w http.ResponseWriter, r *http.Request) {

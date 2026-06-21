@@ -41,6 +41,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Compute plane: STT/diarize failures leaked subprocess stderr + paths + env names over HTTP (1 bug,
+  +1 test, 2026-06-21).** Third audit follow-up, on the Modal-default critical path. The compute endpoints
+  (`/v1/compute/transcribe`, `/v1/compute/diarize`) ARE the node-to-node network boundary; their handlers
+  pass the adapter error straight to `writeError`, whose fallback copies `err.Error()` verbatim into the
+  500 body. The STT/diarize adapters (`parakeet_server.go`, `pyannote_server.go`, sherpa) fail with bare
+  `fmt.Errorf`/`*notoerr.Error` — and `notoapi.As` only matches `*notoapi.Error` (no bridge), so a real
+  failure shipped filesystem paths, env var names (`NOTO_PARAKEET_PYTHON`), and Python tracebacks across
+  the wire to the calling node. Fix: `writeComputeError` on the two compute handlers — a structured
+  `notoapi.Error` (no-audio → 400, no-diarizer → unsupported) still passes through with its real code, but
+  anything else is logged server-side and returned as a generic `CodeInternal` envelope with no raw detail.
+  Test drives a failing diarizer whose error carries a secret traceback string and asserts the wire body is
+  a structured `code:"internal"` envelope that contains none of it; pre-fix the body leaks the full string,
+  revert-checked. (Same class as the earlier LoadTranscript storage-not-found→500 leak fix.)
 - **Storage: a crash mid-manifest-commit permanently bricked a meeting and silently dropped it (1 data
   bug, +1 test, 2026-06-21).** Second of the audit's two "fix the data bugs first" items. `WriteManifest`
   committed the checksum file BEFORE the manifest, in two separate `rename`s. The two files can't be
