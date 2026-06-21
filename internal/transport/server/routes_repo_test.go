@@ -109,6 +109,19 @@ func TestRemoteArtifactRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("GetMeeting(missing) error = %v, want ErrNotFound", err)
 	}
 
+	// A meeting that exists but isn't transcribed yet must read as not-found over the
+	// remote plane — previously this surfaced as a CodeInternal/500, not ErrNotFound.
+	bare := uuid.New()
+	if err := rr.CreateMeeting(ctx, bare, repo.CreateMeetingOpts{Title: "no transcript yet"}); err != nil {
+		t.Fatalf("CreateMeeting(bare): %v", err)
+	}
+	if _, err := rr.LoadTranscript(ctx, bare); !errors.Is(err, repo.ErrNotFound) {
+		t.Errorf("LoadTranscript(no transcript) over the remote plane = %v, want ErrNotFound (not a 500)", err)
+	}
+	if err := rr.DeleteMeeting(ctx, bare); err != nil {
+		t.Fatalf("DeleteMeeting(bare): %v", err)
+	}
+
 	// Delete removes it from the plane and its index.
 	if err := rr.DeleteMeeting(ctx, id); err != nil {
 		t.Fatalf("DeleteMeeting: %v", err)

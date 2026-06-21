@@ -2,6 +2,7 @@ package repo_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -102,6 +103,22 @@ func TestLocalRepo_SaveLoadTranscript(t *testing.T) {
 	}
 	if sm.SpeakerCount != 1 {
 		t.Errorf("SpeakerCount: want 1 got %d", sm.SpeakerCount)
+	}
+}
+
+// TestLocalRepo_LoadTranscript_NotFound pins that a not-yet-transcribed meeting
+// surfaces the repo-level ErrNotFound sentinel (like GetMeeting), not the raw
+// storage code — so mapRepoErr renders a clean "not found" and the remote data
+// plane returns 404, not a CodeInternal/500 "internal error".
+func TestLocalRepo_LoadTranscript_NotFound(t *testing.T) {
+	r := newLocalRepo(t)
+	ctx := context.Background()
+	id := uuid.New()
+	if err := r.CreateMeeting(ctx, id, repo.CreateMeetingOpts{Title: "no transcript yet"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.LoadTranscript(ctx, id); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("LoadTranscript on a transcript-less meeting must return repo.ErrNotFound, got %v", err)
 	}
 }
 

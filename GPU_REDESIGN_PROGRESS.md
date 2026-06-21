@@ -103,8 +103,20 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
-- **Hosted accuracy: the context-bias header dropped international names behind a proxy (1 bug, +1 test,
-  2026-06-21).** Same class as the upload-header fix (iter "non-ASCII titles"), in a DIFFERENT, unfixed
+- **Error contract: a not-yet-transcribed meeting read as "internal error" / 500, not not-found (1 bug,
+  +2 tests, 2026-06-21).** `mapRepoErr` only recognizes `repo.ErrNotFound`, but local `LoadTranscript`
+  returned the RAW `storage.ErrArtifactNotFound` (unlike `GetMeeting`, which maps it). So `GetTranscript` on
+  a meeting that exists but isn't transcribed yet (still processing) returned **CodeInternal "internal
+  error"** on every backend — and over the remote data plane it became a **500** (`statusForCode` sends the
+  storage code to `default`), where `GetMeeting`(missing) correctly 404s. A normal "transcript not ready"
+  state surfaced as a server error. Fixed at the repo layer (the root): local `LoadTranscript` now maps
+  storage-not-found → `repo.ErrNotFound` exactly like `GetMeeting`, so `mapRepoErr` renders a clean
+  not-found and the remote plane returns 404. A CORRUPT transcript (read/validation failure) keeps its own
+  error and is NOT masked as not-found. Verified no caller depended on the storage error type (all use
+  `err != nil` or `mapRepoErr`). Tests: repo-level (`LoadTranscript` on a transcript-less meeting →
+  `ErrNotFound`) + end-to-end over the real remote data plane (was a 500, now `ErrNotFound`); both fail
+  pre-fix. Cross-reference win again: `GetMeeting` and `LoadTranscript` should agree on not-found — they
+  didn't. Same class as the upload-header fix (iter "non-ASCII titles"), in a DIFFERENT, unfixed
   header: `RemoteSTT` sends the bias glossary as JSON in `X-Noto-Context-Bias`, and `json.Marshal` emits RAW
   UTF-8 for non-ASCII. The glossary is PARTICIPANT NAMES — very often non-ASCII for international users — so
   on a hosted-behind-proxy deployment a name like "Réunion"/"会議" put non-ASCII bytes in the header, which a

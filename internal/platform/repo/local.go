@@ -134,7 +134,20 @@ func (r *LocalArtifactRepository) LoadTranscript(_ context.Context, id uuid.UUID
 	if err != nil {
 		return nil, err
 	}
-	return storage.ReadTranscript(layout)
+	t, err := storage.ReadTranscript(layout)
+	if err != nil {
+		// Surface a not-yet-transcribed meeting as the repo-level sentinel, like
+		// GetMeeting does — otherwise the raw storage code reaches mapRepoErr (which
+		// only knows ErrNotFound) as a CodeInternal "internal error", and over the
+		// remote data plane it becomes a 500 instead of a clean 404. A corrupt
+		// transcript (read/validation failure) keeps its own error and is NOT masked
+		// as not-found.
+		if isStorageNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return t, nil
 }
 
 func (r *LocalArtifactRepository) SaveSummary(_ context.Context, id uuid.UUID, md string, summary *artifacts.Summary) error {
