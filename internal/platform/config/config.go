@@ -109,7 +109,15 @@ func (c ComputeConfig) JobWorkers() int {
 	if c.JobConcurrency > 0 {
 		return c.JobConcurrency
 	}
-	if c.Speech.Location == ComputeLocationRemote && c.Diarize.Location == ComputeLocationRemote {
+	// "Offloaded" must mean the SAME thing Resolve uses to pick the remote provider
+	// (location=remote AND a URL actually resolves), or the pool size drifts from
+	// reality: a remote route with NO url runs the LOCAL heavy models, so sizing for
+	// offload (10) would oversubscribe the box; and a case/whitespace-variant "Remote"
+	// that Resolve DOES offload would otherwise get the small local pool and starve the
+	// GPU. Both bugs vanish by asking Resolve, exactly like resolveSTTAdapter does.
+	_, speechRemote := c.Resolve(c.Speech)
+	_, diarRemote := c.Resolve(c.Diarize)
+	if speechRemote && diarRemote {
 		return DefaultOffloadJobWorkers
 	}
 	return DefaultLocalJobWorkers

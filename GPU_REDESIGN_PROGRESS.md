@@ -103,8 +103,20 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
-- **Error contract: a not-yet-transcribed meeting read as "internal error" / 500, not not-found (1 bug,
-  +2 tests, 2026-06-21).** `mapRepoErr` only recognizes `repo.ErrNotFound`, but local `LoadTranscript`
+- **★ Scheduler/GPU: the worker-pool size didn't match the ACTUAL offload decision (1 bug, +2 tests,
+  2026-06-21).** Direct hit on "smart scheduler that maximizes GPU utilization." `JobWorkers()` chose the
+  10-worker offload pool from `Speech.Location == "remote" && Diarize.Location == "remote"` — an EXACT
+  string check with NO url test — but `Compute.Resolve` (which actually PICKS the provider in
+  `resolveSTTAdapter`/`resolveDiarizer`) treats a route as remote only when `EqualFold(TrimSpace(location),
+  "remote") AND ep.URL != ""`. So the two disagreed two ways: (1) **`location=remote` but no URL** →
+  Resolve runs the LOCAL heavy models while JobWorkers sizes for offload (10) → **10 concurrent local
+  STT/diar oversubscribe the box** (the exact thing the local pool=4 prevents); (2) a **case/whitespace
+  variant `"Remote"`** that Resolve DOES offload → JobWorkers' exact-match misses it → small pool (4) →
+  **GPU under-fed below its batch optimum**. Fixed by having `JobWorkers` ask `Resolve` for both routes —
+  the SAME definition of "remote" the provider pick uses, so pool size always matches reality. (The existing
+  test encoded the bug: its `remote` route had no URL yet expected 10; corrected to a URL-bearing route and
+  added the no-URL→4 and cased-remote→10 cases.) Both fail pre-fix (10≠4, 4≠10). Another cross-reference
+  win: `JobWorkers` and `Compute.Resolve` must agree on what "offloaded" means — they didn't. `mapRepoErr` only recognizes `repo.ErrNotFound`, but local `LoadTranscript`
   returned the RAW `storage.ErrArtifactNotFound` (unlike `GetMeeting`, which maps it). So `GetTranscript` on
   a meeting that exists but isn't transcribed yet (still processing) returned **CodeInternal "internal
   error"** on every backend — and over the remote data plane it became a **500** (`statusForCode` sends the
