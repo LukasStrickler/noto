@@ -103,6 +103,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **UX: the summary preview could surface the meeting's "# title" heading instead of the summary (1 bug,
+  +1 test, 2026-06-21).** `GetSummary` falls back to the rendered markdown when the structured short-summary
+  is absent (a meeting with `summary.md` but a missing/empty `summary.json` — partial write or legacy). The
+  fallback took the first NON-BLANK line — but `renderSummaryMD` opens with `# {title}`, so the "summary"
+  shown in the detail pane was the meeting's own TITLE heading. Fixed with `firstSummaryLine`, which skips
+  `#`-prefixed headings and returns the first prose line. (Traced the whole chain first: the sibling
+  `storage.GetMeeting` extraction has the SAME flaw but is DEAD — `repo.GetMeeting` overrides `ShortSummary`
+  from the structured `summary.json` via `enrich` and never copies storage's value, so it's computed-then-
+  discarded; left untouched to keep the fix to the active path.) Test pins header-skipping across
+  title/section/list/prose/empty shapes. (This iteration also swept recording.go — the pause/marker/elapsed
+  wall-clock desync is real but macOS-capture-gated and the helper gives authoritative duration on stop;
+  markers are intentionally live-only (no `Markers` field on `StopRecordingResult`); the custom `log10`/
+  `naturalLog` dB-meter math is correct — and config.go, whose patch "can't reset a numeric to 0" limitation
+  (e.g. Modal `MinContainers` keep-warm) is pervasive to the merge pattern and needs a pointer-struct change,
+  not a local fix.)
 - **Hosted UX: non-ASCII meeting titles/filenames were stripped by proxies on upload (1 bug, +2 tests,
   2026-06-21).** The remote audio-upload path (`uploadAudio` → `/v1/imports/audio`) carries the meeting
   title + filename in `X-Noto-Title`/`X-Noto-Filename` HTTP headers, raw. A non-ASCII or control byte in a

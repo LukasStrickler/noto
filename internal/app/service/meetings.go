@@ -189,14 +189,24 @@ func (s *Service) GetSummary(ctx context.Context, id string) (notoapi.Summary, e
 		}
 	}
 	if out.ShortSummary == "" && out.Markdown != "" {
-		for _, line := range strings.Split(out.Markdown, "\n") {
-			if t := strings.TrimSpace(line); t != "" {
-				out.ShortSummary = t
-				break
-			}
-		}
+		out.ShortSummary = firstSummaryLine(out.Markdown)
 	}
 	return out, nil
+}
+
+// firstSummaryLine returns the first non-blank, non-heading line of rendered
+// summary markdown — the summary prose. renderSummaryMD opens with a "# {title}"
+// heading (and "## Section" headings follow), so taking the first non-blank line
+// would surface the meeting TITLE as the summary; skip lines that start with '#'.
+func firstSummaryLine(md string) string {
+	for _, line := range strings.Split(md, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		return t
+	}
+	return ""
 }
 
 // GetMeetingFiles returns the on-disk paths of artifacts for the meeting.
