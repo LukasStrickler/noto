@@ -161,11 +161,18 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 	}
 	if transcript == nil {
 		s.publishProgress(job, "synthesizing transcript", 0.6, "no audio or no provider key")
+		// provider.id must be non-empty or the transcript fails validation and can't
+		// be read back; the configured provider can be blank, so fall back to the
+		// default (the same default the STT routing above uses).
+		synthProvider := strings.TrimSpace(s.currentCfg().Routing.SpeechProvider)
+		if synthProvider == "" {
+			synthProvider = config.DefaultSTTProvider
+		}
 		transcript = &artifacts.Transcript{
 			SchemaVersion: "transcript.v1",
 			MeetingID:     mid.String(),
 			Provider: artifacts.TranscriptProvider{
-				ID:    s.currentCfg().Routing.SpeechProvider,
+				ID:    synthProvider,
 				JobID: job.ID,
 			},
 			Speakers: []artifacts.Speaker{

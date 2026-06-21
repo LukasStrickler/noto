@@ -106,6 +106,18 @@ func ReadManifest(layout DirectoryLayout) (*artifacts.MeetingManifest, error) {
 }
 
 func WriteTranscript(layout DirectoryLayout, t *artifacts.Transcript) error {
+	// Validate BEFORE persisting. ReadTranscript validates on the way out, so a
+	// transcript that fails validation here would be written to disk yet be
+	// permanently unreadable — silently corrupt while the job that wrote it reports
+	// success (an empty-speaker or empty-segment-text transcript hits exactly this).
+	// Refusing the write surfaces the defect at its source. Symmetry rule: if it
+	// can't be read back, it must not be written.
+	if t == nil {
+		return ErrWriteFailed(layout.TranscriptPath, fmt.Errorf("nil transcript"))
+	}
+	if verr := artifacts.ValidateTranscript(*t); verr != nil {
+		return ErrWriteFailed(layout.TranscriptPath, verr)
+	}
 	data, err := json.MarshalIndent(t, "", "  ")
 	if err != nil {
 		return ErrWriteFailed(layout.TranscriptPath, err)

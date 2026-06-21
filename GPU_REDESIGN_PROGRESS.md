@@ -103,6 +103,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **Integrity: WriteTranscript didn't validate but ReadTranscript did — saved-but-unreadable artifacts
+  (2 bugs, +1 multi-case test, 2026-06-21).** Root cause behind the empty-diarization symptom (below):
+  `ReadTranscript` runs `ValidateTranscript` on the way out, but `WriteTranscript` wrote ANY transcript.
+  So anything that fails validation — empty Speakers, empty-text segment, a segment referencing an unknown
+  speaker, a blank `provider.id` — was persisted to disk yet **permanently unreadable**, while the job that
+  wrote it reported SUCCESS (silent on-disk corruption). Fixed by validating in `WriteTranscript` before the
+  atomic write (+ a nil guard): symmetry rule — *if it can't be read back, it must not be written*. The full
+  suite still passes, proving every legitimate save path already produces a valid transcript. The one path
+  that DIDN'T: the **synthesized fallback** ("no audio / no provider key") set `provider.id` from the
+  un-defaulted `Routing.SpeechProvider`, which can be blank → its own output was unreadable; now defaults to
+  `config.DefaultSTTProvider` like the STT routing does. Test writes 5 invalid shapes + nil, asserts each is
+  rejected AND nothing readable is left behind, and that a valid transcript still round-trips; fails pre-fix
+  (all 5 accepted), passes after.
 - **Diarization: an empty diarizer result WIPED (and broke) the whole transcript (1 bug, +1 test,
   2026-06-21).** In `runTranscribe`, diarization runs concurrently with STT and merges via `merge.Attribute`.
   The join applied attribution whenever the diarizer returned no ERROR — but a diarizer that runs cleanly

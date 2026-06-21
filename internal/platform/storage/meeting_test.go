@@ -146,6 +146,61 @@ func TestWriteTranscript(t *testing.T) {
 	}
 }
 
+// TestWriteTranscriptRejectsUnreadable pins the write/read symmetry: ReadTranscript
+// validates, so WriteTranscript must refuse anything that would be unreadable —
+// otherwise the artifact is silently corrupt on disk while the job reports success.
+func TestWriteTranscriptRejectsUnreadable(t *testing.T) {
+	layout, err := LayoutFor(filepath.Join(t.TempDir(), "recordings"), uuid.New())
+	if err != nil {
+		t.Fatalf("LayoutFor: %v", err)
+	}
+	if err := EnsureDirs(layout); err != nil {
+		t.Fatalf("EnsureDirs: %v", err)
+	}
+
+	valid := func() *artifacts.Transcript {
+		return &artifacts.Transcript{
+			SchemaVersion: "transcript.v1",
+			MeetingID:     layout.MeetingID.String(),
+			Provider:      artifacts.TranscriptProvider{ID: "p"},
+			Speakers:      []artifacts.Speaker{{ID: "spk_0"}},
+			Segments:      []artifacts.Segment{{ID: "s0", SpeakerID: "spk_0", Text: "hi", StartSeconds: 0, EndSeconds: 1}},
+		}
+	}
+
+	cases := map[string]func(*artifacts.Transcript){
+		"nil":                nil, // handled specially below
+		"no speakers":        func(tr *artifacts.Transcript) { tr.Speakers = nil },
+		"empty segment text": func(tr *artifacts.Transcript) { tr.Segments[0].Text = "" },
+		"unknown speaker":    func(tr *artifacts.Transcript) { tr.Segments[0].SpeakerID = "ghost" },
+		"blank provider":     func(tr *artifacts.Transcript) { tr.Provider.ID = "" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			var tr *artifacts.Transcript
+			if mutate != nil {
+				tr = valid()
+				mutate(tr)
+			}
+			if err := WriteTranscript(layout, tr); err == nil {
+				t.Fatalf("WriteTranscript accepted an unreadable transcript (%s); it must reject", name)
+			}
+			// Nothing readable must have been left behind.
+			if _, rerr := ReadTranscript(layout); rerr == nil {
+				t.Fatalf("an unreadable transcript (%s) was persisted and read back", name)
+			}
+		})
+	}
+
+	// The valid transcript still writes and reads cleanly — the guard isn't overzealous.
+	if err := WriteTranscript(layout, valid()); err != nil {
+		t.Fatalf("WriteTranscript rejected a valid transcript: %v", err)
+	}
+	if _, err := ReadTranscript(layout); err != nil {
+		t.Fatalf("ReadTranscript failed on a valid transcript: %v", err)
+	}
+}
+
 func TestReadTranscript(t *testing.T) {
 	tmpDir := t.TempDir()
 	recordingsDir := filepath.Join(tmpDir, "recordings")
