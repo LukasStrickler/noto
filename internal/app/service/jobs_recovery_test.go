@@ -62,6 +62,63 @@ func TestRecoverInterruptedJobsResumesUnderCap(t *testing.T) {
 	}
 }
 
+// TestFinalizeJobStatus pins the rule that decides a job's terminal state — the
+// case that matters: a graceful SHUTDOWN mid-job must re-queue (not record
+// "canceled"), so a planned deploy doesn't strand the meetings in flight, while a
+// genuine user cancel (no shutdown) still finalizes as canceled.
+func TestFinalizeJobStatus(t *testing.T) {
+	errBoom := context.Canceled
+	cases := []struct {
+		name             string
+		err              error
+		shutdownCanceled bool
+		jobCanceled      bool
+		wantStatus       notoapi.JobStatus
+		wantRequeue      bool
+	}{
+		{"success", nil, false, false, notoapi.JobSucceeded, false},
+		{"success even during shutdown", nil, true, true, notoapi.JobSucceeded, false},
+		{"shutdown mid-job re-queues", errBoom, true, true, "", true},
+		{"user cancel finalizes canceled", errBoom, false, true, notoapi.JobCanceled, false},
+		{"plain failure", errBoom, false, false, notoapi.JobFailed, false},
+	}
+	for _, c := range cases {
+		gotStatus, gotRequeue := finalizeJobStatus(c.err, c.shutdownCanceled, c.jobCanceled)
+		if gotStatus != c.wantStatus || gotRequeue != c.wantRequeue {
+			t.Errorf("%s: finalizeJobStatus = (%q,%v); want (%q,%v)",
+				c.name, gotStatus, gotRequeue, c.wantStatus, c.wantRequeue)
+		}
+	}
+}
+
+// TestRequeueInterruptedJobResumes covers the single-job shutdown path used by
+// runJob: an in-flight job is returned to the queue (claimable again) with its
+// priority preserved and progress reset, so a restart finishes it.
+func TestRequeueInterruptedJobResumes(t *testing.T) {
+	s := newJobsTestSvc(t)
+	ctx := context.Background()
+
+	insertRunningJob(t, s, "j-shutdown", 1, notoapi.JobPriorityBackground)
+	s.requeueInterruptedJob("j-shutdown")
+
+	got, err := s.GetJob(ctx, "j-shutdown")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != notoapi.JobQueued {
+		t.Errorf("shutdown-interrupted job should be re-queued, got %s", got.Status)
+	}
+	if got.Priority != notoapi.JobPriorityBackground {
+		t.Errorf("priority must survive requeue so it re-enters its tier; got %d", got.Priority)
+	}
+	if got.Progress != 0 {
+		t.Errorf("progress should reset on requeue, got %v", got.Progress)
+	}
+	if _, ok := s.claimNextJob(); !ok {
+		t.Error("re-queued job should be immediately claimable")
+	}
+}
+
 // TestRecoverInterruptedJobThenClaimable ties resume to the scheduler: a resumed
 // job is immediately claimable by the worker pool, and its attempt increments on
 // re-claim (so it still counts against the cap on a subsequent crash).

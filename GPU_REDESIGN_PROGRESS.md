@@ -400,6 +400,19 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   rather than crash-looping the server on each startup. Tested: resume-under-cap (→queued, priority preserved,
   progress reset), park-at-cap (→interrupted), and resumed-then-claimable (the resumed job is immediately
   claimable and its attempt increments on re-claim). Build/vet/lint(0)/race clean.
+- **★ Graceful-restart resume: don't strand in-flight meetings on a planned deploy (2026-06-21).** Crash-resume
+  (above) only covered HARD crashes — jobs left `running` because the process died. A GRACEFUL shutdown was
+  different: `Close` cancels the worker pool's context, so the in-flight job's compute returns a ctx error and
+  `runJob` recorded it as `JobCanceled` — a TERMINAL state `recoverInterruptedJobs` never resumes. So every
+  planned restart/deploy silently stranded up to N in-flight meetings (N = worker count) as "canceled",
+  indistinguishable from a user pressing cancel. Fix keys on the TWO cancellation scopes: shutdown cancels the
+  worker pool's PARENT ctx, a user `CancelJob` trips only the per-job CHILD ctx (and also sets
+  `cancel_requested`). `runJob` now finalizes via a pure `finalizeJobStatus(err, shutdownCanceled, jobCanceled)`
+  — shutdown wins and RE-QUEUES (status→queued, priority+attempt preserved, like the single-job
+  `requeueInterruptedJob`), so a restart finishes the meeting; a genuine user cancel without shutdown still
+  finalizes `canceled`. The re-queue write happens within the worker goroutine `Close` already waits for
+  (bgWG), so it lands before the DB closes — no new shutdown race (service-pkg `-race` clean). Tested: pure
+  table for all 5 (err × scope) combos + single-job requeue→claimable with priority preserved.
 - **★ Graceful shutdown — Close now joins the worker goroutines (2026-06-20).** `Start` launched the worker
   pool + status-bar/evictor loops as FIRE-AND-FORGET goroutines tied to the caller's ctx, but `Close()`
   neither canceled nor WAITED for them — and it tore down the event hub + model pool FIRST. So a worker

@@ -131,15 +131,20 @@ func (s *Service) runJob(parentCtx context.Context, job notoapi.Job) {
 		err = fmt.Errorf("unknown job kind %q", job.Kind)
 	}
 
+	final, requeue := finalizeJobStatus(err, parentCtx.Err() != nil, ctx.Err() != nil)
+	if requeue {
+		// The server is shutting down mid-job: the worker pool's context
+		// (parentCtx) was canceled, not THIS job's. Re-queue so a restart finishes
+		// the user's meeting instead of stranding it as "canceled" — every pipeline
+		// stage is idempotent and the row keeps its priority + attempt. (A user
+		// cancel trips only the per-job child context, so parentCtx stays live and
+		// the job is correctly finalized as canceled below.)
+		s.requeueInterruptedJob(job.ID)
+		return
+	}
 	now := time.Now().UnixMilli()
-	final := notoapi.JobSucceeded
 	errStr := ""
 	if err != nil {
-		if ctx.Err() != nil {
-			final = notoapi.JobCanceled
-		} else {
-			final = notoapi.JobFailed
-		}
 		errStr = err.Error()
 	}
 	_, _ = s.jobsDB.Exec(
@@ -152,6 +157,39 @@ func (s *Service) runJob(parentCtx context.Context, job notoapi.Job) {
 	job.Error = errStr
 	job.Progress = 1.0
 	s.publishJob(job)
+}
+
+// finalizeJobStatus decides a job's terminal state from the run error and the
+// two cancellation scopes. shutdownCanceled = the worker pool's context is done
+// (a graceful server shutdown); jobCanceled = this job's own context is done (a
+// user CancelJob). Shutdown wins: an in-flight job interrupted by a restart is
+// re-queued (requeue=true) to finish next start, NOT recorded as canceled —
+// otherwise every planned deploy would silently strand the meetings in flight.
+// A user cancel (without shutdown) is a genuine terminal cancel.
+func finalizeJobStatus(err error, shutdownCanceled, jobCanceled bool) (status notoapi.JobStatus, requeue bool) {
+	if err == nil {
+		return notoapi.JobSucceeded, false
+	}
+	switch {
+	case shutdownCanceled:
+		return "", true
+	case jobCanceled:
+		return notoapi.JobCanceled, false
+	default:
+		return notoapi.JobFailed, false
+	}
+}
+
+// requeueInterruptedJob returns a job interrupted by a graceful shutdown to the
+// queue so a restart finishes it. Mirrors recoverInterruptedJobs's resume update
+// (status->queued, progress/phase/timestamps reset) for a single in-flight job;
+// the row keeps its priority and attempt so it re-enters its original tier.
+func (s *Service) requeueInterruptedJob(id string) {
+	_, _ = s.jobsDB.Exec(
+		`UPDATE jobs SET status = ?, progress = 0, phase = '', detail = ?, error = '',
+			started_at = NULL, finished_at = NULL WHERE id = ?`,
+		string(notoapi.JobQueued), "resuming after restart", id,
+	)
 }
 
 // publishProgress is what workers call to report progress mid-job.
