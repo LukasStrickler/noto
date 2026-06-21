@@ -103,12 +103,21 @@ func (s *Service) GetTranscript(ctx context.Context, id string) (notoapi.Transcr
 	if err != nil {
 		return notoapi.Transcript{}, mapRepoErr(err, id)
 	}
+	// Resolve speaker names through the identity mappings (not just the transcript's
+	// own DisplayName), the same shared join the agent handoff and search index use —
+	// so an AUTO-identified speaker reads as the person, not "spk_0", consistently
+	// across every read site. The raw anonymous Label stays available in its field.
+	nameByID := s.meetingSpeakerNames(ctx, id, t)
 	out := notoapi.Transcript{MeetingID: id}
 	for _, seg := range t.Segments {
+		name := nameByID[seg.SpeakerID]
+		if name == "" {
+			name = seg.SpeakerID
+		}
 		out.Segments = append(out.Segments, notoapi.TranscriptSegment{
 			ID:         seg.ID,
 			SpeakerID:  seg.SpeakerID,
-			Speaker:    seg.SpeakerID,
+			Speaker:    name,
 			Role:       seg.SourceRole,
 			StartSec:   seg.StartSeconds,
 			EndSec:     seg.EndSeconds,
@@ -119,24 +128,10 @@ func (s *Service) GetTranscript(ctx context.Context, id string) (notoapi.Transcr
 	for _, sp := range t.Speakers {
 		out.Speakers = append(out.Speakers, notoapi.Speaker{
 			ID:          sp.ID,
-			DisplayName: sp.DisplayName,
+			DisplayName: nameByID[sp.ID],
 			Role:        sp.Origin,
 			Label:       sp.Label,
 		})
-	}
-	// Replace segment speaker labels with display names where available.
-	if len(out.Speakers) > 0 {
-		nameIdx := make(map[string]string, len(out.Speakers))
-		for _, sp := range out.Speakers {
-			if sp.DisplayName != "" {
-				nameIdx[sp.ID] = sp.DisplayName
-			}
-		}
-		for i := range out.Segments {
-			if name, ok := nameIdx[out.Segments[i].SpeakerID]; ok {
-				out.Segments[i].Speaker = name
-			}
-		}
 	}
 	return out, nil
 }

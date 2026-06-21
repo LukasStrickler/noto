@@ -118,6 +118,42 @@ func TestIndexOneMeeting_IndexesAutoIdentifiedName(t *testing.T) {
 	}
 }
 
+// TestGetTranscript_ResolvesAutoIdentifiedName pins the transcript read site: an
+// auto-identified speaker must read as the resolved person ("Maya"), not "spk_0" —
+// the same shared resolver the agent handoff and search index use.
+func TestGetTranscript_ResolvesAutoIdentifiedName(t *testing.T) {
+	ctx := context.Background()
+	fr := testutil.NewFakeRepo()
+	mid := uuid.New()
+	if err := fr.CreateMeeting(ctx, mid, repo.CreateMeetingOpts{Title: "Standup"}); err != nil {
+		t.Fatalf("create meeting: %v", err)
+	}
+	if err := fr.SaveTranscript(ctx, mid, &artifacts.Transcript{
+		SchemaVersion: "transcript.v1",
+		MeetingID:     mid.String(),
+		Speakers:      []artifacts.Speaker{{ID: "spk_0", Label: "Speaker 1"}}, // not named in transcript
+		Segments:      []artifacts.Segment{{ID: "s0", SpeakerID: "spk_0", Text: "hello", StartSeconds: 0, EndSeconds: 1}},
+	}); err != nil {
+		t.Fatalf("save transcript: %v", err)
+	}
+	pr := &memorySpeakerProfileRepo{}
+	_ = pr.Create(ctx, speakerstore.SpeakerProfile{ID: "p-maya", DisplayName: "Maya"})
+	profileID := "p-maya"
+	mr := &memoryMeetingMappingRepo{}
+	_ = mr.Upsert(ctx, speakerstore.MeetingSpeakerMapping{
+		MeetingID: mid.String(), MeetingSpeakerID: "spk_0", ProfileID: &profileID, MatchStatus: "auto",
+	})
+
+	svc := &Service{repo: fr, meetingMappings: mr, speakerProfiles: pr}
+	tr, err := svc.GetTranscript(ctx, mid.String())
+	if err != nil {
+		t.Fatalf("GetTranscript: %v", err)
+	}
+	if len(tr.Segments) == 0 || tr.Segments[0].Speaker != "Maya" {
+		t.Errorf("auto-identified segment speaker = %q, want Maya", tr.Segments[0].Speaker)
+	}
+}
+
 // TestUpdateSpeakerName_RefreshesSearchIndex closes the staleness gap: renaming a
 // speaker must re-index the meeting so the NEW name is immediately searchable,
 // not stuck until a manual reindex.

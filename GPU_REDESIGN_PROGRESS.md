@@ -103,8 +103,17 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
-- **Identification: SEARCH didn't find auto-identified people by name either — unified the resolver (1 bug,
-  +1 test, 2026-06-21).** Same root cause as the agent-handoff fix, now in search: `indexOneMeeting` indexed
+- **Identification: GetTranscript was the LAST divergent read site — now every consumer resolves the same
+  (1 bug, +1 test, 2026-06-21).** Completing the sweep: `GetTranscript` resolved segment speaker names only
+  from the transcript's own DisplayName, so the transcript detail / CLI / direct-API showed "spk_0" for an
+  AUTO-identified speaker (the TUI was fine — it has its own mapping-based `resolveSpeaker`). Switched it to
+  the same shared `meetingSpeakerNames` join used by the agent handoff + search index. **Now all four read
+  sites — People view, agent handoff, search index, transcript view — resolve identity identically through
+  one path**, so an auto-identified person reads as themselves everywhere, not just after a manual rename.
+  Contract test pins GetTranscript returning the resolved name for an "auto" mapping; the existing
+  manual-name test (DisplayName wins) still passes. This closes the consumer-divergence thread that ran
+  across iters 30–32 (agent → search → transcript): the bug class is now structurally eliminated, not just
+  patched per-site. Same root cause as the agent-handoff fix, now in search: `indexOneMeeting` indexed
   speaker names via `speakerLabelsByID` (transcript DisplayName→Label→id), so an AUTO-identified speaker —
   whose name lives only in the mapping→profile — was indexed as "Speaker 2", and a query for their name
   missed their meetings. Rather than fix it twice, **unified the name resolution**: the agent handoff and the
