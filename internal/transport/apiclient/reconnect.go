@@ -192,10 +192,17 @@ func (c *httpClient) streamEventsWithReconnect(ctx context.Context, path string,
 				select {
 				case <-ctx.Done():
 					heartbeat.Stop()
+					resp.Body.Close()
 					return
 				case ev, ok := <-events:
 					heartbeat.Stop()
 					if !ok {
+						// The SSE stream ended (server close / EOF) while ctx is
+						// still alive, so the transport won't auto-clean the request:
+						// close the body before reconnecting/returning or the
+						// connection leaks. Only the >=400 and heartbeat paths closed
+						// it before.
+						resp.Body.Close()
 						reconnectMu.Lock()
 						shouldReconnect := forceReconnect
 						reconnectMu.Unlock()

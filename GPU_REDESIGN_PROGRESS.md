@@ -236,6 +236,17 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   Tests: a multi-word query returns only docs containing ALL words (AND semantics), and uppercase-keyword
   queries don't error. Full suite + vet + lint(0) clean.
 
+- **★ SSE reconnect leaked a connection on every natural stream-end (2026-06-21).** The remote-mode event
+  stream (`apiclient.streamEventsWithReconnect`) closed `resp.Body` ONLY on the `>=400` and heartbeat-timeout
+  paths. When the SERVER ended the stream (clean EOF) while the ctx was still alive — the common case — the
+  client returned/reconnected WITHOUT closing the body, and the `sseParser` only READS the body (never closes
+  it). The transport can't auto-clean a request whose ctx is still live, so each natural stream-end leaked an
+  HTTP connection (it never returns to the pool). Over a long remote TUI session with periodic stream-ends this
+  accumulates. Fix: close `resp.Body` at the top of the `!ok` (stream-ended) branch and on the ctx-cancel path.
+  8 existing reconnect tests verified BEHAVIOR (events, backoff) but never resource cleanup — added a
+  close-counting transport test proving the body is released on a server-driven stream-end (fails pre-fix:
+  opened=1 closed=0). Subtlety learned + recorded: a ctx-cancel test can't catch this because the transport
+  closes the body on ctx cancellation — only a SERVER-driven end exposes the leak.
 - **★ IPC read deadline: 30s was dead code; a >100ms helper response failed the call (2026-06-21).** The capture
   IPC client (`appsocket.call`, macOS Swift helper over a unix socket) set a 30s read deadline, then OVERWROTE
   it with a fresh 100ms deadline on EVERY read-loop iteration — so the 30s was dead, and any helper response

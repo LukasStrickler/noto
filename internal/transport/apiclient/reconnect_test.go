@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -187,6 +188,90 @@ func TestStreamEventsWithReconnect_MultipleDisconnects(t *testing.T) {
 
 	if len(received) == 0 {
 		t.Errorf("expected events")
+	}
+}
+
+// closeCountingTransport wraps each response body in a one-shot close counter so
+// a test can assert the reconnect loop releases connections instead of leaking
+// them.
+type closeCountingTransport struct {
+	inner          http.RoundTripper
+	mu             sync.Mutex
+	opened, closed int
+}
+
+func (t *closeCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.inner.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	t.mu.Lock()
+	t.opened++
+	t.mu.Unlock()
+	resp.Body = &countingBody{ReadCloser: resp.Body, t: t}
+	return resp, err
+}
+
+type countingBody struct {
+	io.ReadCloser
+	once sync.Once
+	t    *closeCountingTransport
+}
+
+func (b *countingBody) Close() error {
+	b.once.Do(func() {
+		b.t.mu.Lock()
+		b.t.closed++
+		b.t.mu.Unlock()
+	})
+	return b.ReadCloser.Close()
+}
+
+// TestStreamEventsWithReconnect_ClosesBodyOnStreamEnd is the regression for the
+// connection leak: when the SERVER ends the stream (clean EOF) while ctx is still
+// alive, the transport won't auto-clean the request, so the body must be closed
+// explicitly. Before the fix only the >=400 and heartbeat paths closed it, so this
+// natural stream-end leaked the connection. (ctx-cancel is mitigated by the
+// transport, so it can't catch this — a server-driven end is what exposes it.)
+func TestStreamEventsWithReconnect_ClosesBodyOnStreamEnd(t *testing.T) {
+	handler := &mockSSEHandler{initialEvents: 2, closeAfter: 2} // 2 events then server closes
+	tc := newTestClient(handler)
+	defer tc.close()
+	tc.heartbeatTimeout = 30 * time.Second
+
+	ct := &closeCountingTransport{inner: tc.stream.Transport}
+	tc.stream.Transport = ct
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := tc.StreamEventsWithReconnect(ctx, "/v1/jobs/events")
+	if err != nil {
+		t.Fatalf("StreamEventsWithReconnect() error = %v", err)
+	}
+
+	// The server ends the stream after 2 events; the client drains then returns
+	// (clean end, no parse error, no reconnect). Draining to channel-close means
+	// the goroutine has exited via the !ok path that must close the body.
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				goto done
+			}
+		case <-timeout:
+			t.Fatal("stream did not end")
+		}
+	}
+done:
+	ct.mu.Lock()
+	opened, closed := ct.opened, ct.closed
+	ct.mu.Unlock()
+	if opened < 1 {
+		t.Fatalf("expected at least one stream connection, got %d", opened)
+	}
+	if closed != opened {
+		t.Errorf("leaked response body on stream end: opened=%d closed=%d", opened, closed)
 	}
 }
 
