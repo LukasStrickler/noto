@@ -41,6 +41,17 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **API contract: read-only meeting sub-resources served any HTTP method as a GET (1 consistency-seam bug,
+  +1 test, 2026-06-21).** In `handleMeetingByID` (`transport/server/routes.go`) the ACTION sub-resources
+  (`verify`, `speaker-mappings`, `speakers`) and the base meeting all validate `r.Method` and reject the
+  wrong verb — but the four READ-only sub-resources (`transcript`, `summary`, `files`, `agent`) checked
+  nothing. Since `/v1/meetings/` is a prefix route (ServeMux dispatches ALL methods to one handler), a
+  `POST`/`DELETE`/`PUT` to e.g. `/transcript` fell through the switch and was served as a GET — returning
+  the resource on a verb it should reject (a client `DELETE /summary` got 200 + the summary, never deleting
+  anything). Fixed with a `requireGET` guard on the four read cases, matching the existing inline pattern.
+  Test (over a real `noto serve` data plane) creates a meeting + transcript, confirms GET works, and asserts
+  a POST to each of the four returns method-not-allowed; pre-fix ALL FOUR returned 200 with the full body
+  (transcript/summary/files/agent), revert-checked. On the shippable "server" regime + the adherence theme.
 - **Adherence: stale AssemblyAI references across code comments + a USER-FACING TUI string (cleanup,
   2026-06-21).** Completes last fire's AGENTS.md fix (which flagged "lingering code mentions as follow-up").
   The worst was user-visible: the speakers-tab empty state told users "Speaker labels appear after

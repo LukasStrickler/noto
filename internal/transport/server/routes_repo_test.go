@@ -3,9 +3,11 @@ package server_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,5 +130,78 @@ func TestRemoteArtifactRepositoryRoundTrip(t *testing.T) {
 	}
 	if n, _ := rr.CountMeetings(ctx); n != 0 {
 		t.Errorf("after delete CountMeetings = %d, want 0", n)
+	}
+}
+
+// TestReadOnlyMeetingSubresourcesRejectNonGET pins the HTTP-method contract: the
+// read-only meeting sub-resources (transcript/summary/files/agent) are GET-only,
+// like the base meeting and the action sub-resources (verify/speakers) already
+// enforce. Before the guard, a POST to /transcript fell through the method switch
+// and was served as a GET — returning the resource on a verb it should reject.
+func TestReadOnlyMeetingSubresourcesRejectNonGET(t *testing.T) {
+	t.Setenv("NOTO_CONFIG_DIR", t.TempDir())
+	t.Setenv("NOTO_ARTIFACT_ROOT", t.TempDir())
+	sock := filepath.Join(t.TempDir(), "noto.sock")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	d, err := host.Start(ctx, host.Options{Address: sock})
+	if err != nil {
+		t.Fatalf("start data plane: %v", err)
+	}
+	defer d.Close()
+
+	hc := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var dl net.Dialer
+				return dl.DialContext(ctx, "unix", sock)
+			},
+		},
+	}
+
+	// A meeting with a transcript, so GET /transcript returns 200 — making a
+	// pre-fix POST visibly serve the resource instead of rejecting the method.
+	rr := repo.NewRemote("http://unix", "", t.TempDir())
+	rr.HTTP = hc
+	id := uuid.New()
+	if err := rr.CreateMeeting(ctx, id, repo.CreateMeetingOpts{Title: "Methods", Reason: "recorded"}); err != nil {
+		t.Fatalf("CreateMeeting: %v", err)
+	}
+	tr := &artifacts.Transcript{
+		SchemaVersion: "transcript.v1",
+		MeetingID:     id.String(),
+		Provider:      artifacts.TranscriptProvider{ID: "parakeet-local"},
+		Speakers:      []artifacts.Speaker{{ID: "spk_0", Label: "me", Origin: "local_speaker", ProviderLabel: "A", DisplayName: "You"}},
+		Segments:      []artifacts.Segment{{ID: "seg_0", SpeakerID: "spk_0", SourceRole: "local_speaker", StartSeconds: 0, EndSeconds: 3, Text: "hello"}},
+	}
+	if err := rr.SaveTranscript(ctx, id, tr); err != nil {
+		t.Fatalf("SaveTranscript: %v", err)
+	}
+
+	base := "http://unix/v1/meetings/" + id.String() + "/"
+
+	// GET still works.
+	getResp, err := hc.Get(base + "transcript")
+	if err != nil {
+		t.Fatalf("GET transcript: %v", err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET transcript status = %d; want 200", getResp.StatusCode)
+	}
+
+	// A non-GET on each read-only sub-resource is rejected as method-not-allowed,
+	// never served as a GET.
+	for _, sub := range []string{"transcript", "summary", "files", "agent"} {
+		resp, err := hc.Post(base+sub, "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST %s: %v", sub, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK || !strings.Contains(string(body), "method not allowed") {
+			t.Errorf("POST %s: status=%d body=%s; want a method-not-allowed rejection", sub, resp.StatusCode, body)
+		}
 	}
 }

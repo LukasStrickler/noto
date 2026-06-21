@@ -172,8 +172,23 @@ func (s *Server) handleMeetingByID(w http.ResponseWriter, r *http.Request) {
 		sub = sub[:i]
 	}
 
+	// The read-only sub-resources are GET-only, same as the base meeting and the
+	// action sub-resources (verify/speakers/speaker-mappings) validate their verbs.
+	// Without this a POST/DELETE to e.g. /transcript fell through and was served as
+	// a GET — returning the resource instead of "method not allowed".
+	requireGET := func() bool {
+		if r.Method != http.MethodGet {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+			return false
+		}
+		return true
+	}
+
 	switch sub {
 	case "transcript":
+		if !requireGET() {
+			return
+		}
 		t, err := s.svc.GetTranscript(r.Context(), id)
 		if err != nil {
 			writeError(w, err)
@@ -181,6 +196,9 @@ func (s *Server) handleMeetingByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, t)
 	case "summary":
+		if !requireGET() {
+			return
+		}
 		sum, err := s.svc.GetSummary(r.Context(), id)
 		if err != nil {
 			writeError(w, err)
@@ -188,6 +206,9 @@ func (s *Server) handleMeetingByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, sum)
 	case "files":
+		if !requireGET() {
+			return
+		}
 		f, err := s.svc.GetMeetingFiles(r.Context(), id)
 		if err != nil {
 			writeError(w, err)
@@ -195,6 +216,9 @@ func (s *Server) handleMeetingByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, f)
 	case "agent":
+		if !requireGET() {
+			return
+		}
 		a, err := s.svc.GetAgentHandoff(r.Context(), id)
 		if err != nil {
 			writeError(w, err)
