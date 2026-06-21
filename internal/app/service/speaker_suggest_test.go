@@ -134,3 +134,54 @@ func mustMappings(t *testing.T, mr *memoryMeetingMappingRepo, meetingID string) 
 }
 
 func strPtrL(s string) *string { return &s }
+
+// countingMappingRepo wraps the in-memory repo and counts ListByProfile calls
+// per profile, so a test can assert the context priors don't re-query the same
+// profile for every unresolved speaker.
+type countingMappingRepo struct {
+	*memoryMeetingMappingRepo
+	byProfile map[string]int
+}
+
+func (r *countingMappingRepo) ListByProfile(ctx context.Context, profileID string) ([]speakerstore.MeetingSpeakerMapping, error) {
+	if r.byProfile == nil {
+		r.byProfile = map[string]int{}
+	}
+	r.byProfile[profileID]++
+	return r.memoryMeetingMappingRepo.ListByProfile(ctx, profileID)
+}
+
+// TestEnrichMappings_MemoizesProfileLookups pins the efficiency contract: the
+// co-attendance/frequency priors re-derive from a profile's mapping list for
+// every unresolved speaker, so without memoization a meeting with U unresolved
+// speakers would query each candidate profile O(U) times (each row dragging an
+// embedding BLOB). enrichMappings must fetch each profile at most once.
+func TestEnrichMappings_MemoizesProfileLookups(t *testing.T) {
+	pr := &memorySpeakerProfileRepo{}
+	inner := &memoryMeetingMappingRepo{}
+	mr := &countingMappingRepo{memoryMeetingMappingRepo: inner}
+	svc := &Service{speakerProfiles: pr, meetingMappings: mr}
+	ctx := context.Background()
+
+	// Three candidate profiles with voiceprints; all are plausible suggestions.
+	seedProfile(t, pr, "p1", "One", unit192(0))
+	seedProfile(t, pr, "p2", "Two", unit192(0))
+	seedProfile(t, pr, "p3", "Three", unit192(0))
+
+	now := time.Now()
+	// THREE unresolved speakers in this meeting, each re-ranks the same candidates.
+	for _, sp := range []string{"X", "Y", "Z"} {
+		_ = inner.Upsert(ctx, speakerstore.MeetingSpeakerMapping{
+			MeetingID: "m", MeetingSpeakerID: sp, ProfileID: nil, MatchStatus: "new",
+			EmbeddingVector: unit192(0), EmbeddingDim: 192, CreatedAt: now, UpdatedAt: now,
+		})
+	}
+
+	_ = svc.enrichMappings("m", mustMappings(t, inner, "m"))
+
+	for pid, n := range mr.byProfile {
+		if n > 1 {
+			t.Errorf("profile %s queried %d times; memoization should cap it at 1", pid, n)
+		}
+	}
+}

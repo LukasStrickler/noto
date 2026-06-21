@@ -42,6 +42,24 @@ func (s *Service) enrichMappings(meetingID string, mappings []speakerstore.Meeti
 		}
 	}
 
+	// The co-attendance and frequency priors both re-derive from a profile's
+	// full mapping list, and that derivation repeats for every unresolved speaker
+	// in this meeting — while each list row drags an embedding BLOB the priors
+	// don't use. Memoize ListByProfile so each profile is fetched at most once per
+	// enrichment (read-only within the call, so behavior is identical).
+	mapsByProfile := map[string][]speakerstore.MeetingSpeakerMapping{}
+	profileMaps := func(pid string) []speakerstore.MeetingSpeakerMapping {
+		if m, ok := mapsByProfile[pid]; ok {
+			return m
+		}
+		m, err := s.meetingMappings.ListByProfile(context.Background(), pid)
+		if err != nil {
+			m = nil
+		}
+		mapsByProfile[pid] = m
+		return m
+	}
+
 	// Profiles already confidently identified in THIS meeting anchor the
 	// co-attendance prior.
 	identified := map[string]bool{}
@@ -50,7 +68,7 @@ func (s *Service) enrichMappings(meetingID string, mappings []speakerstore.Meeti
 			identified[*m.ProfileID] = true
 		}
 	}
-	anchorMeetings := s.meetingsForProfiles(identified, meetingID)
+	anchorMeetings := meetingsForProfiles(profileMaps, identified, meetingID)
 
 	out := make([]notoapi.MeetingSpeakerMapping, 0, len(mappings))
 	for _, m := range mappings {
@@ -59,7 +77,7 @@ func (s *Service) enrichMappings(meetingID string, mappings []speakerstore.Meeti
 			api.ProfileName = nameByID[*m.ProfileID]
 		}
 		if isUnresolved(m.MatchStatus) && len(m.EmbeddingVector) > 0 && len(candidates) > 0 {
-			api.Candidates = s.rankSuggestions(m.EmbeddingVector, candidates, anchorMeetings)
+			api.Candidates = rankSuggestions(profileMaps, m.EmbeddingVector, candidates, anchorMeetings)
 		}
 		out = append(out, api)
 	}
@@ -74,9 +92,14 @@ func isUnresolved(status string) bool {
 	return false
 }
 
+// profileMapsFunc returns a profile's mappings across all meetings, memoized by
+// the caller so the context priors don't re-query (and re-deserialize embeddings
+// for) the same profile once per unresolved speaker.
+type profileMapsFunc func(profileID string) []speakerstore.MeetingSpeakerMapping
+
 // rankSuggestions ranks candidates by voice similarity, then nudges the order
 // with the meeting-context prior, returning the top-N as API candidates.
-func (s *Service) rankSuggestions(query []float64, candidates []speakers.Candidate, anchorMeetings map[string]bool) []notoapi.SpeakerCandidate {
+func rankSuggestions(profileMaps profileMapsFunc, query []float64, candidates []speakers.Candidate, anchorMeetings map[string]bool) []notoapi.SpeakerCandidate {
 	ranked, err := speakers.RankCandidates(query, candidates, suggestPoolSize)
 	if err != nil || len(ranked) == 0 {
 		return nil
@@ -93,16 +116,18 @@ func (s *Service) rankSuggestions(query []float64, candidates []speakers.Candida
 		if d.Score < suggestMinScore {
 			continue
 		}
+		// One memoized fetch backs both priors for this candidate.
+		profMaps := profileMaps(d.ProfileID)
 		boost, reason := 0.0, ""
 		if len(anchorMeetings) > 0 {
-			co := s.coAttendance(d.ProfileID, anchorMeetings)
+			co := coAttendance(profMaps, anchorMeetings)
 			if co > 0 {
 				b := coAttendWeight * minf(1, float64(co)/coAttendSaturate)
 				boost += b
 				reason = "frequent co-attendee"
 			}
 		}
-		if cnt := s.profileMeetingCount(d.ProfileID); cnt > 1 {
+		if cnt := len(profMaps); cnt > 1 {
 			boost += frequencyWeight * minf(1, float64(cnt)/frequencySatur)
 		}
 		pool = append(pool, scored{dec: d, final: d.Score + boost, reason: reason})
@@ -128,14 +153,10 @@ func (s *Service) rankSuggestions(query []float64, candidates []speakers.Candida
 
 // meetingsForProfiles returns the set of meeting IDs (excluding `exclude`) in
 // which any of the given profiles appears.
-func (s *Service) meetingsForProfiles(profileIDs map[string]bool, exclude string) map[string]bool {
+func meetingsForProfiles(profileMaps profileMapsFunc, profileIDs map[string]bool, exclude string) map[string]bool {
 	out := map[string]bool{}
 	for pid := range profileIDs {
-		maps, err := s.meetingMappings.ListByProfile(context.Background(), pid)
-		if err != nil {
-			continue
-		}
-		for _, m := range maps {
+		for _, m := range profileMaps(pid) {
 			if m.MeetingID != exclude {
 				out[m.MeetingID] = true
 			}
@@ -144,29 +165,17 @@ func (s *Service) meetingsForProfiles(profileIDs map[string]bool, exclude string
 	return out
 }
 
-// coAttendance counts how many of the anchor meetings the candidate also
-// appeared in — high when this person habitually shows up with the people
+// coAttendance counts how many of the anchor meetings this candidate also
+// appeared in — high when the person habitually shows up with the people
 // already identified here.
-func (s *Service) coAttendance(profileID string, anchorMeetings map[string]bool) int {
-	maps, err := s.meetingMappings.ListByProfile(context.Background(), profileID)
-	if err != nil {
-		return 0
-	}
+func coAttendance(profMaps []speakerstore.MeetingSpeakerMapping, anchorMeetings map[string]bool) int {
 	n := 0
-	for _, m := range maps {
+	for _, m := range profMaps {
 		if anchorMeetings[m.MeetingID] {
 			n++
 		}
 	}
 	return n
-}
-
-func (s *Service) profileMeetingCount(profileID string) int {
-	maps, err := s.meetingMappings.ListByProfile(context.Background(), profileID)
-	if err != nil {
-		return 0
-	}
-	return len(maps)
 }
 
 func minf(a, b float64) float64 {
