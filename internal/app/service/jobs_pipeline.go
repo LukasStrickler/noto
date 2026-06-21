@@ -565,9 +565,23 @@ func (s *Service) matchSpeakers(ctx context.Context, meetingID string, tr *artif
 	if err != nil {
 		return err
 	}
+	// All speaker embeddings in a meeting come from the same embedder, so they
+	// share one dimension; only profiles embedded at that SAME dimension are
+	// comparable. A profile from a different/older embedder model (different dim) is
+	// skipped here rather than fed to the matcher — which fails the WHOLE step on
+	// the first dimension mismatch (its strict contract), so a single stale-dim
+	// profile would otherwise poison speaker matching for every meeting the moment
+	// the embedder model ever changes.
+	queryDim := 0
+	for _, emb := range embeddings {
+		if len(emb) > 0 {
+			queryDim = len(emb)
+			break
+		}
+	}
 	var candidates []speakers.Candidate
 	for _, p := range existing {
-		if len(p.EmbeddingVector) > 0 {
+		if queryDim > 0 && len(p.EmbeddingVector) == queryDim {
 			candidates = append(candidates, speakers.Candidate{
 				ProfileID: p.ID,
 				Name:      p.DisplayName,

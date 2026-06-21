@@ -136,3 +136,51 @@ func TestMatchSpeakers_AutoMatchFoldsRunningMean(t *testing.T) {
 		t.Fatalf("expected one auto mapping, got %+v", ms)
 	}
 }
+
+// TestMatchSpeakers_SkipsStaleDimensionProfile is the upgrade-safety contract: a
+// profile embedded by a different/older model (a different vector dimension) must
+// be SKIPPED, not fed to the matcher — whose strict contract errors on the first
+// dimension mismatch, which would otherwise fail the whole speaker-matching step
+// (and the embed job) for every meeting once the embedder model changes. The
+// same-dimension profile must still auto-match.
+func TestMatchSpeakers_SkipsStaleDimensionProfile(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	v := make([]float64, 192)
+	for i := range v {
+		v[i] = 0.5
+	}
+	stale := make([]float64, 256) // a profile from a different embedder model
+	for i := range stale {
+		stale[i] = 0.1
+	}
+
+	pr := &memorySpeakerProfileRepo{}
+	_ = pr.Create(ctx, speakerstore.SpeakerProfile{
+		ID: "stale", DisplayName: "Old", EmbeddingVector: stale, EmbeddingDim: 256, EmbeddingCount: 3,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	_ = pr.Create(ctx, speakerstore.SpeakerProfile{
+		ID: "match", DisplayName: "Alice", EmbeddingVector: v, EmbeddingDim: 192, EmbeddingCount: 4,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	mr := &memoryMeetingMappingRepo{}
+	svc := &Service{speakerProfiles: pr, meetingMappings: mr}
+
+	tr := &artifacts.Transcript{
+		MeetingID: "m1",
+		Speakers:  []artifacts.Speaker{{ID: "spk_0", ProviderLabel: "A", DisplayName: "Alice"}},
+		Segments:  []artifacts.Segment{{ID: "s0", SpeakerID: "spk_0", StartSeconds: 0, EndSeconds: 60}},
+	}
+	embeddings := map[string][]float64{"A": v} // 192-dim, matches "match", not "stale"
+
+	// Must NOT error on the 256-dim stale profile.
+	if err := svc.matchSpeakers(ctx, "m1", tr, embeddings); err != nil {
+		t.Fatalf("matchSpeakers must skip a stale-dim profile, not fail: %v", err)
+	}
+	ms, _ := mr.ListByMeeting(ctx, "m1")
+	if len(ms) != 1 || ms[0].MatchStatus != "auto" || ms[0].ProfileID == nil || *ms[0].ProfileID != "match" {
+		t.Fatalf("expected an auto match to the 192-dim profile, got %+v", ms)
+	}
+}

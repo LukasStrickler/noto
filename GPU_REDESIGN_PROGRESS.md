@@ -175,6 +175,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   Still skips the already-counted cases (auto folded by the auto path, "new" seeded at creation, "manual"
   folded once) so no double-count. 9-case table test pins every transition; build/vet/lint(0)/test clean.
 
+- **★ Upgrade-safety: a stale-dimension profile no longer poisons ALL speaker matching (2026-06-21).** Reviewing
+  the identity ACCURACY path (`matchSpeakers` → `MatchConfident`), found `matchSpeakers` built its candidate list
+  from EVERY profile regardless of embedding dimension, while `MatchWithConfig` (the live matcher) errors on the
+  FIRST candidate whose centroid dim ≠ the query's (a documented strict contract — `TestMatchDimensionMismatch`
+  pins it, and `Match`'s siblings `MatchCandidates`/`RankCandidates` SKIP instead, so the matcher and its
+  callers already disagree on policy). Net effect: the moment the embedder model ever changes (or any mixed-dim
+  profile exists), a single stale-dim profile makes `MatchConfident` return `DimError` → `matchSpeakers` returns
+  it → the whole embed step (and identity for EVERY meeting) fails. Fix lives at the CALLER, preserving the
+  matcher's strict precondition: `matchSpeakers` now derives the query dimension from the meeting's embeddings
+  (all share one, same embedder) and includes only profiles at that SAME dimension — a different-model profile is
+  skipped, not fed to the matcher. Same-dim (incl. legacy ECAPA-192) profiles still match exactly as before; a
+  future embedder swap degrades gracefully (old profiles ignored until re-enrolled) instead of hard-failing.
+  Tested: a 256-dim stale profile alongside a 192-dim match → no error, auto-matches the 192-dim one (the test
+  errors without the fix, since List returns the stale profile first). build/vet/lint(0)/race clean.
+
 ## Dead-code sweep — classified, don't re-investigate (2026-06-20)
 
 Ran `golang.org/x/tools/cmd/deadcode` over production reachability, cross-checked vs tests +
