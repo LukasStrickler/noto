@@ -41,6 +41,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **UX/normalize: the canonical speaker label disagreed with itself (1 bug, +doc, +2 assertions,
+  2026-06-21).** `SpeakerLabelNormalizer` (one of the two ACTIVE production normalizers) canonicalizes an
+  unidentified speaker's `Label` — the user-facing fallback name shown wherever no profile/DisplayName
+  resolves (`resolveSpeakerDisplayNames`, agent handoff, search). Its regex path emitted the provider's
+  number VERBATIM (`SPEAKER_01` → `speaker_01`, leading zero kept) while its own spk_ fallback emitted the
+  clean form (`spk_0` → `speaker_0`) — so the two paths produced DIFFERENT shapes, and the regex path also
+  contradicted its own doc comment (`"SPEAKER_01" -> "speaker_1"`). Fixed `canonicalLabel` to re-emit the
+  captured number without zero-padding (`stripLeadingZeros`, `strings`-only, no new imports), so both paths
+  yield one uniform `speaker_<n>`; corrected the doc examples to match (`Guest 1` → `speaker_1`, not the
+  fabricated `speaker_2`); strengthened the loose test (it only checked "changed") to pin the exact forms.
+  Fails pre-fix (`speaker_01`≠`speaker_1`), revert-checked. (Audited clean this loop, no fix needed: the
+  `DiarizationNormalizer` running confidence-weighted merge is correct across multi-segment runs; diarizer
+  turn normalization `mergeAdjacent`/`SegmentsToTurns`; the VAD config→env bridge keys
+  (`VADEnvKeys`/`Env` in sync); both meeting-delete paths clean up speaker mappings; and the
+  resolved/unresolved definitions agree across `CountUnresolved`/`isUnresolved`/`profileToAPI`.)
 - **Identity: a human-assigned voiceprint recorded no embedding-space tag (1 bug, +1 assertion,
   2026-06-21).** `foldEmbeddingIntoProfile`'s first-voiceprint branch (a name-only person created without
   audio, later assigned to a meeting speaker via `PatchMeetingSpeakerMappings`→`shouldFoldOnPatch`) set the

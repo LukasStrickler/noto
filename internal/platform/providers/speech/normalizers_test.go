@@ -699,8 +699,14 @@ func TestSpeakerLabelNormalizer_MapsSPEAKERLabels(t *testing.T) {
 		t.Fatalf("Normalize returned error: %v", err)
 	}
 
-	if result.Speakers[0].Label == "SPEAKER_01" {
-		t.Errorf("expected SPEAKER_01 to be normalized, got '%s'", result.Speakers[0].Label)
+	// The canonical label preserves the provider's speaker NUMBER but strips the
+	// scheme and zero-padding, so "SPEAKER_01" and "Guest 1" both land in the same
+	// "speaker_<n>" shape as the spk_ fallback — no leading zero ("speaker_01").
+	if got := result.Speakers[0].Label; got != "speaker_1" {
+		t.Errorf("SPEAKER_01 should canonicalize to speaker_1 (no leading zero), got %q", got)
+	}
+	if got := result.Speakers[1].Label; got != "speaker_1" {
+		t.Errorf("Guest 1 should canonicalize to speaker_1, got %q", got)
 	}
 }
 

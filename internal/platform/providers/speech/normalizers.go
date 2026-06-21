@@ -360,7 +360,11 @@ func (p *PunctuationNormalizer) Normalize(transcript *artifacts.Transcript) (*ar
 }
 
 // SpeakerLabelNormalizer maps provider-specific labels to canonical speaker labels.
-// For example: "SPEAKER_01" -> "speaker_1", "Guest 1" -> "speaker_2"
+// The provider's speaker NUMBER is preserved, only the scheme and zero-padding are
+// normalized: "SPEAKER_01" -> "speaker_1", "Guest 1" -> "speaker_1", "sp 02" ->
+// "speaker_2". Stripping the zero-padding keeps the regex path's output in the SAME
+// shape as the spk_ fallback below ("spk_0" -> "speaker_0"), so an unidentified
+// speaker reads uniformly wherever the Label is shown.
 type SpeakerLabelNormalizer struct {
 	// ExplicitMappings allows overriding default mappings.
 	ExplicitMappings map[string]string
@@ -421,14 +425,27 @@ func (s *SpeakerLabelNormalizer) canonicalLabel(providerLabel string) string {
 		return explicit
 	}
 
-	// Check default patterns
+	// Check default patterns. Re-emit the captured speaker number WITHOUT leading
+	// zeros so "SPEAKER_01" and the spk_ fallback both yield "speaker_1" — one
+	// uniform canonical shape regardless of how the provider zero-padded it.
 	for _, entry := range defaultSpeakerPatterns {
-		if entry.pattern.MatchString(providerLabel) {
-			return entry.pattern.ReplaceAllString(providerLabel, entry.label)
+		if m := entry.pattern.FindStringSubmatch(providerLabel); m != nil {
+			return "speaker_" + stripLeadingZeros(m[1])
 		}
 	}
 
 	return ""
+}
+
+// stripLeadingZeros normalizes a speaker index for the canonical label ("01" ->
+// "1"), keeping a lone "0" as "0". Used so the label's number has one shape no
+// matter how the provider padded it.
+func stripLeadingZeros(num string) string {
+	trimmed := strings.TrimLeft(num, "0")
+	if trimmed == "" {
+		return "0"
+	}
+	return trimmed
 }
 
 // TranscriptNormalizers is a chain of normalizers that applies each in sequence.
