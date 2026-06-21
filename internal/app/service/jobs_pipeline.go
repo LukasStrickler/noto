@@ -186,6 +186,15 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 		if transcript != nil && len(transcript.Words) > 0 {
 			if res.err != nil {
 				s.publishProgress(job, "diarization skipped", 0.75, res.err.Error())
+			} else if len(res.turns) == 0 {
+				// The diarizer ran cleanly but found NO speaker turns (short/quiet
+				// audio, or a diarizer hiccup). Attributing against zero turns would
+				// strip every word's speaker and empty the Speakers list — destroying
+				// whatever attribution the transcript already carries (a cloud STT's own
+				// speaker labels, or the local STT's segmentation) and leaving nothing
+				// for embedding/identification to work on. "No opinion" must not
+				// overwrite a real one, so keep the transcript as-is, like the error case.
+				s.publishProgress(job, "diarization found no speakers", 0.75, "keeping existing attribution")
 			} else if attributed := merge.Attribute(transcript, res.turns); attributed != nil {
 				attributed.MeetingID = mid.String()
 				transcript = attributed

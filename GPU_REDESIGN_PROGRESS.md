@@ -103,6 +103,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **Diarization: an empty diarizer result WIPED (and broke) the whole transcript (1 bug, +1 test,
+  2026-06-21).** In `runTranscribe`, diarization runs concurrently with STT and merges via `merge.Attribute`.
+  The join applied attribution whenever the diarizer returned no ERROR — but a diarizer that runs cleanly
+  and returns ZERO turns (short/quiet audio, or a hiccup) is reachable. `Attribute(tr, nil)` assigns `""`
+  to every word and returns an EMPTY Speakers list (its documented contract, pinned by `TestAttributeNoTurns`
+  and used by the benchmark) — so the caller replaced the good transcript with one stripped of all speaker
+  attribution, leaving nothing for embedding/identification to match. Worse: the resulting empty-speaker
+  transcript **fails to read back** (`LoadTranscript: failed to read artifact`) — empty diarization didn't
+  just degrade the meeting, it LOST the transcript. Fixed at the service caller (not `merge`, whose
+  no-turns contract the benchmark relies on): when `len(res.turns) == 0`, skip attribution and keep the
+  transcript as-is, mirroring the existing error-skip branch — "no opinion" must not overwrite a real one.
+  The happy path (non-empty turns) is untouched. Test drives `runTranscribe` end-to-end with a clean
+  zero-turn diarizer; fails pre-fix (transcript unreadable), passes after.
 - **Identification: the primary matcher assumed pre-normalized centroids it never enforced (1 bug, +1 test,
   2026-06-21).** `MatchWithConfig` (the live `MatchConfident` path) and `MatchCandidates` (the UI "who is
   this?" ranker) scored `Dot(queryNorm, cand.Centroid)` — normalizing the QUERY but NOT the candidate
