@@ -131,11 +131,14 @@ func (s *Service) runTranscribe(ctx context.Context, job *notoapi.Job) error {
 					transcript = t
 				}
 			}
-			// Clean the raw provider output (merge diarization gaps, fix
-			// overlapping timestamps, canonicalize speaker labels, …) before
-			// anything downstream consumes it. MeetingID is set first so the
-			// normalized result can be validated. If normalization produces
-			// something the storage layer can't read back, keep the raw
+			// Clean the raw provider output before anything downstream consumes it.
+			// The active chain (NewTranscriptNormalizers) merges adjacent same-speaker
+			// segments across small gaps and canonicalizes speaker labels/origins;
+			// the timestamp-overlap and format/punctuation normalizers exist but are
+			// deliberately NOT wired (they'd reshape text/insert gap markers — a
+			// product call), so don't assume overlap repair happens here. MeetingID is
+			// set first so the normalized result can be validated. If normalization
+			// produces something the storage layer can't read back, keep the raw
 			// transcript and surface a note rather than failing the job.
 			if transcript != nil {
 				transcript.MeetingID = mid.String()

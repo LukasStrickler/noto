@@ -103,6 +103,28 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **Accuracy-metric CORE verified correct — cpWER/WER/DER/Hungarian (audit, 0 bugs, 2026-06-21).** Deep
+  read of `benchmark/metrics/` (the heart of the "accurate benchmark"): **CpWER** builds a square cost
+  matrix (real/real = edit distance, unmatched ref = all-deletions, unmatched hyp = all-insertions,
+  dummy/dummy = 0) and runs the optimal Hungarian assignment, then recomputes the Sub/Del/Ins breakdown via
+  `WER` — and `editDistance` uses the IDENTICAL Levenshtein recurrence as `WER.Errors()`, so the cost the
+  assignment minimizes is exactly the WER errors it reports (provably optimal, not just consistent).
+  **DER** uses the md-eval decomposition (missed = Σmax(0,Nref−Nhyp)·d, falseAlarm = Σmax(0,Nhyp−Nref)·d,
+  confusion = Σ(min(Nref,Nhyp)−Ncorrect)·d, over Σ Nref·d), with the collar handled correctly (boundaries
+  split at ±collar so no scored interval straddles a collar edge; numerator AND denominator both exclude
+  collar zones) and the ref→hyp mapping via `maxWeightMapping` which is **optimal** (max-weight → min-cost
+  → the same `hungarian` solver), NOT a greedy argmax that would inflate confusion. The `hungarian` solver
+  itself is the canonical Kuhn–Munkres/JV augmenting-path-with-potentials form, correct for arbitrary real
+  costs. `WER`/`AlignHyp` share one deterministic backtrace (match>sub>del>ins). **Net: the WER/DER/cpWER
+  numbers are mathematically sound — don't re-audit `benchmark/metrics/`.** Also cross-referenced this
+  iteration and found CLEAN: `DeleteSpeakerProfile`'s mapping re-open vs `matchSpeakers`' create; the
+  manual-confirmation fold (`PatchMeetingSpeakerMappings`) reuses the shared `foldEmbeddingIntoProfile` so it
+  learns identically to auto; search index/query (FTS5 applies one tokenizer to both sides). The edge-capture
+  client's meters don't reach the TUI (it consumes `StreamEvents`, which the edge client doesn't bridge
+  local meters into) — a known macOS-edge architectural gap, out of scope. **Shipped: a documentation-
+  accuracy fix** — the runTranscribe normalize comment claimed it "fix[es] overlapping timestamps," but the
+  active chain only merges same-speaker gaps + canonicalizes labels; corrected so the comment doesn't assert
+  overlap-repair that isn't wired.
 - **Identity: profile merge left "last seen" stale and the model label disagreeing with the vector (2 bugs,
   +1 test, 2026-06-21).** `MergeSpeakerProfiles` combines two people into one, but unlike the fold path
   (`foldEmbeddingIntoProfile`, which keeps `LastSeenAt` fresh) it never updated `LastSeenAt` — so merging a
