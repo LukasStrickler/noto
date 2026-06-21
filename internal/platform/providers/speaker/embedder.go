@@ -114,11 +114,8 @@ func (l *LocalEmbedder) EmbedSpeakerWindows(ctx context.Context, audio []byte, t
 				if w1 > t.end {
 					w1 = t.end
 				}
-				a, b := int(w0*sampleRate), int(w1*sampleRate)
-				if b > len(wav) {
-					b = len(wav)
-				}
-				if b-a < int(minWindowSec*sampleRate) {
+				a, b, ok := windowBounds(w0, w1, len(wav))
+				if !ok {
 					continue
 				}
 				emb, err := l.eng.Embed(wav[a:b])
@@ -140,6 +137,28 @@ func (l *LocalEmbedder) EmbedSpeakerWindows(ctx context.Context, audio []byte, t
 		}
 	}
 	return out, nil
+}
+
+// windowBounds maps a [w0,w1) second-window to sample indices into a wav of wavLen
+// samples, clamping BOTH ends into [0,wavLen]. It returns ok=false when the clamped
+// window is empty or shorter than minWindowSec. Clamping the lower bound is the
+// point: ValidateTranscript only rejects end<start (transcript.go), and the
+// timestamp normalizer is unwired, so a provider/normalization quirk can leak a
+// segment with a NEGATIVE start through to here — which would give a<0 and panic
+// wav[a:b], failing the whole embed step and losing identity for the meeting. The
+// negative span simply doesn't exist in the audio, so we embed the valid portion.
+func windowBounds(w0, w1 float64, wavLen int) (a, b int, ok bool) {
+	a, b = int(w0*sampleRate), int(w1*sampleRate)
+	if a < 0 {
+		a = 0
+	}
+	if b > wavLen {
+		b = wavLen
+	}
+	if b-a < int(minWindowSec*sampleRate) {
+		return 0, 0, false
+	}
+	return a, b, true
 }
 
 func normalize64(v []float64) []float64 {

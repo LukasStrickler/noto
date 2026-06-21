@@ -176,3 +176,44 @@ func encodeWAV(pcm []float32) []byte {
 	}
 	return b.Bytes()
 }
+
+// TestWindowBounds pins the slice-index clamping that keeps the embed step from
+// panicking on a segment with a negative start (which ValidateTranscript permits —
+// it only rejects end<start — and the timestamp normalizer is unwired). A negative
+// start must clamp to 0, not produce a<0 and panic wav[a:b].
+func TestWindowBounds(t *testing.T) {
+	const sr = sampleRate // 16000
+
+	t.Run("negative start clamps to zero", func(t *testing.T) {
+		a, b, ok := windowBounds(-1.0, 3.0, 10*sr)
+		if !ok {
+			t.Fatal("expected a valid window")
+		}
+		if a != 0 {
+			t.Errorf("a = %d; want 0 (a negative start must clamp, not go negative and panic wav[a:b])", a)
+		}
+		if b != 3*sr {
+			t.Errorf("b = %d; want %d", b, 3*sr)
+		}
+	})
+
+	t.Run("end past wav clamps to length", func(t *testing.T) {
+		a, b, ok := windowBounds(1.0, 100.0, 10*sr) // 100s window over a 10s wav
+		if !ok || a != sr || b != 10*sr {
+			t.Errorf("got a=%d b=%d ok=%v; want a=%d b=%d ok=true", a, b, ok, sr, 10*sr)
+		}
+	})
+
+	t.Run("sub-minimum clamped window is skipped", func(t *testing.T) {
+		// [9.5s,12s) over a 10s wav clamps to [9.5s,10s) = 0.5s < 1.5s min.
+		if _, _, ok := windowBounds(9.5, 12.0, 10*sr); ok {
+			t.Error("expected ok=false for a sub-minimum window")
+		}
+	})
+
+	t.Run("window entirely before t=0 is skipped, not panicked", func(t *testing.T) {
+		if _, _, ok := windowBounds(-5.0, -1.0, 10*sr); ok {
+			t.Error("expected ok=false for a window entirely before t=0")
+		}
+	})
+}

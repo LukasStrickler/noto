@@ -41,6 +41,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Identity: a negative segment start panicked the embed step and lost the meeting's identity (1 latent
+  crash, +1 test, 2026-06-21).** Real contract seam on the identification path: `EmbedSpeakerWindows`
+  (`providers/speaker/embedder.go`) computed window sample indices `a,b := int(w0*sampleRate), int(w1*…)`
+  and clamped only the UPPER bound (`b > len(wav)`), never the lower. `ValidateTranscript` rejects only
+  `end<start` (`transcript.go:108`) — NOT a negative start — and the timestamp normalizer is unwired, so a
+  provider/normalization quirk can leak a segment with `StartSeconds<0` through to here, giving `a<0` and
+  panicking `wav[a:b]`. That panic fails the whole embed step → the meeting gets no speaker identity (and,
+  if the worker doesn't recover, worse). Extracted the bounds math into a pure `windowBounds(w0,w1,wavLen)`
+  that clamps BOTH ends into `[0,wavLen]` and returns ok=false for an empty/sub-minimum window, so a
+  negative span just embeds the valid (≥0) portion. Pure-function test covers negative-start→clamp-to-0,
+  end-past-wav→clamp, sub-minimum→skip, entirely-before-0→skip; pre-fix the negative cases yield `a=-16000`
+  / a slipped-through window (panic in the real loop), revert-checked. (Audited clean, no fix: the core
+  matchers `MatchWithConfig`/`MatchCandidates`/`MatchConfident` and the `matchSpeakers` pipeline integration
+  — dim pre-filtering, manual-preservation, min-enrollment gate, ambiguity margin, fold-on-auto all correct;
+  `EmbeddingDim` is metadata-only, matching keys off `len(vector)`.)
 - **Compute plane: no retry on transient Modal failures wasted GPU work and failed whole jobs (robustness,
   +1 test, 2026-06-21).** Fourth audit follow-up, on the Modal-default critical path / "smart scheduler"
   theme. Both remote clients (`stt/remote.go`, `diarize/remote.go`) called `client.Do` exactly once, so a
