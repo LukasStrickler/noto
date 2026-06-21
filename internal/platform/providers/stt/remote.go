@@ -51,6 +51,32 @@ func (r *RemoteSTT) FeatureMap() ProviderFeatures {
 	}
 }
 
+// maxBiasHeaderBytes bounds the JSON-encoded context-bias header so it stays well
+// under common serverless/proxy per-header limits (~8KB), leaving room for the
+// other X-Noto-* headers + auth.
+const maxBiasHeaderBytes = 6144
+
+// marshalBoundedBias JSON-encodes terms, keeping the LARGEST leading prefix whose
+// encoding fits within limit bytes (the builder orders the most relevant first).
+// Returns "" only if even a single term can't fit — then no bias header is sent,
+// since a rejected request is worse than an unbiased decode.
+func marshalBoundedBias(terms []string, limit int) string {
+	if b, err := json.Marshal(terms); err == nil && len(b) <= limit {
+		return string(b)
+	}
+	lo, hi, best := 1, len(terms)-1, ""
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if b, err := json.Marshal(terms[:mid]); err == nil && len(b) <= limit {
+			best = string(b)
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return best
+}
+
 func (r *RemoteSTT) Transcribe(ctx context.Context, audio []byte, opts TranscribeOptions) (*artifacts.Transcript, error) {
 	if r == nil || r.BaseURL == "" {
 		return nil, notoerr.New("remote_stt_unconfigured", "Remote STT endpoint is not configured.", nil)
@@ -74,8 +100,13 @@ func (r *RemoteSTT) Transcribe(ctx context.Context, audio []byte, opts Transcrib
 		req.Header.Set(computewire.HeaderModel, opts.Model)
 	}
 	if len(opts.ContextBias) > 0 {
-		if b, mErr := json.Marshal(opts.ContextBias); mErr == nil {
-			req.Header.Set(computewire.HeaderContextBias, string(b))
+		// The bias glossary spans EVERY known profile (participants are unknown at
+		// transcribe time), so on a large deployment it can grow past serverless
+		// gateway header limits and get the whole request rejected. Bound the
+		// HEADER to a safe size — the full glossary still drives CPU entity-repair
+		// downstream; this only trims what the remote decoder is biased toward.
+		if b := marshalBoundedBias(opts.ContextBias, maxBiasHeaderBytes); b != "" {
+			req.Header.Set(computewire.HeaderContextBias, b)
 		}
 	}
 	if r.Token != "" {

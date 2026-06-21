@@ -223,6 +223,16 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   startup processes it → the recording becomes a meeting instead of being dropped. Tested: a dry-run recording
   active at Close leaves a QUEUED pipeline job for its meeting. build/vet/lint(0)/race(service) clean.
 
+- **★ Bound the context-bias HEADER so a big glossary can't get the STT request rejected (2026-06-21).**
+  `contextBiasTerms` biases toward EVERY known profile (participants are unknown at transcribe time), and
+  `RemoteSTT` JSON-marshals that whole list into ONE HTTP header. On a hosted deployment with many people the
+  header grows unbounded → past serverless/proxy per-header limits (~8KB) → the WHOLE transcribe request gets
+  rejected (and non-ASCII international names in a header are non-compliant too). Now `marshalBoundedBias` keeps
+  the largest leading prefix (builder orders most-relevant-first) that fits in 6KB; the FULL glossary still
+  drives CPU entity-repair downstream — only the remote decoder's bias is trimmed. Tested: small lists pass
+  whole, a 5000-term list is trimmed to valid in-bounds JSON keeping the leading terms. The deeper limitation
+  (biasing toward ALL profiles dilutes the bias + isn't lean) is recorded for a future ranking pass; this fix is
+  the reliability half. Build/vet/lint(0) clean.
 - **★ Renaming a speaker now refreshes the search index (2026-06-21) — closes the iter-18 staleness gap.**
   `UpdateSpeakerName` wrote the renamed speaker into the transcript via `repo.SaveTranscript` but never
   re-indexed, so the new name wasn't searchable until a manual `reindex` — defeating the search-by-name win

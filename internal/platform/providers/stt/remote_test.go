@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -86,5 +87,46 @@ func TestRemoteSTTUnconfigured(t *testing.T) {
 	_, err := NewRemoteSTT("", "").Transcribe(context.Background(), []byte("x"), TranscribeOptions{})
 	if err == nil {
 		t.Fatal("expected error when endpoint is empty")
+	}
+}
+
+// TestMarshalBoundedBias bounds the context-bias header so an unbounded glossary
+// (all known profiles) can't grow past serverless header limits and get the whole
+// request rejected. Small lists pass through whole; oversized lists keep the
+// largest leading prefix that fits; the result always parses and stays in-bounds.
+func TestMarshalBoundedBias(t *testing.T) {
+	// A small list encodes whole.
+	small := []string{"Alice", "Bob", "Quarterly planning"}
+	got := marshalBoundedBias(small, maxBiasHeaderBytes)
+	var round []string
+	if err := json.Unmarshal([]byte(got), &round); err != nil {
+		t.Fatalf("small bias must be valid JSON: %v", err)
+	}
+	if len(round) != len(small) {
+		t.Errorf("small bias should pass through whole: got %d want %d", len(round), len(small))
+	}
+
+	// A huge list is trimmed to fit, stays valid JSON, and keeps the leading
+	// (most-relevant-first) terms.
+	huge := make([]string, 5000)
+	for i := range huge {
+		huge[i] = "Person-Name-Number-" + strconv.Itoa(i)
+	}
+	got = marshalBoundedBias(huge, maxBiasHeaderBytes)
+	if got == "" {
+		t.Fatal("a huge list must still yield a bounded header, not empty")
+	}
+	if len(got) > maxBiasHeaderBytes {
+		t.Errorf("bounded header is %d bytes; must be <= %d", len(got), maxBiasHeaderBytes)
+	}
+	var trimmed []string
+	if err := json.Unmarshal([]byte(got), &trimmed); err != nil {
+		t.Fatalf("trimmed bias must be valid JSON: %v", err)
+	}
+	if len(trimmed) == 0 || len(trimmed) >= len(huge) {
+		t.Errorf("huge list should be trimmed to a proper subset, kept %d of %d", len(trimmed), len(huge))
+	}
+	if trimmed[0] != huge[0] {
+		t.Errorf("trimming must keep the leading terms; got first %q want %q", trimmed[0], huge[0])
 	}
 }
