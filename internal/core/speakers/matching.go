@@ -39,6 +39,24 @@ func CosineSimilarity(a, b Embedding) (float64, error) {
 	return Dot(aNorm, bNorm), nil
 }
 
+// scoreCosine returns the cosine similarity between an ALREADY-unit query and a
+// candidate centroid of any magnitude. The matchers normalize the query but must
+// NOT assume the stored centroid is unit: a first-enrollment profile stores the
+// RAW embedder vector (matchSpeakers / foldEmbeddingIntoProfile), which is unit
+// only if the remote embedder happened to normalize — the Go side never enforces
+// it. Dividing by the centroid's norm makes the score the true cosine regardless:
+// a no-op for folded centroids (already unit via RunningMean/WeightedMean) and a
+// correction for raw ones, so a real match is never deflated below threshold into
+// a missed match + duplicate profile. Mirrors ScoreASNorm, which already
+// normalizes both sides. Callers guarantee len(centroid)==len(unitQuery).
+func scoreCosine(unitQuery, centroid Embedding) float64 {
+	n := math.Sqrt(Dot(centroid, centroid))
+	if n == 0 {
+		return 0
+	}
+	return Dot(unitQuery, centroid) / n
+}
+
 func Centroid(embeddings []Embedding) (Embedding, error) {
 	if len(embeddings) == 0 {
 		return nil, nil
@@ -158,7 +176,7 @@ func MatchWithConfig(query Embedding, candidates []Candidate, cfg MatchConfig) (
 		if len(cand.Centroid) != len(query) {
 			return MatchDecision{}, DimError(len(query), len(cand.Centroid))
 		}
-		score := Dot(queryNorm, cand.Centroid)
+		score := scoreCosine(queryNorm, cand.Centroid)
 		if score > bestScore {
 			secondScore = bestScore
 			bestScore, bestCandidate = score, cand
@@ -238,7 +256,7 @@ func MatchCandidates(query Embedding, candidates []Candidate) ([]MatchDecision, 
 		if len(cand.Centroid) != len(query) {
 			continue
 		}
-		score := Dot(queryNorm, cand.Centroid)
+		score := scoreCosine(queryNorm, cand.Centroid)
 		var status MatchStatus
 		var reason string
 		switch {

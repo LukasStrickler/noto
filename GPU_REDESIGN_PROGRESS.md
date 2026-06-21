@@ -103,6 +103,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **Identification: the primary matcher assumed pre-normalized centroids it never enforced (1 bug, +1 test,
+  2026-06-21).** `MatchWithConfig` (the live `MatchConfident` path) and `MatchCandidates` (the UI "who is
+  this?" ranker) scored `Dot(queryNorm, cand.Centroid)` — normalizing the QUERY but NOT the candidate
+  centroid. That equals true cosine ONLY if the stored centroid is a unit vector. But a **first-enrollment
+  profile stores the RAW embedder output** (`matchSpeakers` StatusNew, `foldEmbeddingIntoProfile` first
+  voiceprint) — unit only if the remote ECAPA server normalized, which the Go side never enforces. So a
+  single-enrollment profile's match score was scaled by ‖centroid‖: a sub-unit raw vector **deflates a real
+  match below the 0.70 auto / 0.55 pending thresholds → the same voice is declared a NEW speaker and a
+  duplicate profile is minted** (an over-unit vector does the opposite — false auto-merges). The robust
+  scorer `ScoreASNorm` already normalized BOTH sides; the primary matcher was the inconsistent one. Fixed
+  with a `scoreCosine(unitQuery, centroid)` that divides by the centroid norm — true cosine regardless of
+  stored magnitude, a no-op for folded centroids (already unit via RunningMean/WeightedMean) and a
+  correction for raw ones. **Fixing the READ path means every already-persisted raw centroid is corrected
+  instantly, no data migration.** Test: an exactly-aligned voice with a magnitude-0.5 stored centroid scored
+  0.5→"new" pre-fix (missed match + dup profile), 1.0→auto after. Verified fails pre-fix, passes after.
 - **KPI follow-on: utilization was the LAST asymmetric dial (1 bug, +1 test, 2026-06-21).** The 9-bug
   pass (above) made `ScoreRun` drop *cost* and *quality* from the weighted mean when a run carries no
   reading (so a smoke/integration run isn't penalized for an unmeasured dial) — but left **utilization**

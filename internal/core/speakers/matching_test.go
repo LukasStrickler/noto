@@ -186,6 +186,42 @@ func TestMatch(t *testing.T) {
 	}
 }
 
+// TestMatchNormalizesCandidateCentroid pins that the matcher computes TRUE cosine
+// similarity — magnitude-invariant on the candidate side. A first-enrollment
+// profile stores the RAW embedder vector (matchSpeakers / foldEmbeddingIntoProfile),
+// which is unit only if the embedder normalized; the matcher must not silently
+// depend on that. Here the stored centroid points EXACTLY at the query but has
+// magnitude 0.5 — true cosine is 1.0, so it must auto-match. Before the fix the
+// score was Dot(query, 0.5·dir) = 0.5, below threshold → the same voice would be
+// declared a brand-new speaker and a duplicate profile minted.
+func TestMatchNormalizesCandidateCentroid(t *testing.T) {
+	dir := Normalize(Embedding{0.9, 0.1, 0.42})
+	raw := make(Embedding, len(dir))
+	for i := range dir {
+		raw[i] = dir[i] * 0.5 // identical direction, magnitude 0.5 (un-normalized)
+	}
+	dec, err := MatchConfident(dir, []Candidate{{ProfileID: "p1", Name: "Alice", Centroid: raw}})
+	if err != nil {
+		t.Fatalf("MatchConfident() error = %v", err)
+	}
+	if dec.Score < 0.99 {
+		t.Errorf("cosine must be magnitude-invariant on the candidate: score = %v, want ~1.0", dec.Score)
+	}
+	if dec.Status != StatusAuto {
+		t.Errorf("an exactly-aligned voice must auto-match; got %q (raw-magnitude deflation missed the match)", dec.Status)
+	}
+
+	// The UI suggestion ranker (MatchCandidates) shares the same scoring and must
+	// agree — a sub-unit stored centroid can't rank a true match below a stranger.
+	ranked, err := MatchCandidates(dir, []Candidate{{ProfileID: "p1", Name: "Alice", Centroid: raw}})
+	if err != nil {
+		t.Fatalf("MatchCandidates() error = %v", err)
+	}
+	if len(ranked) != 1 || ranked[0].Score < 0.99 {
+		t.Errorf("ranker must also score true cosine, got %v", ranked)
+	}
+}
+
 func TestMatchDimensionMismatch(t *testing.T) {
 	query := Embedding{1, 0}
 	candidates := []Candidate{
