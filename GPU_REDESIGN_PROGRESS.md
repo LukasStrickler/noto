@@ -103,6 +103,24 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   `$/hr` (reads as wall-clock) → now `/audio-hr`, matching every sibling renderer. **The bench spine is
   now audited for correctness AND presentation (20 issues across 4 passes); audit COMPLETE — see
   memory [[bench-kpi-math-audit]].**
+- **Hosted UX: non-ASCII meeting titles/filenames were stripped by proxies on upload (1 bug, +2 tests,
+  2026-06-21).** The remote audio-upload path (`uploadAudio` → `/v1/imports/audio`) carries the meeting
+  title + filename in `X-Noto-Title`/`X-Noto-Filename` HTTP headers, raw. A non-ASCII or control byte in a
+  header value is RFC-7230-noncompliant and is commonly STRIPPED or REJECTED by a proxy/CDN fronting a
+  hosted backend — so an international user uploading "Réunion équipe.m4a" or titling a meeting "会議" could
+  silently lose the title/filename (or fail the whole upload on a newline). Fixed end-to-end: the client
+  percent-encodes (`url.PathEscape`) both headers and sets `X-Noto-Text-Encoding: percent` ONLY when a value
+  isn't pure printable ASCII; the server decodes (`url.PathUnescape`, raw-fallback on a stray `%`) when that
+  marker is set. Plain-ASCII titles stay wire-identical to before (full backward compat — an older server
+  still reads them, no `%20` churn), and the marker makes the encoded case unambiguous (no raw-vs-encoded
+  guessing, so a literal "50%" title is never mangled). Serves the user's "hosted" + "great UX" + "strong
+  adherence" directly. Tests: client round-trips "Réunion équipe — Q3" through pure-ASCII wire bytes back to
+  the exact original + sets the marker; server `percentDecodeHeader` reverses real encoding and tolerates
+  raw/invalid input. (This iteration also SWEPT the transport layer broadly — `do`, SSE client/server format
+  match, direct-vs-http pass-through, routing, the normalize chain — and found it otherwise clean; the four
+  text-mangling normalizers (Format/Timestamp/Confidence/Punctuation) are defined+tested but NOT wired into
+  the active chain, so the `partialWordRE` hyphen-eating bug in FormatNormalizer is latent, not active —
+  noted, not fixed, since wiring them is a product decision.)
 - **Integrity follow-on: same write/read asymmetry in WriteAudioMetadata (1 bug, +1 test, 2026-06-21).**
   Swept the other storage artifacts for the transcript bug's CLASS. `ReadAudioMetadata` validates
   (schema, asset_id, positive duration/sample-rate/channels) but `WriteAudioMetadata` didn't — the

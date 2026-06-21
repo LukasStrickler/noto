@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -64,6 +65,52 @@ func TestRemoteImportUploadsBytes(t *testing.T) {
 	}
 	if res.Meeting.ID != "m-1" || res.Job.ID != "j-1" {
 		t.Errorf("unexpected result: %+v", res)
+	}
+}
+
+// TestRemoteImportEncodesNonASCIIHeaders pins that an international title/filename
+// is percent-encoded onto the wire (so a proxy fronting a hosted backend can't strip
+// the non-ASCII header), flagged with X-Noto-Text-Encoding, and decodes back exactly.
+func TestRemoteImportEncodesNonASCIIHeaders(t *testing.T) {
+	title := "Réunion équipe — Q3"
+	fname := "Réunion équipe.m4a"
+	tmp := filepath.Join(t.TempDir(), fname)
+	if err := os.WriteFile(tmp, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotEnc, gotTitle, gotFilename string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEnc = r.Header.Get("X-Noto-Text-Encoding")
+		gotTitle = r.Header.Get("X-Noto-Title")
+		gotFilename = r.Header.Get("X-Noto-Filename")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(notoapi.ImportAudioResult{Meeting: notoapi.Meeting{ID: "m"}})
+	}))
+	defer srv.Close()
+
+	c := NewHTTP(HTTPOptions{BaseURL: srv.URL})
+	if _, err := c.ImportAudio(context.Background(), notoapi.ImportAudioOpts{Path: tmp, Title: title}); err != nil {
+		t.Fatalf("ImportAudio: %v", err)
+	}
+
+	if gotEnc != "percent" {
+		t.Fatalf("X-Noto-Text-Encoding = %q, want percent", gotEnc)
+	}
+	// The transmitted header bytes must be pure printable ASCII (proxy-safe).
+	for _, h := range []string{gotTitle, gotFilename} {
+		for i := 0; i < len(h); i++ {
+			if h[i] < 0x20 || h[i] > 0x7e {
+				t.Fatalf("encoded header still carries a non-ASCII byte: %q", h)
+			}
+		}
+	}
+	// ...and must decode back to the exact original (no mojibake, no loss).
+	if dec, _ := url.PathUnescape(gotTitle); dec != title {
+		t.Errorf("title round-trip: got %q want %q", dec, title)
+	}
+	if dec, _ := url.PathUnescape(gotFilename); dec != fname {
+		t.Errorf("filename round-trip: got %q want %q", dec, fname)
 	}
 }
 

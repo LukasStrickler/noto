@@ -216,6 +216,18 @@ func (c *httpClient) ImportAudio(ctx context.Context, opts notoapi.ImportAudioOp
 	return out, err
 }
 
+// asciiHeaderSafe reports whether s can ride in an HTTP header value verbatim:
+// printable ASCII (0x20–0x7E) only. Control bytes, DEL, and non-ASCII must be
+// percent-encoded first — see uploadAudio.
+func asciiHeaderSafe(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // uploadAudio streams a local file to a remote backend as the request body.
 func (c *httpClient) uploadAudio(ctx context.Context, opts notoapi.ImportAudioOpts) (notoapi.ImportAudioResult, error) {
 	var out notoapi.ImportAudioResult
@@ -232,9 +244,20 @@ func (c *httpClient) uploadAudio(ctx context.Context, opts notoapi.ImportAudioOp
 		req.ContentLength = fi.Size() // lets the server show progress + enforce a cap
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("X-Noto-Filename", filepath.Base(opts.Path))
-	if opts.Title != "" {
-		req.Header.Set("X-Noto-Title", opts.Title)
+	// Title/filename are user text and ride in headers. A non-ASCII or control byte
+	// in a header value is RFC-7230-noncompliant and is commonly stripped or rejected
+	// by a proxy fronting a hosted backend — silently losing an international meeting's
+	// title/filename ("Réunion", "会議.m4a"). Percent-encode both and flag it so the
+	// server decodes; plain-ASCII values stay raw (wire-identical to before, so an
+	// older server still reads them, and no needless %20 churn).
+	fname, title := filepath.Base(opts.Path), opts.Title
+	if !asciiHeaderSafe(fname) || !asciiHeaderSafe(title) {
+		req.Header.Set("X-Noto-Text-Encoding", "percent")
+		fname, title = url.PathEscape(fname), url.PathEscape(title)
+	}
+	req.Header.Set("X-Noto-Filename", fname)
+	if title != "" {
+		req.Header.Set("X-Noto-Title", title)
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -374,6 +375,16 @@ func (s *Server) handleSpeakerProfileByID(w http.ResponseWriter, r *http.Request
 // maxUploadBytes caps a remote audio upload (a long meeting is well under this).
 const maxUploadBytes = 4 << 30 // 4 GiB
 
+// percentDecodeHeader reverses the upload client's url.PathEscape on a header value
+// (used only when X-Noto-Text-Encoding is "percent"), returning the raw value when
+// it isn't valid percent-encoding so a stray "%" never drops the title.
+func percentDecodeHeader(v string) string {
+	if dec, err := url.PathUnescape(v); err == nil {
+		return dec
+	}
+	return v
+}
+
 func (s *Server) handleImportAudio(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
@@ -384,6 +395,12 @@ func (s *Server) handleImportAudio(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/octet-stream") {
 		title := r.Header.Get("X-Noto-Title")
 		filename := r.Header.Get("X-Noto-Filename")
+		// The client percent-encodes these headers when the title/filename carries
+		// non-ASCII or control bytes (proxy-safe transport); decode when it says so.
+		if r.Header.Get("X-Noto-Text-Encoding") == "percent" {
+			title = percentDecodeHeader(title)
+			filename = percentDecodeHeader(filename)
+		}
 		body := http.MaxBytesReader(w, r.Body, maxUploadBytes)
 		m, job, err := s.svc.ImportAudioStream(r.Context(), body, filename, title)
 		if err != nil {
