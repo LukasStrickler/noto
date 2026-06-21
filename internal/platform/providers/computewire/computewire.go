@@ -12,10 +12,13 @@
 package computewire
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
+	"time"
 
 	"github.com/lukasstrickler/noto/internal/core/notoerr"
 )
@@ -35,6 +38,74 @@ const (
 	HeaderModel       = "X-Noto-Model"
 	HeaderContextBias = "X-Noto-Context-Bias" // JSON-encoded []string
 )
+
+// maxComputeAttempts bounds how many times a compute request is sent (1 initial +
+// retries). retryBaseDelay is the first backoff; each further attempt doubles it. A
+// var, not a const, so tests can shrink it — production keeps a cold-start-friendly
+// base.
+const maxComputeAttempts = 3
+
+var retryBaseDelay = 250 * time.Millisecond
+
+// retryableStatus reports whether a compute response status is worth retrying: a
+// transient infra condition (serverless cold-start 502, autoscale 503, gateway
+// 504), NOT a client error (4xx won't change on retry) or a deterministic 500.
+func retryableStatus(code int) bool {
+	switch code {
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// DoWithRetry sends a compute request with bounded retry on TRANSIENT failures — a
+// network error, or a 502/503/504. transcribe and diarize are idempotent (the
+// compute node keeps no state), so a cold-start or autoscale blip recovers
+// transparently instead of failing the whole job and discarding the GPU work the
+// earlier pipeline stages already produced — exactly the kind of wasted utilization
+// a hosted deployment must avoid. newReq rebuilds the request each attempt so the
+// audio body can be re-read; a build error, a client error (4xx), and success all
+// return immediately. Backoff is exponential with jitter and honors ctx between
+// attempts. The returned response's body is the caller's to close; bodies of
+// retried responses are drained and closed here.
+func DoWithRetry(ctx context.Context, client *http.Client, newReq func() (*http.Request, error)) (*http.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxComputeAttempts; attempt++ {
+		if attempt > 0 {
+			delay := retryBaseDelay << (attempt - 1)                // 1x, 2x, 4x, …
+			delay += time.Duration(rand.Int64N(int64(delay/2) + 1)) // up to +50% jitter
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		req, err := newReq()
+		if err != nil {
+			return nil, err // a malformed request can't be fixed by retrying
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			if ctx.Err() != nil {
+				return nil, err // caller cancelled / deadline hit — don't retry
+			}
+			continue
+		}
+		if retryableStatus(resp.StatusCode) && attempt < maxComputeAttempts-1 {
+			// Drain+close so the connection can be reused, then back off and retry.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("compute endpoint returned status %d", resp.StatusCode)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
 
 // RemoteError converts a non-2xx compute response into a notoerr, preferring the
 // remote's structured error envelope ({"error":{"code","message"}}) when present

@@ -41,6 +41,21 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Compute plane: no retry on transient Modal failures wasted GPU work and failed whole jobs (robustness,
+  +1 test, 2026-06-21).** Fourth audit follow-up, on the Modal-default critical path / "smart scheduler"
+  theme. Both remote clients (`stt/remote.go`, `diarize/remote.go`) called `client.Do` exactly once, so a
+  single transient blip — a serverless cold-start 502, an autoscale 503, a gateway 504 — failed the whole
+  transcribe/diarize stage, which fails the job and discards the GPU work earlier pipeline stages already
+  produced (the opposite of maximizing hosted utilization). transcribe/diarize are idempotent (the compute
+  node keeps no state), so the call is safe to retry. Added `computewire.DoWithRetry(ctx, client, newReq)`:
+  bounded attempts (3), exponential backoff + jitter, retries ONLY transient causes (network error or
+  502/503/504) — a 4xx/deterministic-500 and success return at once — rebuilds the request each attempt so
+  the audio body re-reads, and honors ctx between attempts (a job cancel/shutdown aborts the retry loop).
+  Both clients route their request-building through it via a `newReq` closure. White-box test covers
+  retry-then-succeed (3 attempts), no-retry-on-4xx, exhaustion-surfaces-last-503, and ctx-cancel-aborts;
+  `retryBaseDelay` is a var so the test runs in ms. Revert-checked (attempts=1 → retry test fails). The DRY
+  home is `computewire`, which already owns the wire contract + `RemoteError`, so the two clients can't
+  drift on retry policy.
 - **Compute plane: STT/diarize failures leaked subprocess stderr + paths + env names over HTTP (1 bug,
   +1 test, 2026-06-21).** Third audit follow-up, on the Modal-default critical path. The compute endpoints
   (`/v1/compute/transcribe`, `/v1/compute/diarize`) ARE the node-to-node network boundary; their handlers

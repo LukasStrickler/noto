@@ -40,26 +40,31 @@ func (r *RemoteDiarizer) Diarize(ctx context.Context, audio []byte, opts Diarize
 	if r == nil || r.BaseURL == "" {
 		return nil, notoerr.New("remote_diarize_unconfigured", "Remote diarizer endpoint is not configured.", nil)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.BaseURL+computewire.DiarizePath, bytes.NewReader(audio))
-	if err != nil {
-		return nil, notoerr.Wrap("remote_diarize_request_failed", "Could not create remote diarize request.", err)
-	}
-	req.ContentLength = int64(len(audio))
-	req.Header.Set("Content-Type", "application/octet-stream")
-	if opts.MeetingID != "" {
-		req.Header.Set(computewire.HeaderMeetingID, opts.MeetingID)
-	}
-	if opts.NumSpeakers > 0 {
-		req.Header.Set(computewire.HeaderNumSpeakers, strconv.Itoa(opts.NumSpeakers))
-	}
-	if r.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.Token)
+	newReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.BaseURL+computewire.DiarizePath, bytes.NewReader(audio))
+		if err != nil {
+			return nil, notoerr.Wrap("remote_diarize_request_failed", "Could not create remote diarize request.", err)
+		}
+		req.ContentLength = int64(len(audio))
+		req.Header.Set("Content-Type", "application/octet-stream")
+		if opts.MeetingID != "" {
+			req.Header.Set(computewire.HeaderMeetingID, opts.MeetingID)
+		}
+		if opts.NumSpeakers > 0 {
+			req.Header.Set(computewire.HeaderNumSpeakers, strconv.Itoa(opts.NumSpeakers))
+		}
+		if r.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+r.Token)
+		}
+		return req, nil
 	}
 	client := r.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Minute}
 	}
-	resp, err := client.Do(req)
+	// Retry transient cold-start/autoscale failures: diarization is idempotent, so
+	// a blip recovers without failing the job (see computewire.DoWithRetry).
+	resp, err := computewire.DoWithRetry(ctx, client, newReq)
 	if err != nil {
 		return nil, notoerr.Wrap("remote_diarize_remote_error", "Remote diarize request failed.", err)
 	}

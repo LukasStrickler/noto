@@ -118,36 +118,39 @@ func (r *RemoteSTT) Transcribe(ctx context.Context, audio []byte, opts Transcrib
 	if r == nil || r.BaseURL == "" {
 		return nil, notoerr.New("remote_stt_unconfigured", "Remote STT endpoint is not configured.", nil)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.BaseURL+computewire.TranscribePath, bytes.NewReader(audio))
-	if err != nil {
-		return nil, notoerr.Wrap("remote_stt_request_failed", "Could not create remote STT request.", err)
-	}
-	req.ContentLength = int64(len(audio))
-	req.Header.Set("Content-Type", "application/octet-stream")
-	if opts.Language != "" {
-		req.Header.Set(computewire.HeaderLanguage, opts.Language)
-	}
-	if opts.MeetingID != "" {
-		req.Header.Set(computewire.HeaderMeetingID, opts.MeetingID)
-	}
-	if opts.NumSpeakers > 0 {
-		req.Header.Set(computewire.HeaderNumSpeakers, strconv.Itoa(opts.NumSpeakers))
-	}
-	if opts.Model != "" {
-		req.Header.Set(computewire.HeaderModel, opts.Model)
-	}
-	if len(opts.ContextBias) > 0 {
-		// The bias glossary spans EVERY known profile (participants are unknown at
-		// transcribe time), so on a large deployment it can grow past serverless
-		// gateway header limits and get the whole request rejected. Bound the
-		// HEADER to a safe size — the full glossary still drives CPU entity-repair
-		// downstream; this only trims what the remote decoder is biased toward.
-		if b := marshalBoundedBias(opts.ContextBias, maxBiasHeaderBytes); b != "" {
-			req.Header.Set(computewire.HeaderContextBias, b)
+	newReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.BaseURL+computewire.TranscribePath, bytes.NewReader(audio))
+		if err != nil {
+			return nil, notoerr.Wrap("remote_stt_request_failed", "Could not create remote STT request.", err)
 		}
-	}
-	if r.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.Token)
+		req.ContentLength = int64(len(audio))
+		req.Header.Set("Content-Type", "application/octet-stream")
+		if opts.Language != "" {
+			req.Header.Set(computewire.HeaderLanguage, opts.Language)
+		}
+		if opts.MeetingID != "" {
+			req.Header.Set(computewire.HeaderMeetingID, opts.MeetingID)
+		}
+		if opts.NumSpeakers > 0 {
+			req.Header.Set(computewire.HeaderNumSpeakers, strconv.Itoa(opts.NumSpeakers))
+		}
+		if opts.Model != "" {
+			req.Header.Set(computewire.HeaderModel, opts.Model)
+		}
+		if len(opts.ContextBias) > 0 {
+			// The bias glossary spans EVERY known profile (participants are unknown at
+			// transcribe time), so on a large deployment it can grow past serverless
+			// gateway header limits and get the whole request rejected. Bound the
+			// HEADER to a safe size — the full glossary still drives CPU entity-repair
+			// downstream; this only trims what the remote decoder is biased toward.
+			if b := marshalBoundedBias(opts.ContextBias, maxBiasHeaderBytes); b != "" {
+				req.Header.Set(computewire.HeaderContextBias, b)
+			}
+		}
+		if r.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+r.Token)
+		}
+		return req, nil
 	}
 	client := r.HTTP
 	if client == nil {
@@ -155,7 +158,9 @@ func (r *RemoteSTT) Transcribe(ctx context.Context, audio []byte, opts Transcrib
 		// serverless GPU can take a minute to warm — allow generous headroom.
 		client = &http.Client{Timeout: 30 * time.Minute}
 	}
-	resp, err := client.Do(req)
+	// Retry transient cold-start/autoscale failures: transcription is idempotent, so
+	// a blip recovers without failing the job (see computewire.DoWithRetry).
+	resp, err := computewire.DoWithRetry(ctx, client, newReq)
 	if err != nil {
 		return nil, notoerr.Wrap("remote_stt_remote_error", "Remote STT request failed.", err)
 	}
