@@ -223,6 +223,13 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   startup processes it → the recording becomes a meeting instead of being dropped. Tested: a dry-run recording
   active at Close leaves a QUEUED pipeline job for its meeting. build/vet/lint(0)/race(service) clean.
 
+- **★ CLI search dropped every word after the first (2026-06-21) — the CLI half of the multi-word fix.** Even
+  with the FTS layer fixed (below), `noto search ship plan` only ever searched "ship": `runSearch` used
+  `stripFlags`, which returns the FIRST non-flag arg and discards the rest. So the multi-word FTS fix never
+  reached CLI users. Added `stripFlagsJoin` (joins ALL non-flag args) and used it for the query; the five
+  id-based commands keep `stripFlags` (a single token is correct there). Tested: `runSearch(["ship","plan"])`
+  forwards `"ship plan"` to the client (via a query-capturing FakeClient), plus the pure helper. Together with
+  the FTS fix below, multi-word search now works END-TO-END.
 - **★★ MULTI-WORD SEARCH WAS COMPLETELY BROKEN — every 2+ word query errored (2026-06-21).** The single
   biggest UX bug found this loop. `sanitizeFTS5Query` emits each word as a `("term" OR term*)` group (exact OR
   prefix) and JOINED them with a SPACE. FTS5 accepts implicit-AND between bare terms (`a b`) but REJECTS it

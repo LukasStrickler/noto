@@ -106,6 +106,19 @@ func stripFlags(args []string) string {
 	return ""
 }
 
+// stripFlagsJoin returns ALL non-flag args joined with spaces — for commands that
+// take a multi-word value (e.g. `noto search ship plan`), where stripFlags would
+// silently drop every word after the first.
+func stripFlagsJoin(args []string) string {
+	var parts []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "--") {
+			parts = append(parts, a)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func trim(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= n {

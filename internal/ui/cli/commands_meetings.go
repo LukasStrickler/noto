@@ -39,7 +39,7 @@ func (a *app) runList(args []string) int {
 }
 
 func (a *app) runSearch(args []string) int {
-	q := stripFlags(args)
+	q := stripFlagsJoin(args) // a query is multi-word; don't drop everything after word 1
 	if q == "" {
 		fmt.Fprintln(a.errOut, "noto search: query required")
 		return 64
