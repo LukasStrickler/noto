@@ -278,26 +278,29 @@ func buildContent(parts ...string) string {
 	return strings.Join(out, " ")
 }
 
-// sanitizeFTS5Query strips characters FTS5 would interpret as operators
-// (`*`, `:`, `(`, `)`, `"`, `-`, `+`, `^`, `.`, etc.) and re-emits the
-// remaining words as `("term" OR term*)` groups so that an exact-term
-// hit and a prefix-only hit can both match a single query. BM25 ranks
-// the exact form higher because the prefix form matches a superset
-// of documents but contributes less per match. An empty result means
-// the query had no usable tokens and the caller should return zero
-// results instead of erroring.
+// sanitizeFTS5Query reduces a raw user query to plain word tokens and re-emits
+// them as `("term" OR term*)` groups so that an exact-term hit and a prefix-only
+// hit can both match a single query. BM25 ranks the exact form higher because the
+// prefix form matches a superset of documents but contributes less per match. An
+// empty result means the query had no usable tokens and the caller should return
+// zero results instead of erroring.
+//
+// Two FTS5 hazards are handled: (1) any character FTS5 treats as an operator
+// (`* : ( ) " - + ^ .` etc.) is replaced with whitespace so it can't reach MATCH;
+// (2) tokens are lowercased — FTS5 reserves UPPERCASE `AND`/`OR`/`NOT`/`NEAR` as
+// query keywords, so a user typing one of those words would otherwise build a
+// query like `("AND" OR AND*)` that MATCH rejects with a syntax error (search just
+// failing for that word). The index uses the case-folding unicode61 tokenizer, so
+// a lowercased query loses no matches.
 func sanitizeFTS5Query(query string) string {
 	var b strings.Builder
 	for _, r := range query {
-		switch {
-		case unicode.IsLetter(r), unicode.IsDigit(r):
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(r)
-		case r == '_' || r == '-' || r == '\'':
-			// Keep hyphens/apostrophes inside words so "billing-bug" or
-			// "we're" survive tokenization. unicode61 splits on them
-			// anyway, but keeping them avoids glueing adjacent words.
-			b.WriteRune(' ')
-		default:
+		} else {
+			// Every separator/punctuation (incl. - ' _ and FTS5 operators) folds
+			// to whitespace, so the query reduces to standalone word tokens. The
+			// unicode61 tokenizer splits on - ' _ anyway, so nothing is lost.
 			b.WriteRune(' ')
 		}
 	}
@@ -307,6 +310,7 @@ func sanitizeFTS5Query(query string) string {
 	}
 	groups := make([]string, len(tokens))
 	for i, t := range tokens {
+		t = strings.ToLower(t) // avoid the UPPERCASE AND/OR/NOT/NEAR keyword collision
 		// Single-character tokens get prefix-only treatment; FTS5
 		// rejects bare `"x"` as a too-short phrase on default tokenizers.
 		if len(t) == 1 {
@@ -315,7 +319,11 @@ func sanitizeFTS5Query(query string) string {
 		}
 		groups[i] = `("` + t + `" OR ` + t + `*)`
 	}
-	return strings.Join(groups, " ")
+	// Join with an EXPLICIT "AND", not a space: FTS5 accepts implicit-AND between
+	// bare terms (`a b`) but REJECTS it between two parenthesized groups
+	// (`(a) (b)` is a syntax error), so a space-join broke EVERY multi-word query.
+	// AND keeps the "all query words must match" semantics.
+	return strings.Join(groups, " AND ")
 }
 
 func (s *SearchIndex) Search(query string) ([]SearchResult, error) {

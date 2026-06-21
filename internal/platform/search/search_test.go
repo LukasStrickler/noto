@@ -612,6 +612,78 @@ func TestQuestionsIndexedAndCounted(t *testing.T) {
 	}
 }
 
+func TestFTS5KeywordQueriesDoNotError(t *testing.T) {
+	tmpDir := t.TempDir()
+	index, err := NewSearchIndex(filepath.Join(tmpDir, "test_index.db"))
+	if err != nil {
+		t.Fatalf("NewSearchIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	m := &Meeting{
+		MeetingID: "m-kw",
+		Title:     "AND OR NOT NEAR discussion",
+		TranscriptSegments: []TranscriptSegment{
+			{SegmentID: "s1", Speaker: "A", Text: "we debated AND versus OR in the query", Timestamp: 0},
+		},
+	}
+	if err := index.IndexMeeting(m); err != nil {
+		t.Fatalf("IndexMeeting: %v", err)
+	}
+
+	// FTS5 reserves UPPERCASE AND/OR/NOT/NEAR as query operators. A user typing
+	// one of those words must not crash search with a syntax error.
+	for _, q := range []string{"AND", "OR", "NOT", "NEAR", "AND OR", "NEAR meeting"} {
+		if _, err := index.Search(q); err != nil {
+			t.Errorf("Search(%q) must not error on an FTS5 keyword: %v", q, err)
+		}
+	}
+}
+
+// TestMultiWordSearch is the regression for the bigger bug the keyword probe
+// uncovered: FTS5 rejects two parenthesized groups joined by implicit AND
+// (`(a) (b)`), so the space-join made EVERY multi-word query a syntax error.
+// Multi-word search must work and require all words (AND semantics).
+func TestMultiWordSearch(t *testing.T) {
+	tmpDir := t.TempDir()
+	index, err := NewSearchIndex(filepath.Join(tmpDir, "test_index.db"))
+	if err != nil {
+		t.Fatalf("NewSearchIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	both := &Meeting{
+		MeetingID:          "m-both",
+		Title:              "Ship the plan",
+		TranscriptSegments: []TranscriptSegment{{SegmentID: "s1", Text: "we will ship the plan this quarter"}},
+	}
+	onlyOne := &Meeting{
+		MeetingID:          "m-one",
+		Title:              "Ship it",
+		TranscriptSegments: []TranscriptSegment{{SegmentID: "s1", Text: "we will ship it"}},
+	}
+	if err := index.IndexMeeting(both); err != nil {
+		t.Fatalf("IndexMeeting both: %v", err)
+	}
+	if err := index.IndexMeeting(onlyOne); err != nil {
+		t.Fatalf("IndexMeeting onlyOne: %v", err)
+	}
+
+	results, err := index.Search("ship plan")
+	if err != nil {
+		t.Fatalf("multi-word Search must not error: %v", err)
+	}
+	// AND semantics: only the meeting containing BOTH words matches.
+	if len(results) == 0 {
+		t.Fatal(`Search("ship plan") returned nothing; multi-word search is broken`)
+	}
+	for _, r := range results {
+		if r.MeetingID == "m-one" {
+			t.Errorf(`Search("ship plan") matched a meeting missing "plan" — AND semantics lost`)
+		}
+	}
+}
+
 func TestPunctuationStillSanitized(t *testing.T) {
 	tmpDir := t.TempDir()
 	index, err := NewSearchIndex(filepath.Join(tmpDir, "test_index.db"))

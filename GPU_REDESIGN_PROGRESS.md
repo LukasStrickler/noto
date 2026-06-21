@@ -223,6 +223,19 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   startup processes it → the recording becomes a meeting instead of being dropped. Tested: a dry-run recording
   active at Close leaves a QUEUED pipeline job for its meeting. build/vet/lint(0)/race(service) clean.
 
+- **★★ MULTI-WORD SEARCH WAS COMPLETELY BROKEN — every 2+ word query errored (2026-06-21).** The single
+  biggest UX bug found this loop. `sanitizeFTS5Query` emits each word as a `("term" OR term*)` group (exact OR
+  prefix) and JOINED them with a SPACE. FTS5 accepts implicit-AND between bare terms (`a b`) but REJECTS it
+  between two parenthesized groups — `(a) (b)` is a hard `fts5: syntax error near "("`. So ANY multi-word search
+  (`"ship plan"`, `"two words here"`) failed outright; only single words worked. Latent because every existing
+  search test used a single-token query. Fix: join groups with an explicit `" AND "` (proven valid by probe;
+  keeps all-words-must-match semantics). ALSO fixed an adjacent bug in the same function — a user typing an
+  UPPERCASE FTS5 keyword (`AND`/`OR`/`NOT`/`NEAR`) built `("AND" OR AND*)` whose bare `AND*` collided with the
+  operator keyword → syntax error; tokens are now lowercased (the unicode61 index folds case, so no matches
+  lost). Also removed a redundant `-`/`'`/`_` branch whose comment claimed the opposite of what the code did.
+  Tests: a multi-word query returns only docs containing ALL words (AND semantics), and uppercase-keyword
+  queries don't error. Full suite + vet + lint(0) clean.
+
 ## ★ GPU-feeding DILUTION — the real hosted-util lever (2026-06-21, found; fix NOT yet built — needs greenlight)
 
 Sharper answer to "maximize GPU utilization on hosted" than the keep-warm/idle-backfill story below. **Production
