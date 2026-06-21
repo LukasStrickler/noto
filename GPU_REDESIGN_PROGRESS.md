@@ -213,6 +213,16 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   a meeting with a manual spk_0→Alice survives a re-match whose embedding would otherwise auto-pick a different
   profile. build/vet/lint(0)/race clean.
 
+- **★ Don't lose an in-flight recording on shutdown (2026-06-21).** A recording active when the service shut
+  down was LOST: `svc.Close` (and the host's Close) only stopped the meter loop and called `ipc.Close`, never
+  `StopRecording` — so the capture was never finalized (no `ipc.Stop` to save the audio, no pipeline enqueued),
+  and the user's in-progress "singular meeting note" vanished. Fix composes with the durable job queue +
+  crash-resume: `Close` now finalizes an active recording (saves audio + enqueues its pipeline) AFTER the worker
+  pool drains (so the fresh job just persists rather than being claimed-then-canceled) but BEFORE the event
+  hub / ipc / jobsDB it needs are torn down. The queued pipeline job survives in the jobs DB and the next
+  startup processes it → the recording becomes a meeting instead of being dropped. Tested: a dry-run recording
+  active at Close leaves a QUEUED pipeline job for its meeting. build/vet/lint(0)/race(service) clean.
+
 ## GPU utilization — analysis for the user's "avg util / sustained, not just peak" question (2026-06-21)
 
 Grounded in 72 real `.modal-results` runs + the sampler (`scripts/modal_benchmark.py:utilization_stats`,

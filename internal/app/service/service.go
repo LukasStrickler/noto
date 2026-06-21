@@ -346,6 +346,16 @@ func (s *Service) Close() error {
 	}
 	s.bgWG.Wait()
 
+	// Finalize an in-flight recording before teardown so a shutdown mid-capture
+	// doesn't lose the user's meeting: StopRecording saves the audio (ipc.Stop) and
+	// enqueues its pipeline, which the durable job queue picks up on the next start.
+	// Done after the worker pool has drained — so the freshly-queued job just
+	// persists for the restart instead of being claimed and immediately canceled —
+	// but before the event hub / ipc / jobsDB it needs are closed below.
+	if rec, _ := s.GetRecording(context.Background()); rec.Active {
+		_, _ = s.StopRecording(context.Background(), notoapi.StopRecordingOpts{})
+	}
+
 	s.events.close()
 	s.recMu.Lock()
 	if s.recStopMeters != nil {
