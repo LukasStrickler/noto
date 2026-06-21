@@ -3,12 +3,18 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/lukasstrickler/noto/internal/platform/config"
 	"github.com/lukasstrickler/noto/internal/transport/notoapi"
 )
+
+// errJobCanceledByUser is the cancel cause set by CancelJob, so a worker can tell
+// a user-requested cancel apart from a shutdown that merely propagates the worker
+// pool's context cancellation down into the job.
+var errJobCanceledByUser = errors.New("job canceled by user")
 
 // --- worker pool ---
 
@@ -98,12 +104,16 @@ func (s *Service) claimNextJob() (notoapi.Job, bool) {
 }
 
 func (s *Service) runJob(parentCtx context.Context, job notoapi.Job) {
-	ctx, cancel := context.WithCancel(parentCtx)
+	// WithCancelCause so a user CancelJob can be told apart from a shutdown that
+	// merely propagates down from the worker pool's context: only CancelJob cancels
+	// with errJobCanceledByUser, so context.Cause distinguishes the two at finalize
+	// time (shutdown re-queues; a user cancel is terminal).
+	ctx, cancel := context.WithCancelCause(parentCtx)
 	s.jobsMu.Lock()
 	s.jobCancels[job.ID] = cancel
 	s.jobsMu.Unlock()
 	defer func() {
-		cancel()
+		cancel(nil)
 		s.jobsMu.Lock()
 		delete(s.jobCancels, job.ID)
 		s.jobsMu.Unlock()
@@ -131,14 +141,13 @@ func (s *Service) runJob(parentCtx context.Context, job notoapi.Job) {
 		err = fmt.Errorf("unknown job kind %q", job.Kind)
 	}
 
-	final, requeue := finalizeJobStatus(err, parentCtx.Err() != nil, ctx.Err() != nil)
+	userCanceled := errors.Is(context.Cause(ctx), errJobCanceledByUser)
+	final, requeue := finalizeJobStatus(err, parentCtx.Err() != nil, userCanceled)
 	if requeue {
-		// The server is shutting down mid-job: the worker pool's context
-		// (parentCtx) was canceled, not THIS job's. Re-queue so a restart finishes
-		// the user's meeting instead of stranding it as "canceled" — every pipeline
-		// stage is idempotent and the row keeps its priority + attempt. (A user
-		// cancel trips only the per-job child context, so parentCtx stays live and
-		// the job is correctly finalized as canceled below.)
+		// The server is shutting down mid-job (the worker pool's context, not a user
+		// cancel): re-queue so a restart finishes the user's meeting instead of
+		// stranding it as "canceled" — every pipeline stage is idempotent and the row
+		// keeps its priority + attempt.
 		s.requeueInterruptedJob(job.ID)
 		return
 	}
@@ -160,21 +169,21 @@ func (s *Service) runJob(parentCtx context.Context, job notoapi.Job) {
 }
 
 // finalizeJobStatus decides a job's terminal state from the run error and the
-// two cancellation scopes. shutdownCanceled = the worker pool's context is done
-// (a graceful server shutdown); jobCanceled = this job's own context is done (a
-// user CancelJob). Shutdown wins: an in-flight job interrupted by a restart is
-// re-queued (requeue=true) to finish next start, NOT recorded as canceled —
-// otherwise every planned deploy would silently strand the meetings in flight.
-// A user cancel (without shutdown) is a genuine terminal cancel.
-func finalizeJobStatus(err error, shutdownCanceled, jobCanceled bool) (status notoapi.JobStatus, requeue bool) {
+// two cancellation scopes. userCanceled = the user explicitly canceled THIS job
+// (CancelJob); shutdownCanceled = the worker pool's context is done (a graceful
+// server shutdown). A user cancel is authoritative — it wins even if a shutdown
+// races it, so a job the user canceled is never resurrected by the restart
+// resume. Otherwise a shutdown re-queues (requeue=true) to finish next start
+// rather than stranding the in-flight meeting as "canceled".
+func finalizeJobStatus(err error, shutdownCanceled, userCanceled bool) (status notoapi.JobStatus, requeue bool) {
 	if err == nil {
 		return notoapi.JobSucceeded, false
 	}
 	switch {
+	case userCanceled:
+		return notoapi.JobCanceled, false
 	case shutdownCanceled:
 		return "", true
-	case jobCanceled:
-		return notoapi.JobCanceled, false
 	default:
 		return notoapi.JobFailed, false
 	}

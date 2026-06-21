@@ -62,32 +62,62 @@ func TestRecoverInterruptedJobsResumesUnderCap(t *testing.T) {
 	}
 }
 
-// TestFinalizeJobStatus pins the rule that decides a job's terminal state — the
-// case that matters: a graceful SHUTDOWN mid-job must re-queue (not record
-// "canceled"), so a planned deploy doesn't strand the meetings in flight, while a
-// genuine user cancel (no shutdown) still finalizes as canceled.
+// TestFinalizeJobStatus pins the rule that decides a job's terminal state. Two
+// cases matter: a graceful SHUTDOWN mid-job re-queues (so a deploy doesn't strand
+// the meetings in flight), but a USER cancel is authoritative and wins even when a
+// shutdown races it — a job the user canceled must never be resurrected by resume.
 func TestFinalizeJobStatus(t *testing.T) {
 	errBoom := context.Canceled
 	cases := []struct {
 		name             string
 		err              error
 		shutdownCanceled bool
-		jobCanceled      bool
+		userCanceled     bool
 		wantStatus       notoapi.JobStatus
 		wantRequeue      bool
 	}{
 		{"success", nil, false, false, notoapi.JobSucceeded, false},
-		{"success even during shutdown", nil, true, true, notoapi.JobSucceeded, false},
-		{"shutdown mid-job re-queues", errBoom, true, true, "", true},
+		{"success even during shutdown", nil, true, false, notoapi.JobSucceeded, false},
+		{"success despite a late cancel", nil, false, true, notoapi.JobSucceeded, false},
+		{"shutdown mid-job re-queues", errBoom, true, false, "", true},
 		{"user cancel finalizes canceled", errBoom, false, true, notoapi.JobCanceled, false},
+		{"user cancel WINS over a racing shutdown", errBoom, true, true, notoapi.JobCanceled, false},
 		{"plain failure", errBoom, false, false, notoapi.JobFailed, false},
 	}
 	for _, c := range cases {
-		gotStatus, gotRequeue := finalizeJobStatus(c.err, c.shutdownCanceled, c.jobCanceled)
+		gotStatus, gotRequeue := finalizeJobStatus(c.err, c.shutdownCanceled, c.userCanceled)
 		if gotStatus != c.wantStatus || gotRequeue != c.wantRequeue {
 			t.Errorf("%s: finalizeJobStatus = (%q,%v); want (%q,%v)",
 				c.name, gotStatus, gotRequeue, c.wantStatus, c.wantRequeue)
 		}
+	}
+}
+
+// TestRecoverHonorsCancelRequested covers the durable-cancel path: if the process
+// died after the user requested a cancel (cancel_requested=1) but before the
+// worker finalized it, the job must be recovered as CANCELED — not resumed.
+func TestRecoverHonorsCancelRequested(t *testing.T) {
+	s := newJobsTestSvc(t)
+	ctx := context.Background()
+
+	insertRunningJob(t, s, "j-canceling", 1, notoapi.JobPriorityInteractive)
+	if _, err := s.jobsDB.Exec(`UPDATE jobs SET cancel_requested = 1 WHERE id = ?`, "j-canceling"); err != nil {
+		t.Fatalf("set cancel_requested: %v", err)
+	}
+	// A normal in-flight job alongside it must still resume.
+	insertRunningJob(t, s, "j-normal", 1, notoapi.JobPriorityInteractive)
+
+	if err := s.recoverInterruptedJobs(ctx); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+
+	canceling, _ := s.GetJob(ctx, "j-canceling")
+	if canceling.Status != notoapi.JobCanceled {
+		t.Errorf("a cancel requested before the crash must be honored, got %s", canceling.Status)
+	}
+	normal, _ := s.GetJob(ctx, "j-normal")
+	if normal.Status != notoapi.JobQueued {
+		t.Errorf("a non-canceled in-flight job should still resume, got %s", normal.Status)
 	}
 }
 

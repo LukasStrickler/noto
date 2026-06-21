@@ -413,6 +413,21 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   finalizes `canceled`. The re-queue write happens within the worker goroutine `Close` already waits for
   (bgWG), so it lands before the DB closes — no new shutdown race (service-pkg `-race` clean). Tested: pure
   table for all 5 (err × scope) combos + single-job requeue→claimable with priority preserved.
+- **★ Wire the WRITE-ONLY `cancel_requested` column → user cancels are now durable (2026-06-21).** Follow-on
+  audit of the resume work found `cancel_requested` was SET by `CancelJob` but **read NOWHERE** (grep-confirmed:
+  schema + one write, zero reads) — so cancellation lived only in the in-memory per-job ctx and was LOST across a
+  restart: a job the user explicitly canceled, if the process died (or shut down) mid-cancel, was RESUMED by
+  `recoverInterruptedJobs`. The prior graceful-resume commit also made the shutdown-race variant worse (it
+  re-queued a user-canceled job). Root cause: the per-job ctx is canceled in BOTH a user cancel AND a
+  shutdown (child of the pool ctx), so `ctx.Err()` can't tell them apart. Fix: `runJob` now uses
+  `context.WithCancelCause`; `CancelJob` cancels with the `errJobCanceledByUser` sentinel, so
+  `context.Cause` distinguishes a genuine user cancel from a shutdown-propagated one. `finalizeJobStatus` is
+  now `(err, shutdownCanceled, userCanceled)` with **user-cancel AUTHORITATIVE** — it wins even if a shutdown
+  races it, so a canceled job is never resurrected; a pure shutdown still re-queues. And
+  `recoverInterruptedJobs` gained a first step: any `running` row with `cancel_requested=1` is finalized
+  `canceled` (not resumed), covering a crash between the `CancelJob` write and the worker finalizing. Tested:
+  expanded `finalizeJobStatus` table (user-cancel-wins-over-shutdown case) + a recovery test (cancel_requested
+  row → canceled while a normal in-flight row still resumes). build/vet/lint(0)/race(service) clean.
 - **★ Graceful shutdown — Close now joins the worker goroutines (2026-06-20).** `Start` launched the worker
   pool + status-bar/evictor loops as FIRE-AND-FORGET goroutines tied to the caller's ctx, but `Close()`
   neither canceled nor WAITED for them — and it tore down the event hub + model pool FIRST. So a worker

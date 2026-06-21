@@ -80,7 +80,7 @@ type Service struct {
 	recStopMeters chan struct{}
 
 	jobsMu     sync.Mutex
-	jobCancels map[string]context.CancelFunc
+	jobCancels map[string]context.CancelCauseFunc
 	workerWake chan struct{}
 
 	// bgCancel stops the goroutines Start launched (the worker pool, status-bar
@@ -142,7 +142,7 @@ func New(d Deps) *Service {
 		jobsDB:            d.JobsDB,
 		ipc:               d.IPC,
 		events:            newEventHub(),
-		jobCancels:        map[string]context.CancelFunc{},
+		jobCancels:        map[string]context.CancelCauseFunc{},
 		workerWake:        make(chan struct{}, 1),
 		started:           time.Now(),
 		version:           d.Version,

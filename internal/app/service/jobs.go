@@ -132,7 +132,7 @@ func (s *Service) CancelJob(_ context.Context, id string) error {
 		}
 		s.jobsMu.Lock()
 		if cancel, ok := s.jobCancels[id]; ok {
-			cancel()
+			cancel(errJobCanceledByUser)
 		}
 		s.jobsMu.Unlock()
 		return nil
@@ -242,6 +242,17 @@ const maxJobAttempts = 3
 // tier. A job that has already exhausted its attempts is parked as "interrupted"
 // (the poison-pill guard) so a reliably-crashing job can't crash-loop the server.
 func (s *Service) recoverInterruptedJobs(_ context.Context) error {
+	// Honor a cancellation that was in flight when the process died: a job the
+	// user explicitly canceled (cancel_requested=1) must NOT be resumed — finalize
+	// it as canceled. Runs first so the resume step below can't resurrect it. (The
+	// live path honors this via the cancel cause; this covers a crash between the
+	// CancelJob write and the worker finalizing.)
+	if _, err := s.jobsDB.Exec(
+		`UPDATE jobs SET status = ?, finished_at = ?, error = '' WHERE status = ? AND cancel_requested = 1`,
+		string(notoapi.JobCanceled), time.Now().UnixMilli(), string(notoapi.JobRunning),
+	); err != nil {
+		return err
+	}
 	// Resume the resumable ones: back to queued, progress/phase reset so the UI
 	// shows a fresh run. attempt is preserved (it increments again on re-claim).
 	if _, err := s.jobsDB.Exec(
