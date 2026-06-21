@@ -497,6 +497,10 @@ func (s *Server) handleRecordingVerb(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, res)
 
 	case "pause":
+		if r.Method != http.MethodPost {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+			return
+		}
 		if err := s.svc.PauseRecording(r.Context()); err != nil {
 			writeError(w, err)
 			return
@@ -504,6 +508,10 @@ func (s *Server) handleRecordingVerb(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case "resume":
+		if r.Method != http.MethodPost {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+			return
+		}
 		if err := s.svc.ResumeRecording(r.Context()); err != nil {
 			writeError(w, err)
 			return
@@ -511,6 +519,10 @@ func (s *Server) handleRecordingVerb(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case "marker":
+		if r.Method != http.MethodPost {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+			return
+		}
 		var body struct {
 			Label string `json:"label"`
 		}
@@ -522,6 +534,10 @@ func (s *Server) handleRecordingVerb(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case "preflight":
+		if r.Method != http.MethodPost {
+			writeError(w, notoapi.NewError(notoapi.CodeInvalidRequest, "method not allowed", nil))
+			return
+		}
 		res, err := s.svc.PreflightRecording(r.Context())
 		if err != nil {
 			writeError(w, err)

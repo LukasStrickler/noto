@@ -41,6 +41,18 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **API contract: recording mutations fired on ANY HTTP method — a GET could pause a live recording (1
+  consistency-seam bug, +1 test, 2026-06-21).** Same lens as the prior fire, on the recording verbs
+  (`handleRecordingVerb`, `transport/server/routes.go`). `start`/`stop` validate POST (and the client POSTs
+  EVERY verb — `apiclient/http.go:283-302`), but `pause`, `resume`, `marker` (all state MUTATIONS) and
+  `preflight` checked nothing. Since `/v1/recording/` is a prefix route, a `GET /v1/recording/pause` reached
+  `PauseRecording` and paused the user's live recording — a state change via a SAFE method (a browser
+  prefetch, a crawler, a link-follow could trip it). The revert-check showed it live: pre-fix `GET
+  /recording/marker` hit `AddMarker` (409 "no recording active") and `GET /recording/preflight` ran the probe
+  (200). Added the POST check to all four, matching `start`/`stop` and the client. Test (real `noto serve`
+  data plane) GETs each of pause/resume/marker/preflight and asserts method-not-allowed; pre-fix they fell
+  through to the service, revert-checked. Next: `handleSearch` is the one remaining top-level GET handler
+  that doesn't validate its method (low stakes — read-only query — but the last divergent sibling).
 - **API contract: read-only meeting sub-resources served any HTTP method as a GET (1 consistency-seam bug,
   +1 test, 2026-06-21).** In `handleMeetingByID` (`transport/server/routes.go`) the ACTION sub-resources
   (`verify`, `speaker-mappings`, `speakers`) and the base meeting all validate `r.Method` and reject the

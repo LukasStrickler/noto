@@ -205,3 +205,42 @@ func TestReadOnlyMeetingSubresourcesRejectNonGET(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordingMutationVerbsRejectNonPOST pins the HTTP-method contract on the
+// recording verbs. start/stop already require POST; pause/resume/marker — all state
+// MUTATIONS — and preflight did not, so a safe method (a GET prefetch, a crawler)
+// could pause/resume a live recording. The client POSTs all of them.
+func TestRecordingMutationVerbsRejectNonPOST(t *testing.T) {
+	t.Setenv("NOTO_CONFIG_DIR", t.TempDir())
+	t.Setenv("NOTO_ARTIFACT_ROOT", t.TempDir())
+	sock := filepath.Join(t.TempDir(), "noto.sock")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	d, err := host.Start(ctx, host.Options{Address: sock})
+	if err != nil {
+		t.Fatalf("start data plane: %v", err)
+	}
+	defer d.Close()
+
+	hc := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var dl net.Dialer
+				return dl.DialContext(ctx, "unix", sock)
+			},
+		},
+	}
+
+	for _, verb := range []string{"pause", "resume", "marker", "preflight"} {
+		resp, err := hc.Get("http://unix/v1/recording/" + verb)
+		if err != nil {
+			t.Fatalf("GET %s: %v", verb, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.Contains(string(body), "method not allowed") {
+			t.Errorf("GET /recording/%s: status=%d body=%s; want method-not-allowed (a safe method must not reach a recording mutation)", verb, resp.StatusCode, body)
+		}
+	}
+}
