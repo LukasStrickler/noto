@@ -41,6 +41,24 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **★ Adherence/topology: `System.Mode` lied about the effective backend posture (1 bug, +1 test,
+  2026-06-21).** Same cross-reference class as the JobWorkers fix below. `GetSystem` reports where this
+  backend runs so a client labels the connection ("local · Mac M1" vs "remote · linux-cuda") — and EVERY
+  field reports EFFECTIVE state (compute placements via `Compute.Resolve`, `DataPlane.Location` via
+  `Storage.IsRemote`) EXCEPT `Mode`, which used a raw `mode == "remote"` exact-string match
+  (`backendModeLabel(cfg.Backend.Mode)`). But thin-client behavior is driven by `Backend.IsRemote()`
+  (`host.go:434`) = `EqualFold(TrimSpace(Mode),"remote") && Remote.URL != ""` — the SAME robust idiom as
+  `Storage.IsRemote`/`Compute.Resolve`. So the label diverged from reality two ways: (1) **`Mode="remote"`
+  with NO url** → `host.go` runs the backend IN-PROCESS (local) but the view said `"remote"` — a lie; (2) a
+  **case/space-variant `" Remote "` WITH a url** → `host.go` makes it a real thin client but the exact-match
+  said `"local"`. Two sibling fields in the same struct, built 9 lines apart, decided "remote" differently.
+  Fixed by labeling from `cfg.Backend.IsRemote()` — the predicate that actually drives the behavior.
+  Test exercises both divergence directions + two sanity cases; the two divergence cases fail pre-fix
+  (remote-no-url→ wanted local got remote; cased-remote-url→ wanted remote got local). Suite + vet + lint(0)
+  clean. Cross-reference win: the label and the behavior must agree on what "remote" means — they didn't.
+  (Also confirmed clean this loop: the ENTIRE bench cost-math suite — `scale`/`compare`/`overlap`/
+  `estimate`/`calibration`/`repair` — re-audited end-to-end and found correct; both speaker embedders
+  key by `ProviderLabel` consistently; `merge.Attribute` attribution is sound. No fix needed there.)
 - **Program A measurement spine:** `noto bench run/preflight/compare/estimate/scale/audit/retrace/
   insights/ledger`, credential-aware routing, weighted KPI (`ScoreRun`), GPU util + idle-cost + cost
   attribution, scale-readiness gate. All tested.

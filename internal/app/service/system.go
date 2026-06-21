@@ -33,7 +33,7 @@ func (s *Service) GetSystem(_ context.Context) (notoapi.System, error) {
 
 	return notoapi.System{
 		SchemaVersion:    "system.v1",
-		Mode:             backendModeLabel(cfg.Backend.Mode),
+		Mode:             backendModeLabel(cfg.Backend.IsRemote()),
 		Hostname:         hostname,
 		OS:               runtime.GOOS,
 		Arch:             runtime.GOARCH,
@@ -101,8 +101,15 @@ func hostOf(raw string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(raw, "//"), "/")
 }
 
-func backendModeLabel(mode string) string {
-	if mode == "remote" {
+// backendModeLabel maps the EFFECTIVE backend posture to the System.Mode label.
+// It takes Backend.IsRemote() — not the raw Mode string — so the label agrees with
+// the predicate that actually drives thin-client behavior (host.go) and with the
+// sibling DataPlane.Location (Storage.IsRemote) computed alongside it. A raw
+// mode=="remote" match diverged both ways: a Mode="remote" with no URL runs
+// in-process (so it must label "local"), and a case/space-variant "Remote" with a
+// URL is a real thin client (so it must label "remote").
+func backendModeLabel(remote bool) string {
+	if remote {
 		return "remote"
 	}
 	return "local"

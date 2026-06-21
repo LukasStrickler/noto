@@ -56,6 +56,47 @@ func TestGetSystemReportsOffloadedCompute(t *testing.T) {
 	}
 }
 
+// TestGetSystemModeReflectsEffectiveBackend pins System.Mode to the SAME predicate
+// that drives thin-client behavior (Backend.IsRemote → host.go) and that the sibling
+// DataPlane.Location uses (Storage.IsRemote), rather than a raw mode==\"remote\" string
+// match. Two divergences this catches: a mode=\"remote\" with NO url runs in-process
+// (must label \"local\"), and a case/space-variant \"Remote\" WITH a url is a real thin
+// client (must label \"remote\").
+func TestGetSystemModeReflectsEffectiveBackend(t *testing.T) {
+	cases := []struct {
+		name string
+		mode string
+		url  string
+		want string
+	}{
+		{"default local", "local", "", "local"},
+		{"remote with url", "remote", "https://backend.example:8731", "remote"},
+		{"remote location but NO url → runs in-process → local", "remote", "", "local"},
+		{"case/space-variant Remote with url → thin client → remote", " Remote ", "https://backend.example:8731", "remote"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := config.Config{
+				ConfigDir:    dir,
+				ArtifactRoot: dir,
+				Backend: config.BackendConfig{
+					Mode:   c.mode,
+					Remote: config.RemoteBackendConfig{URL: c.url},
+				},
+			}
+			svc := New(Deps{Config: cfg, Registry: providers.DefaultRegistry(), Version: "test"})
+			sys, err := svc.GetSystem(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sys.Mode != c.want {
+				t.Errorf("System.Mode = %q; want %q (Backend.IsRemote=%v)", sys.Mode, c.want, cfg.Backend.IsRemote())
+			}
+		})
+	}
+}
+
 func TestGetSystemReportsRemoteStorage(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Config{
