@@ -236,6 +236,17 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
   Tests: a multi-word query returns only docs containing ALL words (AND semantics), and uppercase-keyword
   queries don't error. Full suite + vet + lint(0) clean.
 
+- **★ IPC read deadline: 30s was dead code; a >100ms helper response failed the call (2026-06-21).** The capture
+  IPC client (`appsocket.call`, macOS Swift helper over a unix socket) set a 30s read deadline, then OVERWROTE
+  it with a fresh 100ms deadline on EVERY read-loop iteration — so the 30s was dead, and any helper response
+  that didn't arrive within 100ms timed out, failed the call, and dropped the connection (partial bytes
+  discarded). Start/device-setup latency >100ms would intermittently break recording on macOS. Extracted the
+  read loop into `readFramedResponse(ctx, conn, fallback)` — sets ONE deadline up front (the earlier of the 30s
+  fallback and the caller's ctx deadline), accumulates until the `\n` terminator / EOF / deadline, reports ctx
+  cancellation. macOS-gated so untestable end-to-end here, but the framing is platform-independent and now
+  net.Pipe-tested on Linux: a 250ms response succeeds (would fail under the old 100ms), split writes reassemble,
+  and a never-responding helper times out at the ctx deadline. The IPC layer had ZERO tests before this.
+
 ## ★ GPU-feeding DILUTION — the real hosted-util lever (2026-06-21, found; fix NOT yet built — needs greenlight)
 
 Sharper answer to "maximize GPU utilization on hosted" than the keep-warm/idle-backfill story below. **Production

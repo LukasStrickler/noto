@@ -287,53 +287,15 @@ func (c *IPCClient) call(ctx context.Context, method string, params, result inte
 		return fmt.Errorf("could not write request: %w", err)
 	}
 
-	if err := c.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		return fmt.Errorf("could not set read deadline: %w", err)
-	}
-
-	const maxRespBufSize = 10 * 1024 * 1024
-	var respBuf bytes.Buffer
-	buf := make([]byte, 65536)
-	for {
-		if err := c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
-			c.conn.Close()
-			c.conn = nil
-			return fmt.Errorf("could not set read deadline: %w", err)
-		}
-
-		n, err := c.conn.Read(buf)
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				c.conn.Close()
-				c.conn = nil
-				return fmt.Errorf("context cancelled: %w", ctx.Err())
-			default:
-			}
-			if err == io.EOF {
-				break
-			}
-			c.conn.Close()
-			c.conn = nil
-			return fmt.Errorf("could not read response: %w", err)
-		}
-		if n == 0 {
-			break
-		}
-		if respBuf.Len()+n > maxRespBufSize {
-			c.conn.Close()
-			c.conn = nil
-			return fmt.Errorf("response buffer exceeded maximum size")
-		}
-		respBuf.Write(buf[:n])
-
-		if respBuf.Bytes()[respBuf.Len()-1] == '\n' {
-			break
-		}
+	respBytes, err := readFramedResponse(ctx, c.conn, 30*time.Second)
+	if err != nil {
+		c.conn.Close()
+		c.conn = nil
+		return err
 	}
 
 	var resp jsonRPCResponse
-	if err := json.Unmarshal(respBuf.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(respBytes, &resp); err != nil {
 		return fmt.Errorf("could not unmarshal response: %w", err)
 	}
 
@@ -352,6 +314,49 @@ func (c *IPCClient) call(ctx context.Context, method string, params, result inte
 	}
 
 	return nil
+}
+
+// readFramedResponse reads one newline-terminated message from conn. It sets ONE
+// read deadline up front — the earlier of `fallback` from now and the caller's ctx
+// deadline. The previous loop reset a 100ms deadline EVERY iteration, which both
+// made the intended 30s timeout dead code AND failed any helper response that
+// didn't arrive within 100ms (dropping the connection). Blocks until the '\n'
+// terminator, EOF, or the deadline; a ctx cancellation is reported as such.
+func readFramedResponse(ctx context.Context, conn net.Conn, fallback time.Duration) ([]byte, error) {
+	deadline := time.Now().Add(fallback)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("could not set read deadline: %w", err)
+	}
+	const maxRespBufSize = 10 * 1024 * 1024
+	var respBuf bytes.Buffer
+	buf := make([]byte, 65536)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			if respBuf.Len()+n > maxRespBufSize {
+				return nil, fmt.Errorf("response buffer exceeded maximum size")
+			}
+			respBuf.Write(buf[:n])
+			if respBuf.Bytes()[respBuf.Len()-1] == '\n' {
+				return respBuf.Bytes(), nil
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return respBuf.Bytes(), nil // helper frames with '\n'; EOF returns what we have
+			}
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("context cancelled: %w", ctx.Err())
+			}
+			return nil, fmt.Errorf("could not read response: %w", err)
+		}
+		if n == 0 {
+			return respBuf.Bytes(), nil // defensive: a (0,nil) read is end-of-stream, not a spin
+		}
+	}
 }
 
 type StartParams struct {
