@@ -62,6 +62,14 @@ func (s *Service) workerLoop(ctx context.Context) {
 			if !ok {
 				break
 			}
+			// A job was available, and this worker is about to block on it. The
+			// enqueue-side wake is a buffer-1 coalescing signal, so a tight burst of
+			// enqueues (a bulk import/reindex) only wakes one or two workers and the
+			// rest trickle in on the 500ms poll. Chain a wake to a sibling on every
+			// successful claim so a burst ramps the whole pool to full GPU parallelism
+			// near-instantly instead of one tick at a time. When the queue drains the
+			// woken sibling simply finds nothing and parks — a harmless extra claim.
+			s.notifyWorkers()
 			s.runJob(ctx, job)
 		}
 	}

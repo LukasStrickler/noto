@@ -370,6 +370,22 @@ From the anchor winner's real trace (`20260619T070223Z-7af33b`) + `noto bench sc
   the remote GPU at its batch optimum), explicit `Compute.JobConcurrency` overrides. Only the offload
   opt-in changes; local users untouched. End-to-end hosted measurement is B2-gated, but the worker ceiling
   that would bottleneck it is gone.
+- **Chain-wake: full-pool ramp on a burst (2026-06-21, modest).** The enqueue-side `notifyWorkers` is a
+  buffer-1 COALESCING signal, so a tight burst of enqueues (bulk import/reindex) woke only ~1–2 workers and the
+  rest trickled in on the 500ms poll ticker — a slow ramp to the GPU-batch parallelism the posture pool sizes
+  for. A worker now chain-wakes a sibling on every SUCCESSFUL claim, so a burst propagates across the whole pool
+  near-instantly; when the queue drains the woken sibling finds nothing and parks (one harmless extra claim, and
+  the ticker remains the worst-case backstop). No flaky timing test added (a ramp-SPEED change is only
+  observable by timing, which the doc's "no flaky tests" invariant forbids; the ticker bounds the worst case so
+  the change is safe). build/vet/lint(0)/race(service) clean.
+- **GPU-dispatch path reviewed clean (2026-06-21) — don't re-audit.** Swept the actual compute-dispatch code
+  for this loop: `runTranscribe`'s STT∥diar concurrency is correct (buffered channel doubles as the join, always
+  drained so the diar goroutine can't leak, ctx propagates to both stages, merge is the first point needing
+  both); `diarize.RemoteDiarizer` is correct (shares `http.DefaultTransport` so connections pool across the
+  hosted batch, body decoded+closed, ctx-scoped request, 30-min ceiling); `ComputeConfig.JobWorkers()` posture
+  logic is right (big pool requires BOTH stt+diar remote — if either heavy model runs in-process, workers do
+  local compute and must not oversubscribe). The settled dispatch path is solid; the loop's recent wins were all
+  in the FRESHEST commits (identity, resume, cancel), confirming the bug surface is new code, not old.
 - **★ Priority job scheduler — the "use the GPU on what matters first" knob (2026-06-20).** The worker pool
   CLAIMED jobs strict-FIFO (`ORDER BY created_at`), so a user waiting on their just-recorded meeting sat
   behind any already-queued bulk reindex or multi-GB model download — and the planned deferred idle-GPU
