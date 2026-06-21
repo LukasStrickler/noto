@@ -41,6 +41,23 @@ Commit + push as you go on branch `refactor/codebase-layout` (this is the active
 
 ## Done (autonomous, GPU-free where possible)
 
+- **Identity store: a corrupt voiceprint blob silently became a wrong-dimension vector (1 data-integrity
+  guard, +1 test, 2026-06-21).** `unmarshalEmbedding` (`speakerstore/sqlite.go`) derived the vector length
+  as `len(data)/8` with no validity check, so a corrupt/partial blob (length not a multiple of 8) decoded
+  to `floor(len/8)` floats — a silently WRONG-DIMENSION voiceprint the matcher then trusts (it keys off
+  `len(vector)`), giving a degraded centroid or a silently-unmatchable profile. Fixed to return nil on a
+  non-multiple-of-8 blob (fail safe: "no voiceprint", the same state as an un-enrolled profile, so the
+  speaker just returns to the identify queue). Low-probability trigger (SQLite row writes are atomic, so
+  this needs disk corruption), but the behavior — silent truncation to a plausible-but-wrong vector — was a
+  genuine latent defect. Test round-trips a vector and asserts a 21-byte blob decodes to nil, not a len-2
+  vector; revert-checked. This shipped after a broad fire that AUDITED-CLEAN the highest-value accuracy
+  paths and found no bug there: the "who said what" merge (`merge.Attribute`: midpoint→overlap→nearest-gap,
+  resegment, half-open boundaries all correct); the scheduler priority map (`JobKind.Priority`, single-
+  sourced, Idle intentionally caller-set); the remote speaker embedder; and ALL the benchmark accuracy math
+  — `CpWER`/`SAWER` (cost matrix + dummy padding + rate guards), `DER` (md-eval decomposition + collar +
+  RefSpeech denominator), `AttributionAccuracy`, the `hungarian` solver, `maxWeightMapping` (a proper
+  injective assignment, so DER confusion can't be understated), and `metrics.Normalize` (tokenization-
+  equivalent to `artifacts.normalizeForMatch`, so the benchmark tokenizes exactly as production matches).
 - **Identity: a negative segment start panicked the embed step and lost the meeting's identity (1 latent
   crash, +1 test, 2026-06-21).** Real contract seam on the identification path: `EmbedSpeakerWindows`
   (`providers/speaker/embedder.go`) computed window sample indices `a,b := int(w0*sampleRate), int(w1*…)`

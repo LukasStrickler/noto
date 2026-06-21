@@ -350,6 +350,16 @@ func unmarshalEmbedding(data []byte) []float64 {
 	if len(data) == 0 {
 		return nil
 	}
+	// A well-formed blob is exactly len(vec)*8 bytes (marshalEmbedding). A length
+	// that isn't a multiple of 8 is a corrupt/partial blob; decoding len/8 floats
+	// would silently produce a WRONG-DIMENSION voiceprint that the matcher then
+	// trusts (it keys off len(vector)), yielding a degraded centroid or a silently-
+	// unmatchable profile. Fail safe: treat a malformed blob as "no voiceprint" —
+	// the same state as an un-enrolled profile — so the speaker just returns to the
+	// identify queue instead of carrying a corrupt vector.
+	if len(data)%8 != 0 {
+		return nil
+	}
 	n := len(data) / 8
 	vec := make([]float64, n)
 	for i := 0; i < n; i++ {
